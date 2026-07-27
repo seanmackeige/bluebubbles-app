@@ -45,8 +45,8 @@ class NotificationsService {
   static const String FACETIME_CHANNEL = "com.bluebubbles.incoming_facetimes";
   static const String FOREGROUND_SERVICE_CHANNEL = "com.bluebubbles.foreground_service";
 
-  static const String NEW_MESSAGE_TAG = "com.bluebubbles.messaging.NEW_MESSAGE_NOTIFICATION";
-  static const String NEW_FACETIME_TAG = "com.bluebubbles.messaging.NEW_FACETIME_NOTIFICATION";
+  static const String NEW_MESSAGE_TAG = "com.mackeige.bluebubbles.NEW_MESSAGE_NOTIFICATION";
+  static const String NEW_FACETIME_TAG = "com.mackeige.bluebubbles.NEW_FACETIME_NOTIFICATION";
 
   final FlutterLocalNotificationsPlugin flnp = FlutterLocalNotificationsPlugin();
   StreamSubscription? countSub;

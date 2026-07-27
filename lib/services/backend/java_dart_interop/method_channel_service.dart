@@ -48,7 +48,7 @@ class MethodChannelService implements MethodChannelServiceDelegate {
     this.headless = headless;
     this.isBubble = isBubble;
 
-    channel = MethodChannel('com.bluebubbles.messaging', const StandardMethodCodec(), binaryMessenger);
+    channel = MethodChannel('com.mackeige.bluebubbles', const StandardMethodCodec(), binaryMessenger);
     actions = MethodChannelActions(this);
     _handlers = MethodChannelHandlers(this);
 
