@@ -4,6 +4,7 @@ import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/backend/interfaces/image_interface.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
+import 'package:bluebubbles/utils/gallery_save_name.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:file_picker/file_picker.dart' hide PlatformFile;
@@ -289,6 +290,7 @@ class AttachmentsService extends GetxService {
       );
     } else {
       String? savePath;
+      final saveName = gallerySaveNameForAndroid(file, isAutoDownload: isAutoDownload);
 
       if (SettingsSvc.settings.askWhereToSave.value && !isAutoDownload) {
         savePath = await FilePicker.getDirectoryPath(
@@ -305,13 +307,13 @@ class AttachmentsService extends GetxService {
               if (file.path == null && file.bytes != null) {
                 await SaverGallery.saveImage(file.bytes!,
                     quality: 100,
-                    fileName: file.name,
+                    fileName: saveName,
                     androidRelativePath: SettingsSvc.settings.autoSavePicsLocation.value,
                     skipIfExists: false);
               } else {
                 await SaverGallery.saveFile(
                     filePath: file.path!,
-                    fileName: file.name,
+                    fileName: saveName,
                     androidRelativePath: SettingsSvc.settings.autoSavePicsLocation.value,
                     skipIfExists: false);
               }
@@ -324,7 +326,7 @@ class AttachmentsService extends GetxService {
 
       if (savePath != null) {
         final bytes = file.bytes != null && file.bytes!.isNotEmpty ? file.bytes! : await File(file.path!).readAsBytes();
-        await File(join(savePath, file.name)).writeAsBytes(bytes);
+        await File(join(savePath, saveName)).writeAsBytes(bytes);
         showSnackbar('Success', 'Saved attachment to ${FilesystemSvc.toDisplayPath(savePath)} folder!');
       } else {
         return showSnackbar('Error', 'You didn\'t select a file path!');
