@@ -147,7 +147,7 @@ final _entities = <obx_int.ModelEntity>[
   obx_int.ModelEntity(
     id: const obx_int.IdUid(3, 9017250848141753702),
     name: 'Chat',
-    lastPropertyId: const obx_int.IdUid(36, 2775254966591031179),
+    lastPropertyId: const obx_int.IdUid(37, 3932138924181112644),
     flags: 0,
     properties: <obx_int.ModelProperty>[
       obx_int.ModelProperty(
@@ -302,6 +302,12 @@ final _entities = <obx_int.ModelEntity>[
         id: const obx_int.IdUid(36, 2775254966591031179),
         name: 'customThemeDark',
         type: 9,
+        flags: 0,
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(37, 3932138924181112644),
+        name: 'originalROWID',
+        type: 6,
         flags: 0,
       ),
     ],
@@ -1438,7 +1444,7 @@ obx_int.ModelDefinition getObjectBoxModel() {
         final customThemeDarkOffset = object.customThemeDark == null
             ? null
             : fbb.writeString(object.customThemeDark!);
-        fbb.startTable(37);
+        fbb.startTable(38);
         fbb.addInt64(0, object.id ?? 0);
         fbb.addOffset(2, guidOffset);
         fbb.addOffset(4, chatIdentifierOffset);
@@ -1467,6 +1473,7 @@ obx_int.ModelDefinition getObjectBoxModel() {
         fbb.addInt64(29, object.dbLatestMessage.targetId);
         fbb.addOffset(34, customThemeLightOffset);
         fbb.addOffset(35, customThemeDarkOffset);
+        fbb.addInt64(36, object.originalROWID);
         fbb.finish(fbb.endTable());
         return object.id ?? 0;
       },
@@ -1484,6 +1491,11 @@ obx_int.ModelDefinition getObjectBoxModel() {
           buffer,
           rootOffset,
           4,
+        );
+        final originalROWIDParam = const fb.Int64Reader().vTableGetNullable(
+          buffer,
+          rootOffset,
+          76,
         );
         final guidParam = const fb.StringReader(
           asciiOptimization: true,
@@ -1558,6 +1570,7 @@ obx_int.ModelDefinition getObjectBoxModel() {
         final object =
             Chat(
                 id: idParam,
+                originalROWID: originalROWIDParam,
                 guid: guidParam,
                 chatIdentifier: chatIdentifierParam,
                 isArchived: isArchivedParam,
@@ -2814,6 +2827,11 @@ class Chat_ {
   /// See [Chat.customThemeDark].
   static final customThemeDark = obx.QueryStringProperty<Chat>(
     _entities[1].properties[24],
+  );
+
+  /// See [Chat.originalROWID].
+  static final originalROWID = obx.QueryIntegerProperty<Chat>(
+    _entities[1].properties[25],
   );
 
   /// see [Chat.handles]

@@ -20,28 +20,16 @@ MessagesService? maybeFindMessagesSvc(String chatGuid) =>
     Get.isRegistered<MessagesService>(tag: chatGuid) ? Get.find<MessagesService>(tag: chatGuid) : null;
 
 MessagesService ensureMessagesSvc(String chatGuid) =>
-    maybeFindMessagesSvc(chatGuid) ??
-    Get.put(
-      MessagesService(chatGuid),
-      tag: chatGuid,
-      permanent: true,
-    );
+    maybeFindMessagesSvc(chatGuid) ?? Get.put(MessagesService(chatGuid), tag: chatGuid, permanent: true);
 
 MessagesService registerMessagesSvc(MessagesService service) =>
-    maybeFindMessagesSvc(service.tag) ??
-    Get.put(
-      service,
-      tag: service.tag,
-      permanent: true,
-    );
+    maybeFindMessagesSvc(service.tag) ?? Get.put(service, tag: service.tag, permanent: true);
 
 // ignore: non_constant_identifier_names
 MessagesService MessagesSvc(String chatGuid) {
   final service = maybeFindMessagesSvc(chatGuid);
   if (service == null) {
-    throw StateError(
-      'MessagesService for chat $chatGuid is not registered. Only UI owner code should create it.',
-    );
+    throw StateError('MessagesService for chat $chatGuid is not registered. Only UI owner code should create it.');
   }
   return service;
 }
@@ -221,11 +209,9 @@ class MessagesService extends GetxController {
       if (attState.uploadPreviewFile.value == null && attachment.transferName != null) {
         final pathName = attachment.path;
         if (File(pathName).existsSync()) {
-          attState.updateUploadPreviewFileInternal(PlatformFile(
-            name: attachment.transferName!,
-            path: pathName,
-            size: attachment.totalBytes ?? 0,
-          ));
+          attState.updateUploadPreviewFileInternal(
+            PlatformFile(name: attachment.transferName!, path: pathName, size: attachment.totalBytes ?? 0),
+          );
         }
       }
 
@@ -278,18 +264,13 @@ class MessagesService extends GetxController {
     if (!kIsWeb && attachment.transferName != null) {
       final path = attachment.path;
       if (path.isNotEmpty && File(path).existsSync()) {
-        attachmentState.updateUploadPreviewFileInternal(PlatformFile(
-          name: attachment.transferName!,
-          path: path,
-          size: attachment.totalBytes ?? 0,
-        ));
+        attachmentState.updateUploadPreviewFileInternal(
+          PlatformFile(name: attachment.transferName!, path: path, size: attachment.totalBytes ?? 0),
+        );
       }
     }
 
-    Logger.debug(
-      "AttachmentState[${attachment.guid}] → uploading (msg ${message.guid})",
-      tag: "AttachmentState",
-    );
+    Logger.debug("AttachmentState[${attachment.guid}] → uploading (msg ${message.guid})", tag: "AttachmentState");
   }
 
   /// Updates the upload progress for an attachment in flight.
@@ -309,10 +290,7 @@ class MessagesService extends GetxController {
 
     AttachmentState attachmentState;
     try {
-      attachmentState = messageState.getOrCreateAttachmentState(
-        attachmentGuid,
-        attachment: ctrl.attachment,
-      );
+      attachmentState = messageState.getOrCreateAttachmentState(attachmentGuid, attachment: ctrl.attachment);
     } catch (_) {
       // Message may not have the attachment object yet; create a bare state.
       attachmentState = AttachmentState(ctrl.attachment);
@@ -325,10 +303,7 @@ class MessagesService extends GetxController {
       _onAttachmentDownloadComplete(messageGuid, attachmentGuid, file);
     });
 
-    Logger.debug(
-      "AttachmentState[$attachmentGuid] → downloading (msg $messageGuid)",
-      tag: "AttachmentState",
-    );
+    Logger.debug("AttachmentState[$attachmentGuid] → downloading (msg $messageGuid)", tag: "AttachmentState");
   }
 
   /// Marks an attachment as fully downloaded and transitions its state to
@@ -341,10 +316,7 @@ class MessagesService extends GetxController {
     state.updateActiveDownloadInternal(null);
     state.updateTransferStateInternal(AttachmentTransferState.complete);
 
-    Logger.debug(
-      "AttachmentState[$attachmentGuid] → complete (msg $messageGuid)",
-      tag: "AttachmentState",
-    );
+    Logger.debug("AttachmentState[$attachmentGuid] → complete (msg $messageGuid)", tag: "AttachmentState");
   }
 
   /// Transitions an attachment to [AttachmentTransferState.error].
@@ -353,10 +325,7 @@ class MessagesService extends GetxController {
         ?.getAttachmentState(attachmentGuid)
         ?.updateTransferStateInternal(AttachmentTransferState.error);
 
-    Logger.debug(
-      "AttachmentState[$attachmentGuid] → error (msg $messageGuid)",
-      tag: "AttachmentState",
-    );
+    Logger.debug("AttachmentState[$attachmentGuid] → error (msg $messageGuid)", tag: "AttachmentState");
   }
 
   /// Re-keys an [AttachmentState] from [oldAttachmentGuid] to
@@ -447,11 +416,13 @@ class MessagesService extends GetxController {
     if (!kIsWeb && state.resolvedFile.value == null && resolvedAttachment.transferName != null) {
       final filePath = resolvedAttachment.path;
       if (File(filePath).existsSync()) {
-        state.updateResolvedFileInternal(PlatformFile(
-          name: resolvedAttachment.transferName!,
-          path: filePath,
-          size: resolvedAttachment.totalBytes ?? 0,
-        ));
+        state.updateResolvedFileInternal(
+          PlatformFile(
+            name: resolvedAttachment.transferName!,
+            path: filePath,
+            size: resolvedAttachment.totalBytes ?? 0,
+          ),
+        );
       } else {
         Logger.warn(
           'notifyAttachmentSendComplete: file not found at $filePath '
@@ -526,9 +497,12 @@ class MessagesService extends GetxController {
       return;
     }
 
-    final content = AttachmentsSvc.getContent(attachment, onComplete: (PlatformFile file) {
-      _onAttachmentDownloadComplete(messageGuid, attachment.guid!, file);
-    });
+    final content = AttachmentsSvc.getContent(
+      attachment,
+      onComplete: (PlatformFile file) {
+        _onAttachmentDownloadComplete(messageGuid, attachment.guid!, file);
+      },
+    );
 
     if (content is PlatformFile) {
       attState.updateResolvedFileInternal(content);
@@ -576,9 +550,12 @@ class MessagesService extends GetxController {
   void _startAttachmentDownload(String messageGuid, Attachment attachment) {
     final msgGuid = messageGuid;
     final attGuid = attachment.guid!;
-    final ctrl = AttachmentDownloader.startDownload(attachment, onComplete: (PlatformFile file) {
-      _onAttachmentDownloadComplete(msgGuid, attGuid, file);
-    });
+    final ctrl = AttachmentDownloader.startDownload(
+      attachment,
+      onComplete: (PlatformFile file) {
+        _onAttachmentDownloadComplete(msgGuid, attGuid, file);
+      },
+    );
 
     final msgState = messageStates[messageGuid];
     if (msgState == null) return;
@@ -650,8 +627,14 @@ class MessagesService extends GetxController {
 
   // ========== End Attachment Download Orchestration ==========
 
-  void init(Chat c, Function(Message) onNewMessage, Function(Message, {String? oldGuid}) onUpdatedMessage,
-      Function(Message) onDeletedMessage, Function(String) jumpToMessageFunc, List<Message> messagesRef) {
+  void init(
+    Chat c,
+    Function(Message) onNewMessage,
+    Function(Message, {String? oldGuid}) onUpdatedMessage,
+    Function(Message) onDeletedMessage,
+    Function(String) jumpToMessageFunc,
+    List<Message> messagesRef,
+  ) {
     chat = c;
     Get.put<String>(tag, tag: 'lastReloadedChat');
 
@@ -790,15 +773,19 @@ class MessagesService extends GetxController {
         final parentState = messageStates[message.associatedMessageGuid!];
         if (parentState != null) {
           parentState.addAssociatedMessageInternal(message);
-          Logger.debug("Added reaction ${message.guid} to MessageState of parent ${message.associatedMessageGuid}",
-              tag: "MessageState");
+          Logger.debug(
+            "Added reaction ${message.guid} to MessageState of parent ${message.associatedMessageGuid}",
+            tag: "MessageState",
+          );
         }
 
         // Notify UI of update (no longer need to call controller methods)
         triggerMessageUpdate(message.associatedMessageGuid!);
       } else {
-        Logger.warn("Parent message not found for reaction ${message.guid} (parent: ${message.associatedMessageGuid})",
-            tag: "MessageReactivity");
+        Logger.warn(
+          "Parent message not found for reaction ${message.guid} (parent: ${message.associatedMessageGuid})",
+          tag: "MessageReactivity",
+        );
       }
     }
 
@@ -809,8 +796,10 @@ class MessagesService extends GetxController {
       if (originatorState != null) {
         final currentCount = originatorState.threadReplyCount.value;
         originatorState.updateThreadReplyCountInternal(currentCount + 1);
-        Logger.debug("Incremented thread reply count for ${message.threadOriginatorGuid} to ${currentCount + 1}",
-            tag: "MessageState");
+        Logger.debug(
+          "Incremented thread reply count for ${message.threadOriginatorGuid} to ${currentCount + 1}",
+          tag: "MessageState",
+        );
       }
 
       // Notify UI of update
@@ -961,8 +950,11 @@ class MessagesService extends GetxController {
       _lastReadInfo = MessageReceiptInfo(newGuid, date: _lastReadInfo!.date, createdDate: _lastReadInfo!.createdDate);
     }
     if (_lastDeliveredInfo?.guid == oldGuid) {
-      _lastDeliveredInfo =
-          MessageReceiptInfo(newGuid, date: _lastDeliveredInfo!.date, createdDate: _lastDeliveredInfo!.createdDate);
+      _lastDeliveredInfo = MessageReceiptInfo(
+        newGuid,
+        date: _lastDeliveredInfo!.date,
+        createdDate: _lastDeliveredInfo!.createdDate,
+      );
     }
   }
 
@@ -1102,8 +1094,11 @@ class MessagesService extends GetxController {
     if (newLastDelivered?.guid != _lastDeliveredInfo?.guid) {
       messageStates[_lastDeliveredInfo?.guid]?.updateShowDeliveredIndicatorInternal(false);
       _lastDeliveredInfo = newLastDelivered != null
-          ? MessageReceiptInfo(newLastDelivered.guid!,
-              date: newLastDeliveredDate, createdDate: newLastDelivered.dateCreated)
+          ? MessageReceiptInfo(
+              newLastDelivered.guid!,
+              date: newLastDeliveredDate,
+              createdDate: newLastDelivered.dateCreated,
+            )
           : null;
       if (_lastDeliveredInfo != null) {
         messageStates[_lastDeliveredInfo!.guid]?.updateShowDeliveredIndicatorInternal(true);
@@ -1117,6 +1112,7 @@ class MessagesService extends GetxController {
 
   /// Generates new temp GUID, clears error state, and updates both DB and MessageState
   Future<void> retryFailedMessage(Message message, {String? oldGuid}) async {
+    if (ChatsSvc.isApprovedLogicalSource(chat)) return;
     final guidToDelete = oldGuid ?? message.guid!;
 
     // Generate new temp GUID for retry
@@ -1243,13 +1239,7 @@ class MessagesService extends GetxController {
         ),
       );
     } else {
-      OutgoingMsgHandler.queue(
-        OutgoingMessage(
-          chat: chat,
-          message: message,
-          isRetry: true,
-        ),
-      );
+      OutgoingMsgHandler.queue(OutgoingMessage(chat: chat, message: message, isRetry: true));
     }
 
     // The retried message always gets dateCreated = now, making it the newest
@@ -1262,6 +1252,7 @@ class MessagesService extends GetxController {
   /// If the deleted message was the chat's latest, updates the chat's latest message
   /// in both the database and reactive state.
   Future<void> deleteMessage(Message message) async {
+    if (ChatsSvc.isApprovedLogicalSource(chat)) return;
     final deletedGuid = message.guid!;
     await Message.delete(deletedGuid);
     removeMessage(message);
@@ -1272,6 +1263,7 @@ class MessagesService extends GetxController {
   /// If the deleted message was the chat's latest, updates the chat's latest message
   /// in both the database and reactive state.
   Future<void> softDeleteMessage(Message message) async {
+    if (ChatsSvc.isApprovedLogicalSource(chat)) return;
     final deletedGuid = message.guid!;
     await Message.softDelete(deletedGuid);
     removeMessage(message);
@@ -1322,6 +1314,7 @@ class MessagesService extends GetxController {
   ///   4. On failure: if [MessageState] still exists, revert the optimistic
   ///      text and set [ClientMessageError.editFailed] (10006).
   Future<void> editMessage(Message message, int partIndex, String newText) async {
+    if (ChatsSvc.isApprovedLogicalSource(chat)) return;
     final messageGuid = message.guid;
     if (messageGuid == null) return;
 
@@ -1344,21 +1337,18 @@ class MessagesService extends GetxController {
     }
 
     try {
-      final response = await HttpSvc.message.edit(
-        messageGuid,
-        newText,
-        "Edited to: '$newText'",
-        partIndex: partIndex,
-      );
+      final response = await HttpSvc.message.edit(messageGuid, newText, "Edited to: '$newText'", partIndex: partIndex);
       // response is always HTTP 200 here — returnSuccessOrError converts
       // non-200 into Future.error, which is caught below.
       final updatedMessage = Message.fromMap(response.data['data']);
-      IncomingMsgHandler.handle(IncomingPayload(
-        type: MessageEventType.updatedMessage,
-        source: MessageSource.apiResponse,
-        chat: chat,
-        message: updatedMessage,
-      ));
+      IncomingMsgHandler.handle(
+        IncomingPayload(
+          type: MessageEventType.updatedMessage,
+          source: MessageSource.apiResponse,
+          chat: chat,
+          message: updatedMessage,
+        ),
+      );
     } catch (ex, stack) {
       Logger.error("Failed to edit message $messageGuid", error: ex, trace: stack, tag: "MessagesService");
 
@@ -1404,6 +1394,7 @@ class MessagesService extends GetxController {
   ///   4. On failure: if [MessageState] still exists, revert the optimistic
   ///      changes and set [ClientMessageError.unsendFailed] (10007).
   Future<void> unsendMessage(Message message, int partIndex) async {
+    if (ChatsSvc.isApprovedLogicalSource(chat)) return;
     final messageGuid = message.guid;
     if (messageGuid == null) return;
 
@@ -1433,12 +1424,14 @@ class MessagesService extends GetxController {
       // whose messageSummaryInfo hasn't been updated yet, wiping the optimistic
       // unsent flag and briefly showing the message again. Awaiting lets
       // updateMessage() rebuild parts once with the authoritative server state.
-      await IncomingMsgHandler.handle(IncomingPayload(
-        type: MessageEventType.updatedMessage,
-        source: MessageSource.apiResponse,
-        chat: chat,
-        message: updatedMessage,
-      ));
+      await IncomingMsgHandler.handle(
+        IncomingPayload(
+          type: MessageEventType.updatedMessage,
+          source: MessageSource.apiResponse,
+          chat: chat,
+          message: updatedMessage,
+        ),
+      );
 
       // Re-fetch state and force-rebuild parts so reactive getters (isFullyUnsent,
       // isPartiallyUnsent, retractedParts) reflect the server response.
@@ -1481,46 +1474,49 @@ class MessagesService extends GetxController {
     try {
       Logger.debug("[loadChunk] Starting to load messages (offset: $offset, limit: $limit)", tag: "MessageReactivity");
 
+      final sourceChats = ChatsSvc.logicalSourceChatsFor(chat);
+      void syncSupplementalData() {
+        Logger.info(
+          "[loadChunk] Supplemental data loaded, syncing MessageStates for ${_messages.length} messages",
+          tag: "MessageReactivity",
+        );
+        _ensureMessageStates(_messages);
+        for (final message in _messages) {
+          if (message.guid != null && message.associatedMessages.isNotEmpty) {
+            final messageState = messageStates[message.guid];
+            if (messageState != null) {
+              messageState.associatedMessages
+                ..clear()
+                ..addAll(message.associatedMessages);
+              messageState.hasReactions.value = message.associatedMessages.isNotEmpty;
+            }
+          }
+        }
+      }
+
       _messages = await Chat.getMessagesAsync(
         chat,
         offset: offset,
         limit: limit,
-        onSupplementalDataLoaded: () {
-          // Phase 2 complete - reactions have been loaded into message.associatedMessages
-          Logger.info("[loadChunk] Supplemental data loaded, syncing MessageStates for ${_messages.length} messages",
-              tag: "MessageReactivity");
-
-          // Ensure MessageStates exist first (in case they weren't created yet)
-          _ensureMessageStates(_messages);
-
-          // Sync associatedMessages into MessageState observables
-          for (final message in _messages) {
-            if (message.guid != null && message.associatedMessages.isNotEmpty) {
-              final messageState = messageStates[message.guid];
-              if (messageState != null) {
-                // Clear and repopulate the observable list to trigger reactivity
-                messageState.associatedMessages.clear();
-                messageState.associatedMessages.addAll(message.associatedMessages);
-                messageState.hasReactions.value = message.associatedMessages.isNotEmpty;
-
-                Logger.debug(
-                    "[loadChunk] Synced ${message.associatedMessages.length} reactions into MessageState for ${message.guid}",
-                    tag: "MessageReactivity");
-              }
-            }
-          }
-        },
+        sourceChats: sourceChats,
+        onSupplementalDataLoaded: syncSupplementalData,
       );
 
       Logger.debug("[loadChunk] Loaded ${_messages.length} messages from local DB");
-      if (_messages.isEmpty) {
+      if (sourceChats.length > 1 && _messages.length < limit) {
+        await ChatsSvc.hydrateLogicalMessageSources(chat, offset: offset, limit: limit);
+        _messages = await Chat.getMessagesAsync(
+          chat,
+          offset: offset,
+          limit: limit,
+          sourceChats: sourceChats,
+          onSupplementalDataLoaded: syncSupplementalData,
+        );
+      } else if (_messages.isEmpty) {
         // get from server and save
         final fromServer = await ChatsSvc.getMessages(chat.guid, offset: offset, limit: limit);
         final rawMessages = fromServer.cast<Map<String, dynamic>>();
-        final syncResult = await SyncInterface.bulkSyncData(
-          chatData: chat.toMap(),
-          messagesData: rawMessages,
-        );
+        final syncResult = await SyncInterface.bulkSyncData(chatData: chat.toMap(), messagesData: rawMessages);
         if (!kIsWeb) {
           // Prefer the bulk-loaded list (already hydrated via getMany on the main thread)
           // over a second link-query, which can return 0 for newly-created chats whose
@@ -1559,8 +1555,9 @@ class MessagesService extends GetxController {
         } else {
           final reactions = syncResult.messages.where((e) => e.associatedMessageGuid != null);
           for (Message m in reactions) {
-            final associatedMessage =
-                syncResult.messages.firstWhereOrNull((element) => element.guid == m.associatedMessageGuid);
+            final associatedMessage = syncResult.messages.firstWhereOrNull(
+              (element) => element.guid == m.associatedMessageGuid,
+            );
             associatedMessage?.hasReactions = true;
             associatedMessage?.associatedMessages.add(m);
           }
@@ -1612,7 +1609,11 @@ class MessagesService extends GetxController {
   Future<void> loadSearchChunk(Message around, SearchMethod method) async {
     List<Message> _messages = [];
     if (method == SearchMethod.local) {
-      _messages = await Chat.getMessagesAsync(chat, searchAround: around.dateCreated!.millisecondsSinceEpoch);
+      _messages = await Chat.getMessagesAsync(
+        chat,
+        searchAround: around.dateCreated!.millisecondsSinceEpoch,
+        sourceChats: ChatsSvc.logicalSourceChatsFor(chat),
+      );
       _messages.add(around);
       _messages.sort(Message.sort);
       struct.addMessages(_messages);
@@ -1640,18 +1641,19 @@ class MessagesService extends GetxController {
     _recomputeDeliveredIndicators();
   }
 
-  static Future<List<dynamic>> getMessages(
-      {bool withChats = false,
-      bool withAttachments = false,
-      bool withHandles = false,
-      bool withChatParticipants = false,
-      List<dynamic> where = const [],
-      String sort = "DESC",
-      int? before,
-      int? after,
-      String? chatGuid,
-      int offset = 0,
-      int limit = 100}) async {
+  static Future<List<dynamic>> getMessages({
+    bool withChats = false,
+    bool withAttachments = false,
+    bool withHandles = false,
+    bool withChatParticipants = false,
+    List<dynamic> where = const [],
+    String sort = "DESC",
+    int? before,
+    int? after,
+    String? chatGuid,
+    int offset = 0,
+    int limit = 100,
+  }) async {
     Completer<List<dynamic>> completer = Completer();
     final withQuery = <String>["attributedBody", "messageSummaryInfo", "payloadData"];
     if (withChats) withQuery.add("chat");
@@ -1662,25 +1664,27 @@ class MessagesService extends GetxController {
 
     HttpSvc.message
         .query(
-            withQuery: withQuery,
-            where: where,
-            sort: sort,
-            before: before,
-            after: after,
-            chatGuid: chatGuid,
-            offset: offset,
-            limit: limit)
+          withQuery: withQuery,
+          where: where,
+          sort: sort,
+          before: before,
+          after: after,
+          chatGuid: chatGuid,
+          offset: offset,
+          limit: limit,
+        )
         .then((response) {
-      if (!completer.isCompleted) completer.complete(response.data["data"]);
-    }).catchError((err) {
-      late final dynamic error;
-      if (err is Response) {
-        error = err.data["error"]["message"];
-      } else {
-        error = err?.toString();
-      }
-      if (!completer.isCompleted) completer.completeError(error ?? "");
-    });
+          if (!completer.isCompleted) completer.complete(response.data["data"]);
+        })
+        .catchError((err) {
+          late final dynamic error;
+          if (err is Response) {
+            error = err.data["error"]["message"];
+          } else {
+            error = err?.toString();
+          }
+          if (!completer.isCompleted) completer.completeError(error ?? "");
+        });
 
     return completer.future;
   }

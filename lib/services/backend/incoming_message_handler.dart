@@ -258,13 +258,13 @@ class IncomingMessageHandler {
     }
 
     // Forward completion/error to the caller's future, then free the slot.
-    next
-        .then((_) => entry.completer.complete(), onError: (e, s) => entry.completer.completeError(e, s))
-        .whenComplete(() {
-      _activeSlots--;
-      activeConcurrency.value = _activeSlots;
-      _drain();
-    });
+    next.then((_) => entry.completer.complete(), onError: (e, s) => entry.completer.completeError(e, s)).whenComplete(
+      () {
+        _activeSlots--;
+        activeConcurrency.value = _activeSlots;
+        _drain();
+      },
+    );
   }
 
   Future<void> _dispatchPayload(IncomingPayload payload) async {
@@ -295,8 +295,8 @@ class IncomingMessageHandler {
     // Fail any payloads still waiting in the queue so their futures don't hang.
     while (_incomingQueue.isNotEmpty) {
       _incomingQueue.removeFirst().completer.completeError(
-            StateError('IncomingMessageHandler disposed before payload was processed'),
-          );
+        StateError('IncomingMessageHandler disposed before payload was processed'),
+      );
     }
   }
 
@@ -374,7 +374,7 @@ class IncomingMessageHandler {
       // when this chat is the one currently open.  Clear it on the in-memory
       // object before propagating to the UI so the badge never increments for
       // the active chat, then persist the read state asynchronously.
-      if (ChatsSvc.isChatActive(c.guid)) {
+      if (ChatsSvc.isChatActive(c.guid) && !ChatsSvc.isApprovedLogicalSource(c)) {
         c.hasUnreadMessage = false;
         unawaited(ChatsSvc.setChatHasUnread(c, false, force: true));
       }
@@ -409,10 +409,7 @@ class IncomingMessageHandler {
       await GetIt.I.isReady<NotificationsService>();
       await NotificationsSvc.tryCreateNewMessageNotification(saved, c);
     } else {
-      Logger.warn(
-        'NotificationsService not registered yet; skipping notification for ${saved.guid}',
-        tag: _tag,
-      );
+      Logger.warn('NotificationsService not registered yet; skipping notification for ${saved.guid}', tag: _tag);
     }
 
     // 10.5. Group photo changes — fetch/clear icon from server now that the
@@ -429,9 +426,11 @@ class IncomingMessageHandler {
         }
       } else {
         // Photo added or changed — pull from server.
-        unawaited(Chat.getIcon(c, force: true).then((_) {
-          if (!isIsolate) ChatsSvc.updateChat(c, override: true);
-        }));
+        unawaited(
+          Chat.getIcon(c, force: true).then((_) {
+            if (!isIsolate) ChatsSvc.updateChat(c, override: true);
+          }),
+        );
       }
     }
 
@@ -469,10 +468,7 @@ class IncomingMessageHandler {
     //    wait.  _flushPendingUpdate will re-invoke this method once the
     //    new-message is processed.
     if (existing == null) {
-      Logger.info(
-        'updated-message for ${m.guid} has no DB record yet — buffering',
-        tag: _tag,
-      );
+      Logger.info('updated-message for ${m.guid} has no DB record yet — buffering', tag: _tag);
       await _parkPendingUpdate(payload);
       return;
     }
@@ -549,12 +545,7 @@ class IncomingMessageHandler {
   ///
   /// Handles the case where a parallel delivery path (e.g. HTTP response +
   /// socket) has already written [replacement.guid] to the DB.
-  Future<void> _replaceMessage(
-    Chat chat,
-    String existingGuid,
-    Message existing,
-    Message replacement,
-  ) async {
+  Future<void> _replaceMessage(Chat chat, String existingGuid, Message existing, Message replacement) async {
     final alreadyPresent = Message.findOne(guid: replacement.guid);
 
     if (alreadyPresent != null) {
@@ -573,12 +564,7 @@ class IncomingMessageHandler {
       try {
         await Message.replaceMessage(existingGuid, replacement);
       } catch (ex, st) {
-        Logger.warn(
-          '[_replaceMessage] failed: $existingGuid → ${replacement.guid}',
-          error: ex,
-          trace: st,
-          tag: _tag,
-        );
+        Logger.warn('[_replaceMessage] failed: $existingGuid → ${replacement.guid}', error: ex, trace: st, tag: _tag);
       }
     }
   }
@@ -641,14 +627,17 @@ class IncomingMessageHandler {
           await Attachment.replaceAttachmentAsync(attachmentExistingGuid, newAttachment);
 
           // Rename the AttachmentState so UI listeners get the real GUID.
-          if (attachmentExistingGuid != newAttachment.guid && Get.isRegistered<MessagesService>(tag: chat.guid)) {
+          final presentationGuid = ChatsSvc.presentationChatFor(chat).guid;
+          if (attachmentExistingGuid != newAttachment.guid &&
+              Get.isRegistered<MessagesService>(tag: presentationGuid)) {
             // Complete the attachment state at the temp key WITHOUT renaming the
             // map key.  The widget finds the state via part.attachments.first.guid
             // (always the temp GUID) so it must remain discoverable while its Obx
             // is live.  _syncAttachmentStates promotes the key to the real GUID
             // once updateMessage updates the message struct.
-            MessagesSvc(chat.guid)
-                .notifyAttachmentSendComplete(existingGuid, replacement.guid!, attachmentExistingGuid, newAttachment);
+            MessagesSvc(
+              presentationGuid,
+            ).notifyAttachmentSendComplete(existingGuid, replacement.guid!, attachmentExistingGuid, newAttachment);
           }
         }
         // MessagesService is notified once by _dispatchUpdatedMessage after all
@@ -666,14 +655,14 @@ class IncomingMessageHandler {
 
     // After all DB swaps complete, notify MessagesService so the MessageState
     // for this message gets the updated attachment list (real GUIDs replacing temp ones).
-    if (replacementAttachments.isNotEmpty && Get.isRegistered<MessagesService>(tag: chat.guid)) {
+    final presentationGuid = ChatsSvc.presentationChatFor(chat).guid;
+    if (replacementAttachments.isNotEmpty && Get.isRegistered<MessagesService>(tag: presentationGuid)) {
       // Re-fetch from DB so the attachment relations reflect the post-swap state.
       final freshMessage = Message.findOne(guid: replacement.guid!);
       if (freshMessage != null) {
-        MessagesSvc(chat.guid).updateMessage(
-          freshMessage,
-          oldGuid: existingGuid != freshMessage.guid ? existingGuid : null,
-        );
+        MessagesSvc(
+          presentationGuid,
+        ).updateMessage(freshMessage, oldGuid: existingGuid != freshMessage.guid ? existingGuid : null);
       } else {
         Logger.warn(
           '[_replaceAttachments] could not reload message ${replacement.guid} from DB for MessagesService update',
@@ -698,13 +687,15 @@ class IncomingMessageHandler {
   /// An `EventDispatcherSvc.emit` is fired in both cases so chat tiles, badge
   /// counts, and any other cross-cutting listeners can react.
   Future<void> _dispatchNewMessage(Chat chat, Message message, {String? tempGuid}) async {
-    final msvcRegistered = Get.isRegistered<MessagesService>(tag: chat.guid);
+    final presentationChat = ChatsSvc.presentationChatFor(chat);
+    final presentationGuid = presentationChat.guid;
+    final msvcRegistered = Get.isRegistered<MessagesService>(tag: presentationGuid);
     // A tempGuid in the payload means this was an outgoing send from *some*
     // BlueBubbles client, but not necessarily *this* device.  Only treat it as
     // a GUID swap (updateMessage) if the temp entry is already known to this
     // device's MessagesService.  If it isn't (sent from another client), fall
     // through and add it as a new message instead.
-    final svc = msvcRegistered ? MessagesSvc(chat.guid) : null;
+    final svc = msvcRegistered ? MessagesSvc(presentationGuid) : null;
     final tempExistsLocally = tempGuid != null && svc != null && svc.struct.getMessage(tempGuid) != null;
     final realExistsLocally = message.guid != null && svc != null && svc.struct.getMessage(message.guid!) != null;
 
@@ -719,29 +710,25 @@ class IncomingMessageHandler {
       // Pure incoming message (or sent from another device), push it into the
       // active chat view explicitly.
       if (tempGuid != null) {
-        Logger.debug('[_dispatchNewMessage] tempGuid=$tempGuid not in local struct — treating as new message',
-            tag: _tag);
+        Logger.debug(
+          '[_dispatchNewMessage] tempGuid=$tempGuid not in local struct — treating as new message',
+          tag: _tag,
+        );
       }
       await svc.addNewMessage(message);
     }
 
-    EventDispatcherSvc.emit('new-message', {
-      'chatGuid': chat.guid,
-      'message': message,
-    });
+    EventDispatcherSvc.emit('new-message', {'chatGuid': presentationGuid, 'message': message});
   }
 
   /// Notifies the UI layer about an update to an existing message.
   void _dispatchUpdatedMessage(Chat chat, Message message, {String? oldGuid}) {
-    if (Get.isRegistered<MessagesService>(tag: chat.guid)) {
-      MessagesSvc(chat.guid).updateMessage(message, oldGuid: oldGuid);
+    final presentationGuid = ChatsSvc.presentationChatFor(chat).guid;
+    if (Get.isRegistered<MessagesService>(tag: presentationGuid)) {
+      MessagesSvc(presentationGuid).updateMessage(message, oldGuid: oldGuid);
     }
 
-    EventDispatcherSvc.emit('updated-message', {
-      'chatGuid': chat.guid,
-      'message': message,
-      'oldGuid': oldGuid,
-    });
+    EventDispatcherSvc.emit('updated-message', {'chatGuid': presentationGuid, 'message': message, 'oldGuid': oldGuid});
   }
 
   // ── Out-of-order buffering ──────────────────────────────────────────────
@@ -769,10 +756,7 @@ class IncomingMessageHandler {
     // between the check in _processUpdatedMessage and now.
     final raceCheck = Message.findOne(guid: guid);
     if (raceCheck != null) {
-      Logger.debug(
-        'Race resolved: $guid appeared in DB before parking — processing immediately',
-        tag: _tag,
-      );
+      Logger.debug('Race resolved: $guid appeared in DB before parking — processing immediately', tag: _tag);
       await _processUpdatedMessage(payload);
       return;
     }
@@ -782,10 +766,7 @@ class IncomingMessageHandler {
     final existing = _pendingUpdates[guid];
     if (existing != null) {
       existing.expiryTimer?.cancel();
-      Logger.debug(
-        'Replacing buffered update for $guid with newer payload',
-        tag: _tag,
-      );
+      Logger.debug('Replacing buffered update for $guid with newer payload', tag: _tag);
     }
 
     // Evict the oldest pending update if we've hit the hard cap.
@@ -797,14 +778,11 @@ class IncomingMessageHandler {
         'Pending-update buffer full ($_maxPendingUpdates) — evicting oldest entry $oldestGuid, processing anyway',
         tag: _tag,
       );
-      unawaited(handle(oldest.payload, front: true).catchError((e, st) {
-        Logger.warn(
-          'Failed to process evicted buffered update for $oldestGuid',
-          error: e,
-          trace: st,
-          tag: _tag,
-        );
-      }));
+      unawaited(
+        handle(oldest.payload, front: true).catchError((e, st) {
+          Logger.warn('Failed to process evicted buffered update for $oldestGuid', error: e, trace: st, tag: _tag);
+        }),
+      );
     }
 
     final pending = _PendingUpdate(payload: payload);
@@ -816,14 +794,11 @@ class IncomingMessageHandler {
           'without a matching new-message — processing anyway',
           tag: _tag,
         );
-        unawaited(handle(expired.payload, front: true).catchError((e, st) {
-          Logger.warn(
-            'Failed to process expired buffered update for $guid',
-            error: e,
-            trace: st,
-            tag: _tag,
-          );
-        }));
+        unawaited(
+          handle(expired.payload, front: true).catchError((e, st) {
+            Logger.warn('Failed to process expired buffered update for $guid', error: e, trace: st, tag: _tag);
+          }),
+        );
       }
     });
     _pendingUpdates[guid] = pending;
@@ -844,14 +819,11 @@ class IncomingMessageHandler {
     // calling _processUpdatedMessage directly.  This ensures the flushed update
     // chains onto the per-GUID _inflightByGuid future, preventing a race with
     // any same-GUID event already waiting in the queue behind the new-message.
-    unawaited(handle(pending.payload, front: true).catchError((e, st) {
-      Logger.warn(
-        'Failed to flush buffered update for $messageGuid',
-        error: e,
-        trace: st,
-        tag: _tag,
-      );
-    }));
+    unawaited(
+      handle(pending.payload, front: true).catchError((e, st) {
+        Logger.warn('Failed to flush buffered update for $messageGuid', error: e, trace: st, tag: _tag);
+      }),
+    );
   }
 
   // ── Deduplication helpers ────────────────────────────────────────────────
@@ -895,9 +867,7 @@ class IncomingMessageHandler {
       // audio resources.  Uses onCompletion (Stream<void>) rather than
       // onPlayerStateChanged so we don't need to reference PlayerState, which
       // is defined in both audio_waveforms and media_kit.
-      unawaited(
-        controller.onCompletion.first.whenComplete(controller.dispose).catchError((Object _) {}),
-      );
+      unawaited(controller.onCompletion.first.whenComplete(controller.dispose).catchError((Object _) {}));
     }
   }
 }

@@ -21,13 +21,16 @@ class MaterialHeader extends StatelessWidget implements PreferredSizeWidget {
 
   @override
   Widget build(BuildContext context) {
+    final readOnlyLogical = ChatsSvc.isLogicalConversation(controller.chat);
     final Rx<Color> _backgroundColor = context.theme.colorScheme.surfaceContainerHighest
         .withValues(alpha: (kIsDesktop && SettingsSvc.settings.windowEffect.value != WindowEffect.disabled) ? 0.4 : 1)
         .obs;
     final Color _foregroundColor = context.theme.colorScheme.onSurfaceVariant;
 
-    return Stack(children: [
-      Obx(() => AppBar(
+    return Stack(
+      children: [
+        Obx(
+          () => AppBar(
             backgroundColor: _backgroundColor.value,
             surfaceTintColor: Colors.transparent,
             scrolledUnderElevation: 0,
@@ -61,13 +64,13 @@ class MaterialHeader extends StatelessWidget implements PreferredSizeWidget {
               padding: EdgeInsets.only(top: kIsDesktop ? 20 : 0),
               child: InkWell(
                 borderRadius: BorderRadius.circular(10),
-                onTap: controller.chat.isGroup
+                onTap: readOnlyLogical
+                    ? null
+                    : controller.chat.isGroup
                     ? () {
                         Navigator.of(context).push(
                           ThemeSwitcher.buildPageRoute(
-                            builder: (context) => ConversationDetails(
-                              chat: controller.chat,
-                            ),
+                            builder: (context) => ConversationDetails(chat: controller.chat),
                           ),
                         );
                       }
@@ -117,20 +120,12 @@ class MaterialHeader extends StatelessWidget implements PreferredSizeWidget {
                 child: PopupMenuButton<int>(
                   color: context.theme.colorScheme.surfaceContainerHighest,
                   shape: SettingsSvc.settings.skin.value != Skins.Material
-                      ? const RoundedRectangleBorder(
-                          borderRadius: BorderRadius.all(
-                            Radius.circular(20.0),
-                          ),
-                        )
+                      ? const RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(20.0)))
                       : null,
                   onSelected: (int value) {
                     if (value == 0) {
                       Navigator.of(context).push(
-                        ThemeSwitcher.buildPageRoute(
-                          builder: (context) => ConversationDetails(
-                            chat: controller.chat,
-                          ),
-                        ),
+                        ThemeSwitcher.buildPageRoute(builder: (context) => ConversationDetails(chat: controller.chat)),
                       );
                     } else if (value == 1) {
                       ChatsSvc.setChatArchived(controller.chat, !controller.chat.isArchived!);
@@ -174,29 +169,34 @@ class MaterialHeader extends StatelessWidget implements PreferredSizeWidget {
                   },
                   itemBuilder: (context) {
                     return <PopupMenuItem<int>>[
-                      PopupMenuItem(
-                        value: 0,
-                        child: Text(
-                          'Details',
-                          style: context.textTheme.bodyLarge!.apply(color: context.theme.colorScheme.onSurfaceVariant),
+                      if (!readOnlyLogical)
+                        PopupMenuItem(
+                          value: 0,
+                          child: Text(
+                            'Details',
+                            style: context.textTheme.bodyLarge!.apply(
+                              color: context.theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
                         ),
-                      ),
-                      if (!LifecycleSvc.isBubble)
+                      if (!readOnlyLogical && !LifecycleSvc.isBubble)
                         PopupMenuItem(
                           value: 1,
                           child: Text(
                             controller.chat.isArchived! ? 'Unarchive' : 'Archive',
-                            style:
-                                context.textTheme.bodyLarge!.apply(color: context.theme.colorScheme.onSurfaceVariant),
+                            style: context.textTheme.bodyLarge!.apply(
+                              color: context.theme.colorScheme.onSurfaceVariant,
+                            ),
                           ),
                         ),
-                      if (!LifecycleSvc.isBubble)
+                      if (!readOnlyLogical && !LifecycleSvc.isBubble)
                         PopupMenuItem(
                           value: 2,
                           child: Text(
                             'Delete',
-                            style:
-                                context.textTheme.bodyLarge!.apply(color: context.theme.colorScheme.onSurfaceVariant),
+                            style: context.textTheme.bodyLarge!.apply(
+                              color: context.theme.colorScheme.onSurfaceVariant,
+                            ),
                           ),
                         ),
                       PopupMenuItem(
@@ -208,21 +208,15 @@ class MaterialHeader extends StatelessWidget implements PreferredSizeWidget {
                       ),
                     ];
                   },
-                  icon: Icon(
-                    Icons.more_vert,
-                    color: _foregroundColor,
-                  ),
+                  icon: Icon(Icons.more_vert, color: _foregroundColor),
                 ),
-              )
+              ),
             ],
-          )),
-      const Positioned(
-        bottom: 0,
-        left: 0,
-        right: 0,
-        child: HeaderProgressIndicator(),
-      ),
-    ]);
+          ),
+        ),
+        const Positioned(bottom: 0, left: 0, right: 0, child: HeaderProgressIndicator()),
+      ],
+    );
   }
 
   @override
@@ -257,9 +251,7 @@ class _ChatIconAndTitleState extends CustomState<_ChatIconAndTitle, void, Conver
           padding: const EdgeInsets.only(right: 12.5),
           child: IgnorePointer(
             ignoring: true,
-            child: ContactAvatarGroupWidget(
-              size: !controller.chat.isGroup ? 35 : 40,
-            ),
+            child: ContactAvatarGroupWidget(size: !controller.chat.isGroup ? 35 : 40),
           ),
         ),
         Expanded(
@@ -273,8 +265,10 @@ class _ChatIconAndTitleState extends CustomState<_ChatIconAndTitle, void, Conver
                     : chatState.title.value ?? controller.chat.getTitle();
                 return Text(
                   _title,
-                  style: context.theme.textTheme.titleLarge!
-                      .apply(color: context.theme.colorScheme.onSurfaceVariant, fontSizeFactor: 0.85),
+                  style: context.theme.textTheme.titleLarge!.apply(
+                    color: context.theme.colorScheme.onSurfaceVariant,
+                    fontSizeFactor: 0.85,
+                  ),
                   maxLines: 1,
                   overflow: TextOverflow.fade,
                 );

@@ -69,44 +69,46 @@ class ChatState {
   late final String _cachedFakeName;
 
   ChatState(this.chat)
-      : isPinned = (chat.isPinned ?? false).obs,
-        pinIndex = RxnInt(chat.pinIndex),
-        hasUnreadMessage = (chat.hasUnreadMessage ?? false).obs,
-        muteType = RxnString(chat.muteType),
-        muteArgs = RxnString(chat.muteArgs),
-        isArchived = (chat.isArchived ?? false).obs,
-        displayName = RxnString(chat.displayName),
-        customAvatarPath = RxnString(chat.customAvatarPath),
-        customBackgroundPath = RxnString(FilesystemSvc.getExistingChatBackgroundPath(chat.guid)),
-        // Placeholder; recomputed from live participant state once [participants]
-        // is populated below, so a contact link resolved concurrently with chat
-        // creation isn't missed by a one-shot snapshot of chat.getTitle().
-        title = RxnString(null),
-        chatCreatorSubtitle = RxnString(chat.isGroup
+    : isPinned = (chat.isPinned ?? false).obs,
+      pinIndex = RxnInt(chat.pinIndex),
+      hasUnreadMessage = (chat.hasUnreadMessage ?? false).obs,
+      muteType = RxnString(chat.muteType),
+      muteArgs = RxnString(chat.muteArgs),
+      isArchived = (chat.isArchived ?? false).obs,
+      displayName = RxnString(chat.displayName),
+      customAvatarPath = RxnString(chat.customAvatarPath),
+      customBackgroundPath = RxnString(FilesystemSvc.getExistingChatBackgroundPath(chat.guid)),
+      // Placeholder; recomputed from live participant state once [participants]
+      // is populated below, so a contact link resolved concurrently with chat
+      // creation isn't missed by a one-shot snapshot of chat.getTitle().
+      title = RxnString(null),
+      chatCreatorSubtitle = RxnString(
+        chat.isGroup
             ? chat.getChatCreatorSubtitle()
-            : (chat.handles.isNotEmpty ? (chat.handles.first.formattedAddress ?? chat.handles.first.address) : null)),
-        subtitle = RxnString(chat.dbLatestMessage.target?.getNotificationText()),
-        latestMessage = Rxn<Message>(chat.dbLatestMessage.target),
-        latestMessageStatus = Rx<MessageStatusIndicator>(
-          chat.dbLatestMessage.target?.isFromMe != true
-              ? MessageStatusIndicator.NONE
-              : (chat.dbLatestMessage.target?.indicatorToShow ?? MessageStatusIndicator.NONE),
-        ),
-        textFieldText = RxnString(chat.textFieldText),
-        textFieldAttachments = chat.textFieldAttachments.obs,
-        autoSendReadReceipts = RxnBool(chat.autoSendReadReceipts),
-        autoSendTypingIndicators = RxnBool(chat.autoSendTypingIndicators),
-        lockChatName = chat.lockChatName.obs,
-        lockChatIcon = chat.lockChatIcon.obs,
-        lastReadMessageGuid = RxnString(chat.lastReadMessageGuid),
-        dateDeleted = Rxn<DateTime>(chat.dateDeleted),
-        customThemeLight = RxnString(chat.customThemeLight),
-        customThemeDark = RxnString(chat.customThemeDark),
-        themeVersion = 0.obs,
-        isActive = false.obs,
-        isAlive = false.obs,
-        shouldHideAttachments =
-            (SettingsSvc.settings.redactedMode.value && SettingsSvc.settings.hideAttachments.value).obs {
+            : (chat.handles.isNotEmpty ? (chat.handles.first.formattedAddress ?? chat.handles.first.address) : null),
+      ),
+      subtitle = RxnString(chat.dbLatestMessage.target?.getNotificationText()),
+      latestMessage = Rxn<Message>(chat.dbLatestMessage.target),
+      latestMessageStatus = Rx<MessageStatusIndicator>(
+        chat.dbLatestMessage.target?.isFromMe != true
+            ? MessageStatusIndicator.NONE
+            : (chat.dbLatestMessage.target?.indicatorToShow ?? MessageStatusIndicator.NONE),
+      ),
+      textFieldText = RxnString(chat.textFieldText),
+      textFieldAttachments = chat.textFieldAttachments.obs,
+      autoSendReadReceipts = RxnBool(chat.autoSendReadReceipts),
+      autoSendTypingIndicators = RxnBool(chat.autoSendTypingIndicators),
+      lockChatName = chat.lockChatName.obs,
+      lockChatIcon = chat.lockChatIcon.obs,
+      lastReadMessageGuid = RxnString(chat.lastReadMessageGuid),
+      dateDeleted = Rxn<DateTime>(chat.dateDeleted),
+      customThemeLight = RxnString(chat.customThemeLight),
+      customThemeDark = RxnString(chat.customThemeDark),
+      themeVersion = 0.obs,
+      isActive = false.obs,
+      isAlive = false.obs,
+      shouldHideAttachments =
+          (SettingsSvc.settings.redactedMode.value && SettingsSvc.settings.hideAttachments.value).obs {
     // Populate participants from handles and wire up ever() listeners so the
     // chatCreatorSubtitle stays live when contacts sync.
     participants.addAll(chat.handles.map((h) => HandleSvc.getOrCreateHandleState(h)));
@@ -123,8 +125,9 @@ class ChatState {
     // state rather than the one-shot chat.getTitle() snapshot.
     title.value = _computeTitle();
     // Cache fake name for consistent redacted-mode display.
-    _cachedFakeName =
-        chat.isGroup ? chat.fakeName : (participants.isNotEmpty ? participants.first.fakeName : 'Unknown');
+    _cachedFakeName = chat.isGroup
+        ? chat.fakeName
+        : (participants.isNotEmpty ? participants.first.fakeName : 'Unknown');
     // Apply redaction if redacted mode is enabled on initialization
     if (SettingsSvc.settings.redactedMode.value) {
       redactFields();
@@ -242,10 +245,7 @@ class ChatState {
   }
 
   Future<void> _refreshAdaptiveCustomThemes(String imagePath) async {
-    await ThemesService.upsertAdaptiveBackgroundThemesFromImage(
-      imagePath,
-      scopeKey: chat.guid,
-    );
+    await ThemesService.upsertAdaptiveBackgroundThemesFromImage(imagePath, scopeKey: chat.guid);
     bumpThemeVersion();
   }
 
@@ -316,10 +316,7 @@ class ChatState {
     final redacted = SettingsSvc.settings.redactedMode.value;
     final hideContactInfo = redacted && SettingsSvc.settings.hideContactInfo.value;
     final hideMessageContent = redacted && SettingsSvc.settings.hideMessageContent.value;
-    return message.getNotificationText(
-      hideContactInfo: hideContactInfo,
-      hideMessageContent: hideMessageContent,
-    );
+    return message.getNotificationText(hideContactInfo: hideContactInfo, hideMessageContent: hideMessageContent);
   }
 
   /// Rebuild [participants] from [handles] (or this chat's own handles if omitted),
@@ -331,11 +328,9 @@ class ChatState {
     // Skip the RxList rebuild when the participant set is unchanged — clearing
     // and re-adding notifies every watching Obx (avatars, titles) even though
     // nothing changed, causing needless rebuild storms after contact syncs.
-    final unchanged = participants.length == newHandles.length &&
-        listEquals(
-          participants.map((hs) => hs.handle.id).toList(),
-          newHandles.map((h) => h.id).toList(),
-        );
+    final unchanged =
+        participants.length == newHandles.length &&
+        listEquals(participants.map((hs) => hs.handle.id).toList(), newHandles.map((h) => h.id).toList());
     if (unchanged) {
       updateChatCreatorSubtitleInternal(_computeCreatorSubtitle());
       return;
@@ -418,6 +413,8 @@ class ChatState {
     if (incomingLatest != null) {
       updateLatestMessageInternal(incomingLatest);
       updateSubtitleInternal(_computeSubtitle(incomingLatest));
+      chat.dbLatestMessage.target = incomingLatest;
+      chat.dbOnlyLatestMessageDate = incomingLatest.dateCreated;
     }
     // Refresh the title so it reflects any updated handle display names
     // (e.g. a group-event whose sender handle was just added to the DB).
@@ -448,6 +445,7 @@ class ChatState {
 
     // Merge the updated chat properties into the underlying chat object
     chat.isPinned = updatedChat.isPinned;
+    chat.originalROWID = updatedChat.originalROWID ?? chat.originalROWID;
     chat.pinIndex = updatedChat.pinIndex;
     chat.hasUnreadMessage = updatedChat.hasUnreadMessage;
     chat.muteType = updatedChat.muteType;

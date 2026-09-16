@@ -3,6 +3,7 @@ import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/backend/interfaces/contact_v2_interface.dart';
 import 'package:bluebubbles/services/services.dart';
+import 'package:bluebubbles/services/ui/chat/logical_conversation_view.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart';
@@ -19,7 +20,11 @@ class ChatActions {
     final chatIds = (data['chatIds'] as List).cast<int>();
     final shouldMarkOnServer = data['shouldMarkOnServer'] as bool;
 
-    final chats = Database.chats.getMany(chatIds).whereType<Chat>().toList();
+    final chats = Database.chats
+        .getMany(chatIds)
+        .whereType<Chat>()
+        .where((chat) => !LogicalConversationViewPolicy.isApprovedSourceRowId(chat.originalROWID))
+        .toList();
     for (final c in chats) {
       c.hasUnreadMessage = false;
     }
@@ -40,6 +45,8 @@ class ChatActions {
     final chatGuid = data['chatGuid'] as String;
     final markAsRead = data['markAsRead'] as bool;
     final shouldMarkOnServer = data['shouldMarkOnServer'] as bool;
+    final chat = Chat.findOne(guid: chatGuid);
+    if (chat != null && LogicalConversationViewPolicy.isApprovedSourceRowId(chat.originalROWID)) return;
 
     if (shouldMarkOnServer && SettingsSvc.settings.enablePrivateAPI.value) {
       if (markAsRead) {
@@ -52,11 +59,15 @@ class ChatActions {
 
   static Future<void> startTyping(dynamic data) async {
     final chatGuid = data['chatGuid'] as String;
+    final chat = Chat.findOne(guid: chatGuid);
+    if (chat != null && LogicalConversationViewPolicy.isApprovedSourceRowId(chat.originalROWID)) return;
     await HttpSvc.chat.startTyping(chatGuid);
   }
 
   static Future<void> stopTyping(dynamic data) async {
     final chatGuid = data['chatGuid'] as String;
+    final chat = Chat.findOne(guid: chatGuid);
+    if (chat != null && LogicalConversationViewPolicy.isApprovedSourceRowId(chat.originalROWID)) return;
     await HttpSvc.chat.stopTyping(chatGuid);
   }
 
@@ -409,14 +420,12 @@ class ChatActions {
       // Calculate if message is newer
       bool isNewerInIsolate = false;
       if ((messageId != null || kIsWeb) && checkForMessageText) {
-        isNewerInIsolate = inputMessage.dateCreated!.isAfter(inputLatest.dateCreated!) ||
+        isNewerInIsolate =
+            inputMessage.dateCreated!.isAfter(inputLatest.dateCreated!) ||
             (inputMessage.guid != inputLatest.guid && inputMessage.dateCreated == inputLatest.dateCreated);
       }
 
-      return <String, dynamic>{
-        'messageId': messageId,
-        'isNewer': isNewerInIsolate,
-      };
+      return <String, dynamic>{'messageId': messageId, 'isNewer': isNewerInIsolate};
     });
   }
 
@@ -427,8 +436,9 @@ class ChatActions {
       final messageBox = Database.messages;
 
       // Query reactions and return just their IDs
-      final reactionsQuery =
-          (messageBox.query(Message_.associatedMessageGuid.oneOf(messageGuids))..order(Message_.originalROWID)).build();
+      final reactionsQuery = (messageBox.query(
+        Message_.associatedMessageGuid.oneOf(messageGuids),
+      )..order(Message_.originalROWID)).build();
       final reactions = reactionsQuery.find();
       reactionsQuery.close();
 
@@ -459,10 +469,11 @@ class ChatActions {
 
       for (int chatId in chatIds) {
         // Fetch latest message for the chat
-        final latestMsgQuery = (messageBox.query(Message_.dateCreated.notNull())
-              ..link(Message_.chat, Chat_.id.equals(chatId))
-              ..order(Message_.dateCreated, flags: Order.descending))
-            .build();
+        final latestMsgQuery =
+            (messageBox.query(Message_.dateCreated.notNull())
+                  ..link(Message_.chat, Chat_.id.equals(chatId))
+                  ..order(Message_.dateCreated, flags: Order.descending))
+                .build();
         latestMsgQuery.limit = 1;
         final latestMessages = latestMsgQuery.find();
         latestMsgQuery.close();
@@ -645,6 +656,7 @@ class ChatActions {
         // changes originating on the server (e.g. a group name change) are
         // persisted.  User-preference fields are intentionally left alone.
         if (existing != null) {
+          chatToSave.originalROWID = inputChat.originalROWID;
           if (!chatToSave.lockChatName) {
             chatToSave.displayName = inputChat.displayName;
           }
@@ -713,6 +725,7 @@ class ChatActions {
 
   static Future<List<int>> getMessagesAsync(dynamic data) async {
     final chatId = data['chatId'] as int;
+    final chatIds = (data['chatIds'] as List?)?.cast<int>() ?? <int>[chatId];
     final participantsData = (data['participantsData'] as List).cast<Map<String, dynamic>>();
     final offset = data['offset'] as int? ?? 0;
     final limit = data['limit'] as int? ?? 25;
@@ -725,34 +738,57 @@ class ChatActions {
       final messages = <Message>[];
 
       if (searchAround == null) {
-        final query = (messageBox.query(includeDeleted
-                ? Message_.dateCreated.notNull().and(Message_.dateDeleted.isNull().or(Message_.dateDeleted.notNull()))
-                : Message_.dateDeleted.isNull().and(Message_.dateCreated.notNull()))
-              ..link(Message_.chat, Chat_.id.equals(chatId))
-              ..order(Message_.dateCreated, flags: Order.descending))
-            .build();
+        final query =
+            (messageBox.query(
+                    includeDeleted
+                        ? Message_.dateCreated.notNull().and(
+                            Message_.dateDeleted.isNull().or(Message_.dateDeleted.notNull()),
+                          )
+                        : Message_.dateDeleted.isNull().and(Message_.dateCreated.notNull()),
+                  )
+                  ..link(Message_.chat, Chat_.id.oneOf(chatIds))
+                  ..order(Message_.dateCreated, flags: Order.descending))
+                .build();
         query
           ..limit = limit
           ..offset = offset;
         messages.addAll(query.find());
         query.close();
       } else {
-        final beforeQuery = (messageBox.query(Message_.dateCreated.lessThan(searchAround).and(includeDeleted
-                ? Message_.dateCreated.notNull().and(Message_.dateDeleted.isNull().or(Message_.dateDeleted.notNull()))
-                : Message_.dateDeleted.isNull().and(Message_.dateCreated.notNull())))
-              ..link(Message_.chat, Chat_.id.equals(chatId))
-              ..order(Message_.dateCreated, flags: Order.descending))
-            .build();
+        final beforeQuery =
+            (messageBox.query(
+                    Message_.dateCreated
+                        .lessThan(searchAround)
+                        .and(
+                          includeDeleted
+                              ? Message_.dateCreated.notNull().and(
+                                  Message_.dateDeleted.isNull().or(Message_.dateDeleted.notNull()),
+                                )
+                              : Message_.dateDeleted.isNull().and(Message_.dateCreated.notNull()),
+                        ),
+                  )
+                  ..link(Message_.chat, Chat_.id.oneOf(chatIds))
+                  ..order(Message_.dateCreated, flags: Order.descending))
+                .build();
         beforeQuery.limit = limit;
         messages.addAll(beforeQuery.find());
         beforeQuery.close();
 
-        final afterQuery = (messageBox.query(Message_.dateCreated.greaterThan(searchAround).and(includeDeleted
-                ? Message_.dateCreated.notNull().and(Message_.dateDeleted.isNull().or(Message_.dateDeleted.notNull()))
-                : Message_.dateDeleted.isNull().and(Message_.dateCreated.notNull())))
-              ..link(Message_.chat, Chat_.id.equals(chatId))
-              ..order(Message_.dateCreated))
-            .build();
+        final afterQuery =
+            (messageBox.query(
+                    Message_.dateCreated
+                        .greaterThan(searchAround)
+                        .and(
+                          includeDeleted
+                              ? Message_.dateCreated.notNull().and(
+                                  Message_.dateDeleted.isNull().or(Message_.dateDeleted.notNull()),
+                                )
+                              : Message_.dateDeleted.isNull().and(Message_.dateCreated.notNull()),
+                        ),
+                  )
+                  ..link(Message_.chat, Chat_.id.oneOf(chatIds))
+                  ..order(Message_.dateCreated))
+                .build();
         afterQuery.limit = limit;
         messages.addAll(afterQuery.find());
         afterQuery.close();

@@ -10,14 +10,8 @@ import 'package:get_it/get_it.dart';
 import 'package:bluebubbles/services/isolates/global_isolate.dart';
 
 class ChatInterface {
-  static Future<void> clearNotificationForChat({
-    required int chatId,
-    required String chatGuid,
-  }) async {
-    final data = {
-      'chatId': chatId,
-      'chatGuid': chatGuid,
-    };
+  static Future<void> clearNotificationForChat({required int chatId, required String chatGuid}) async {
+    final data = {'chatId': chatId, 'chatGuid': chatGuid};
 
     if (isIsolate) {
       return await ChatActions.clearNotificationForChat(data);
@@ -26,14 +20,8 @@ class ChatInterface {
     }
   }
 
-  static Future<void> markAllChatsRead({
-    required List<int> chatIds,
-    required bool shouldMarkOnServer,
-  }) async {
-    final data = {
-      'chatIds': chatIds,
-      'shouldMarkOnServer': shouldMarkOnServer,
-    };
+  static Future<void> markAllChatsRead({required List<int> chatIds, required bool shouldMarkOnServer}) async {
+    final data = {'chatIds': chatIds, 'shouldMarkOnServer': shouldMarkOnServer};
     if (isIsolate) {
       return await ChatActions.markAllChatsRead(data);
     } else {
@@ -82,11 +70,7 @@ class ChatInterface {
     required Map<String, dynamic> chatData,
     required Map<String, bool> updateFlags,
   }) async {
-    final data = {
-      'guid': guid,
-      'chatData': chatData,
-      'updateFlags': updateFlags,
-    };
+    final data = {'guid': guid, 'chatData': chatData, 'updateFlags': updateFlags};
 
     if (isIsolate) {
       return await ChatActions.saveChat(data);
@@ -100,11 +84,7 @@ class ChatInterface {
     required List<int> messageIds,
     List<int> handleIds = const [],
   }) async {
-    final data = {
-      'chatId': chatId,
-      'messageIds': messageIds,
-      'handleIds': handleIds,
-    };
+    final data = {'chatId': chatId, 'messageIds': messageIds, 'handleIds': handleIds};
 
     if (isIsolate) {
       return await ChatActions.deleteChat(data);
@@ -113,12 +93,8 @@ class ChatInterface {
     }
   }
 
-  static Future<void> softDeleteChat({
-    required Map<String, dynamic> chatData,
-  }) async {
-    final data = {
-      'chatData': chatData,
-    };
+  static Future<void> softDeleteChat({required Map<String, dynamic> chatData}) async {
+    final data = {'chatData': chatData};
 
     if (isIsolate) {
       return await ChatActions.softDeleteChat(data);
@@ -127,12 +103,8 @@ class ChatInterface {
     }
   }
 
-  static Future<void> unDeleteChat({
-    required Map<String, dynamic> chatData,
-  }) async {
-    final data = {
-      'chatData': chatData,
-    };
+  static Future<void> unDeleteChat({required Map<String, dynamic> chatData}) async {
+    final data = {'chatData': chatData};
 
     if (isIsolate) {
       return await ChatActions.unDeleteChat(data);
@@ -160,8 +132,10 @@ class ChatInterface {
     if (isIsolate) {
       result = await ChatActions.addMessageToChat(data);
     } else {
-      result =
-          await GetIt.I<GlobalIsolate>().send<Map<String, dynamic>>(IsolateRequestType.addMessageToChat, input: data);
+      result = await GetIt.I<GlobalIsolate>().send<Map<String, dynamic>>(
+        IsolateRequestType.addMessageToChat,
+        input: data,
+      );
     }
 
     final messageId = result['messageId'] as int?;
@@ -194,12 +168,8 @@ class ChatInterface {
     return MessageSaveResult(message, isNewer);
   }
 
-  static Future<List<Message>> loadSupplementalData({
-    required List<String> messageGuids,
-  }) async {
-    final data = {
-      'messageGuids': messageGuids,
-    };
+  static Future<List<Message>> loadSupplementalData({required List<String> messageGuids}) async {
+    final data = {'messageGuids': messageGuids};
 
     // Get reaction IDs from isolate
     final reactionIds = isIsolate
@@ -218,11 +188,10 @@ class ChatInterface {
     return reactions.whereType<Message>().toList();
   }
 
-  static Future<({List<Chat> chats, List<int> affectedHandleIds})> bulkSyncChats(
-      {required List<Map<String, dynamic>> chatsData}) async {
-    final data = {
-      'chatsData': chatsData,
-    };
+  static Future<({List<Chat> chats, List<int> affectedHandleIds})> bulkSyncChats({
+    required List<Map<String, dynamic>> chatsData,
+  }) async {
+    final data = {'chatsData': chatsData};
 
     late List<int> chatIds;
     late List<int> affectedHandleIds;
@@ -231,8 +200,10 @@ class ChatInterface {
       chatIds = (result['chatIds'] as List).cast<int>();
       affectedHandleIds = (result['affectedHandleIds'] as List).cast<int>();
     } else {
-      final result =
-          await GetIt.I<GlobalIsolate>().send<Map<String, dynamic>>(IsolateRequestType.bulkSyncChats, input: data);
+      final result = await GetIt.I<GlobalIsolate>().send<Map<String, dynamic>>(
+        IsolateRequestType.bulkSyncChats,
+        input: data,
+      );
       chatIds = (result['chatIds'] as List).cast<int>();
       affectedHandleIds = (result['affectedHandleIds'] as List).cast<int>();
     }
@@ -243,6 +214,7 @@ class ChatInterface {
 
   static Future<List<Message>> getMessagesAsync({
     required int chatId,
+    List<int>? chatIds,
     required String chatGuid,
     required List<Map<String, dynamic>> participantsData,
     int offset = 0,
@@ -253,6 +225,7 @@ class ChatInterface {
   }) async {
     final data = {
       'chatId': chatId,
+      'chatIds': chatIds ?? <int>[chatId],
       'chatGuid': chatGuid,
       'participantsData': participantsData,
       'offset': offset,
@@ -272,14 +245,8 @@ class ChatInterface {
     return Database.messages.getMany(messageIds).whereType<Message>().toList();
   }
 
-  static Future<List<Handle>> getParticipantsAsync({
-    required int chatId,
-    required String chatGuid,
-  }) async {
-    final data = {
-      'chatId': chatId,
-      'chatGuid': chatGuid,
-    };
+  static Future<List<Handle>> getParticipantsAsync({required int chatId, required String chatGuid}) async {
+    final data = {'chatId': chatId, 'chatGuid': chatGuid};
 
     late List<int> handleIds;
     if (isIsolate) {
@@ -292,14 +259,8 @@ class ChatInterface {
     return Database.handles.getMany(handleIds).whereType<Handle>().toList();
   }
 
-  static Future<void> clearTranscriptAsync({
-    required int chatId,
-    required String chatGuid,
-  }) async {
-    final data = {
-      'chatId': chatId,
-      'chatGuid': chatGuid,
-    };
+  static Future<void> clearTranscriptAsync({required int chatId, required String chatGuid}) async {
+    final data = {'chatId': chatId, 'chatGuid': chatGuid};
 
     if (isIsolate) {
       return await ChatActions.clearTranscriptAsync(data);
@@ -308,16 +269,8 @@ class ChatInterface {
     }
   }
 
-  static Future<List<Chat>> getChatsAsync({
-    int limit = 15,
-    int offset = 0,
-    List<int> ids = const [],
-  }) async {
-    final data = {
-      'limit': limit,
-      'offset': offset,
-      'ids': ids,
-    };
+  static Future<List<Chat>> getChatsAsync({int limit = 15, int offset = 0, List<int> ids = const []}) async {
+    final data = {'limit': limit, 'offset': offset, 'ids': ids};
 
     late List<int> chatIds;
     if (isIsolate) {

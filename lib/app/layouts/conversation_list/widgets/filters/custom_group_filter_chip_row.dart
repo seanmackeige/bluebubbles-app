@@ -29,7 +29,7 @@ class CustomGroupFilterChipRow extends StatelessWidget {
       // read each ChatState's hasUnreadMessage below so it rebuilds when any
       // chat's read status changes.
       ChatsSvc.chatListVersion.value;
-      final unreadStates = ChatsSvc.chatStates.values.where((s) => s.hasUnreadMessage.value).toList();
+      final unreadStates = ChatsSvc.presentationChatStates.where((s) => s.hasUnreadMessage.value).toList();
       final unreadCounts = <int, int>{
         // Membership is read from `group.chats` (the group's own ToMany,
         // refreshed whenever CustomGroupsSvc reloads) rather than
@@ -79,8 +79,7 @@ class CustomGroupFilterChipRow extends StatelessWidget {
                 onLongPress: () {
                   // Long-press singles out this group, replacing any other
                   // selected groups, instead of toggling it alongside them.
-                  ChatsSvc.chatListFilters.value =
-                      ChatsSvc.chatListFilters.value.copyWith(customGroupIds: {group.id!});
+                  ChatsSvc.chatListFilters.value = ChatsSvc.chatListFilters.value.copyWith(customGroupIds: {group.id!});
                 },
               ),
             );

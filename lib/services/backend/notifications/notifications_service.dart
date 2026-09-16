@@ -137,8 +137,13 @@ class NotificationsService {
     countSub?.cancel();
   }
 
-  Future<void> createReminder(Chat? chat, Message? message, DateTime time,
-      {String? chatTitle, String? messageText}) async {
+  Future<void> createReminder(
+    Chat? chat,
+    Message? message,
+    DateTime time, {
+    String? chatTitle,
+    String? messageText,
+  }) async {
     await flnp.zonedSchedule(
       id: Random().nextInt(9998) + 50000,
       title: chatTitle ?? 'Reminder: ${chat!.getTitle()}',
@@ -165,24 +170,32 @@ class NotificationsService {
     }
 
     if (chat.shouldMuteNotification(message) || message.isFromMe!) return;
-    final isGroup = chat.isGroup;
-    final guid = chat.guid;
+    final notificationChat = ChatsSvc.presentationChatFor(chat);
+    final isGroup = notificationChat.isGroup;
+    final guid = notificationChat.guid;
     final contactName = message.handleRelation.target?.displayName ?? "Unknown";
-    final title = isGroup ? (ChatsSvc.getChatState(chat.guid)?.title.value ?? chat.getTitle()) : contactName;
+    final title = isGroup
+        ? (ChatsSvc.getChatState(notificationChat.guid)?.title.value ?? notificationChat.getTitle())
+        : contactName;
     final text = hideContent ? "iMessage" : message.getNotificationText();
     final isReaction = !isNullOrEmpty(message.associatedMessageGuid);
 
     if (kIsWeb && Notification.permission == "granted") {
-      final chatIcon = await avatarAsBytes(chat: chat, quality: 256);
-      final notif =
-          Notification(title, body: text, icon: "data:image/png;base64,${base64Encode(chatIcon)}", tag: message.guid);
+      final chatIcon = await avatarAsBytes(chat: notificationChat, quality: 256);
+      final notif = Notification(
+        title,
+        body: text,
+        icon: "data:image/png;base64,${base64Encode(chatIcon)}",
+        tag: message.guid,
+      );
       notif.onClick.listen((event) async {
         await IntentsSvc.openChat(guid, isInitialIntent: false);
       });
     } else if (kIsDesktop) {
       // Avatar loading is deferred to _buildAndShowToast — don't load it here.
       _lock.synchronized(
-          () => showDesktopNotif(text, chat, title, contactName, message, isReaction, message.isGroupEvent));
+        () => showDesktopNotif(text, notificationChat, title, contactName, message, isReaction, message.isGroupEvent),
+      );
     } else {
       if (message.guid != null && message.dateCreated != null) {
         if (!GetIt.I.isRegistered<MethodChannelService>()) {
@@ -191,29 +204,34 @@ class NotificationsService {
         }
 
         final personIcon = (await rootBundle.load("assets/images/person64.png")).buffer.asUint8List();
-        Uint8List chatIcon = await avatarAsBytes(chat: chat, quality: 256);
+        Uint8List chatIcon = await avatarAsBytes(chat: notificationChat, quality: 256);
         final isFromMe = message.isFromMe ?? false;
         Uint8List contactIcon = isFromMe
             ? personIcon
             : await avatarAsBytes(
-                participantsOverride: !chat.isGroup
+                participantsOverride: !notificationChat.isGroup
                     ? null
-                    : chat.handles.where((e) => e.address == message.handleRelation.target?.address).toList(),
-                chat: chat,
-                quality: 256);
+                    : notificationChat.handles
+                          .where((e) => e.address == message.handleRelation.target?.address)
+                          .toList(),
+                chat: notificationChat,
+                quality: 256,
+              );
         if (chatIcon.isEmpty) chatIcon = personIcon;
         if (contactIcon.isEmpty) contactIcon = personIcon;
 
         // Determine if reaction action should be shown (only if Private API is enabled & not a reaction message)
-        final bool showReactionAction = SettingsSvc.settings.enablePrivateAPI.value &&
+        final bool showReactionAction =
+            SettingsSvc.settings.enablePrivateAPI.value &&
             SettingsSvc.settings.notificationReactionAction.value &&
+            !ChatsSvc.isLogicalConversation(notificationChat) &&
             message.associatedMessageGuid == null;
         final String reactionType = SettingsSvc.settings.notificationReactionActionType.value;
 
         await GetIt.I.isReady<MethodChannelService>();
         await MethodChannelSvc.actions.createIncomingMessageNotification(
           channelId: NEW_MESSAGE_CHANNEL,
-          chatId: chat.id,
+          chatId: notificationChat.id,
           chatGuid: guid,
           chatIsGroup: isGroup,
           chatTitle: title,
@@ -257,15 +275,23 @@ class NotificationsService {
   }
 
   Future<void> createIncomingFaceTimeNotification(
-      String? callUuid, String caller, Uint8List? chatIcon, bool isAudio) async {
+    String? callUuid,
+    String caller,
+    Uint8List? chatIcon,
+    bool isAudio,
+  ) async {
     // Set some notification defaults
     String title = caller;
     String text = "${callUuid == null ? "Incoming" : "Answer"} FaceTime ${isAudio ? 'Audio' : 'Video'} Call";
     chatIcon ??= (await rootBundle.load("assets/images/person64.png")).buffer.asUint8List();
 
     if (kIsWeb && Notification.permission == "granted") {
-      final notif =
-          Notification(title, body: text, icon: "data:image/png;base64,${base64Encode(chatIcon)}", tag: callUuid);
+      final notif = Notification(
+        title,
+        body: text,
+        icon: "data:image/png;base64,${base64Encode(chatIcon)}",
+        tag: callUuid,
+      );
       if (callUuid != null) {
         notif.onClick.listen((event) async {
           await IntentsSvc.answerFaceTime(callUuid);
@@ -277,8 +303,9 @@ class NotificationsService {
       final numeric = callUuid?.numericOnly();
       await MethodChannelSvc.actions.createIncomingFaceTimeNotification(
         channelId: FACETIME_CHANNEL,
-        notificationId:
-            numeric != null ? int.parse(numeric.substring(0, min(8, numeric.length))) : Random().nextInt(9998) + 1,
+        notificationId: numeric != null
+            ? int.parse(numeric.substring(0, min(8, numeric.length)))
+            : Random().nextInt(9998) + 1,
         title: title,
         body: text,
         callerAvatar: chatIcon,
@@ -354,19 +381,28 @@ class NotificationsService {
   }
 
   void showDesktopNotif(
-      String text, Chat chat, String title, String contactName, Message message, bool isReaction, bool isGroupEvent) {
+    String text,
+    Chat chat,
+    String title,
+    String contactName,
+    Message message,
+    bool isReaction,
+    bool isGroupEvent,
+  ) {
     if (kIsDesktop && !SettingsSvc.settings.desktopNotifications.value) return;
 
     final String guid = chat.guid;
 
     pendingMessages[guid] ??= [];
 
-    pendingMessages[guid]!.add(PendingToastItem(
+    pendingMessages[guid]!.add(
+      PendingToastItem(
         sender: chat.isGroup && !isReaction ? contactName.split(" ").first : null,
         text: text,
         isReaction: isReaction,
         isGroupEvent: isGroupEvent,
-    ));
+      ),
+    );
 
     // Cancel and clean up old timer
     final oldTimer = debounceTimers[guid];
@@ -642,14 +678,17 @@ class NotificationsService {
         title: title,
         body: text,
         notificationDetails: NotificationDetails(
-          android: AndroidNotificationDetails(ERROR_CHANNEL, 'Errors',
+          android: AndroidNotificationDetails(
+            ERROR_CHANNEL,
+            'Errors',
             channelDescription: 'Displays message send failures, connection failures, and more',
             priority: Priority.max,
             importance: Importance.max,
             color: HexColor("4990de"),
             ongoing: false,
             onlyAlertOnce: false,
-              styleInformation: const BigTextStyleInformation('')),
+            styleInformation: const BigTextStyleInformation(''),
+          ),
         ),
       );
     }
@@ -676,13 +715,7 @@ class NotificationsService {
           } else {
             bool chatIsOpen = ChatsSvc.activeChat?.chat.guid == chat.guid;
             if (!chatIsOpen) {
-            NavigationSvc.pushAndRemoveUntil(
-              Get.context!,
-              ConversationView(
-                chat: chat,
-              ),
-              (route) => route.isFirst,
-            );
+              NavigationSvc.pushAndRemoveUntil(Get.context!, ConversationView(chat: chat), (route) => route.isFirst);
             }
           }
         },

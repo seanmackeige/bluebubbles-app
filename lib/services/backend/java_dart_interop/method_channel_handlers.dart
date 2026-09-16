@@ -96,17 +96,19 @@ class MethodChannelHandlers {
       final Map<String, dynamic>? data = arguments;
       if (!isNullOrEmpty(data)) {
         final payload = ServerPayload.fromJson(data!);
-        await IncomingMsgHandler.handle(IncomingPayload(
-          type: MessageEventType.newMessage,
-          source: MessageSource.methodChannel,
-          chat: Chat.fromMap(payload.data['chats'].first.cast<String, Object>()),
-          message: Message.fromMap(payload.data),
-          attachments: ((payload.data['attachments'] as List?) ?? const [])
-              .whereType<Map>()
-              .map((e) => Attachment.fromMap(e.cast<String, Object>()))
-              .toList(),
-          tempGuid: payload.data['tempGuid'],
-        ));
+        await IncomingMsgHandler.handle(
+          IncomingPayload(
+            type: MessageEventType.newMessage,
+            source: MessageSource.methodChannel,
+            chat: Chat.fromMap(payload.data['chats'].first.cast<String, Object>()),
+            message: Message.fromMap(payload.data),
+            attachments: ((payload.data['attachments'] as List?) ?? const [])
+                .whereType<Map>()
+                .map((e) => Attachment.fromMap(e.cast<String, Object>()))
+                .toList(),
+            tempGuid: payload.data['tempGuid'],
+          ),
+        );
       }
     } catch (e, s) {
       debugPrint('Error processing new message: $e');
@@ -149,17 +151,19 @@ class MethodChannelHandlers {
           }
         }
 
-        await IncomingMsgHandler.handle(IncomingPayload(
-          type: MessageEventType.updatedMessage,
-          source: MessageSource.methodChannel,
-          chat: Chat.fromMap(payload.data['chats'].first.cast<String, Object>()),
-          message: Message.fromMap(payload.data),
-          attachments: ((payload.data['attachments'] as List?) ?? const [])
-              .whereType<Map>()
-              .map((e) => Attachment.fromMap(e.cast<String, Object>()))
-              .toList(),
-          tempGuid: payload.data['tempGuid'],
-        ));
+        await IncomingMsgHandler.handle(
+          IncomingPayload(
+            type: MessageEventType.updatedMessage,
+            source: MessageSource.methodChannel,
+            chat: Chat.fromMap(payload.data['chats'].first.cast<String, Object>()),
+            message: Message.fromMap(payload.data),
+            attachments: ((payload.data['attachments'] as List?) ?? const [])
+                .whereType<Map>()
+                .map((e) => Attachment.fromMap(e.cast<String, Object>()))
+                .toList(),
+            tempGuid: payload.data['tempGuid'],
+          ),
+        );
       }
     } catch (e, s) {
       return Future.error(e, s);
@@ -182,7 +186,8 @@ class MethodChannelHandlers {
       if (!isNullOrEmpty(data)) {
         final payload = ServerPayload.fromJson(data!);
         await MessageHandlerSvc.handleNewOrUpdatedChat(
-            Chat.fromMap(payload.data['chats'].first.cast<String, Object>()));
+          Chat.fromMap(payload.data['chats'].first.cast<String, Object>()),
+        );
       }
     } catch (e, s) {
       return Future.error(e, s);
@@ -250,10 +255,7 @@ class MethodChannelHandlers {
     final recentReplyText = recentReply?.text;
     if (recentReplyGuid == data['messageGuid'] && recentReplyText == data['text']) return _retry();
 
-    await PrefsSvc.messaging.setRecentReply(
-      messageGuid: data['messageGuid'],
-      text: data['text'],
-    );
+    await PrefsSvc.messaging.setRecentReply(messageGuid: data['messageGuid'], text: data['text']);
     Logger.info('Updated recent reply cache to ${PrefsSvc.messaging.getRecentReplyRaw()}');
 
     final Chat? chat = Chat.findOne(guid: data['chatGuid']);
@@ -288,6 +290,7 @@ class MethodChannelHandlers {
       if (arguments != null) {
         final Chat? chat = Chat.findOne(guid: arguments['chatGuid']);
         if (chat != null) {
+          if (ChatsSvc.isApprovedLogicalSource(chat)) return _ok();
           await chat.toggleHasUnreadAsync(false, clearLocalNotifications: false);
           ChatsSvc.getChatState(chat.guid)?.updateHasUnreadInternal(false);
           return _ok();

@@ -21,7 +21,12 @@ import 'package:get/get.dart';
 
 Future<void> peekChat(BuildContext context, Chat c, Offset offset) async {
   HapticFeedback.mediumImpact();
-  final messages = Chat.getMessages(c, getDetails: true).where((e) => e.associatedMessageGuid == null).toList();
+  c = ChatsSvc.presentationChatFor(c);
+  final messages = Chat.getMessages(
+    c,
+    getDetails: true,
+    sourceChats: ChatsSvc.logicalSourceChatsFor(c),
+  ).where((e) => e.associatedMessageGuid == null).toList();
   await Navigator.push(
     Get.context!,
     PageRouteBuilder(
@@ -29,11 +34,7 @@ Future<void> peekChat(BuildContext context, Chat c, Offset offset) async {
       pageBuilder: (context, animation, secondaryAnimation) {
         return FadeTransition(
           opacity: animation,
-          child: ConversationPeekView(
-            position: offset,
-            chat: c,
-            messages: messages,
-          ),
+          child: ConversationPeekView(position: offset, chat: c, messages: messages),
         );
       },
       fullscreenDialog: true,
@@ -67,11 +68,7 @@ class _ConversationPeekViewState extends State<ConversationPeekView>
     ChatsSvc.activeChat!.controller = cvController;
 
     // Initialize messages service with message states for proper reactivity
-    initializeMessagesService(
-      widget.chat,
-      widget.messages,
-      cvController,
-    );
+    initializeMessagesService(widget.chat, widget.messages, cvController);
 
     controller = AnimationController(
       vsync: this,
@@ -134,7 +131,9 @@ class _ConversationPeekViewState extends State<ConversationPeekView>
               final menuItemCount = 5 + (CustomGroupsSvc.groups.isNotEmpty ? 1 : 0);
               final menuHeight = itemHeight * menuItemCount + 5;
               final previewHeight = min(
-                  max(min(availableHeight / 2, availableHeight - menuHeight - 25), itemHeight * 2), availableHeight);
+                max(min(availableHeight / 2, availableHeight - menuHeight - 25), itemHeight * 2),
+                availableHeight,
+              );
               final maxLeft = max(availableWidth - previewWidth - 25, 0.0);
               final maxTop = max(availableHeight - previewHeight - menuHeight - 25, 0.0);
 
@@ -148,8 +147,9 @@ class _ConversationPeekViewState extends State<ConversationPeekView>
                     child: BackdropFilter(
                       filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
                       child: Container(
-                        color:
-                            context.theme.colorScheme.surfaceContainerHighest.darkenPercent(30).withValues(alpha: 0.2),
+                        color: context.theme.colorScheme.surfaceContainerHighest
+                            .darkenPercent(30)
+                            .withValues(alpha: 0.2),
                       ),
                     ),
                   ),
@@ -179,9 +179,7 @@ class _ConversationPeekViewState extends State<ConversationPeekView>
                                 Navigator.of(context).pop();
                                 NavigationSvc.pushAndRemoveUntil(
                                   Get.context!,
-                                  ConversationView(
-                                    chat: widget.chat,
-                                  ),
+                                  ConversationView(chat: widget.chat),
                                   (route) => route.isFirst,
                                 );
                               },
@@ -238,10 +236,7 @@ class _ConversationPeekViewState extends State<ConversationPeekView>
                         ),
                       ),
                       builder: (context, size, child) {
-                        return Transform.scale(
-                          scale: size,
-                          child: child,
-                        );
+                        return Transform.scale(scale: size, child: child);
                       },
                     ),
                   ),
@@ -275,10 +270,11 @@ class _ConversationPeekViewState extends State<ConversationPeekView>
               style: context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
             ),
             trailing: Icon(
-                widget.chat.isPinned!
-                    ? (ios ? cupertino.CupertinoIcons.pin_slash : Icons.star_outline)
-                    : (ios ? cupertino.CupertinoIcons.pin : Icons.star),
-                color: context.theme.colorScheme.onSurfaceVariant),
+              widget.chat.isPinned!
+                  ? (ios ? cupertino.CupertinoIcons.pin_slash : Icons.star_outline)
+                  : (ios ? cupertino.CupertinoIcons.pin : Icons.star),
+              color: context.theme.colorScheme.onSurfaceVariant,
+            ),
           ),
         ),
       ),
@@ -302,10 +298,11 @@ class _ConversationPeekViewState extends State<ConversationPeekView>
               style: context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
             ),
             trailing: Icon(
-                widget.chat.muteType == "mute"
-                    ? (ios ? cupertino.CupertinoIcons.bell : Icons.notifications_active)
-                    : (ios ? cupertino.CupertinoIcons.bell_slash : Icons.notifications_off),
-                color: context.theme.colorScheme.onSurfaceVariant),
+              widget.chat.muteType == "mute"
+                  ? (ios ? cupertino.CupertinoIcons.bell : Icons.notifications_active)
+                  : (ios ? cupertino.CupertinoIcons.bell_slash : Icons.notifications_off),
+              color: context.theme.colorScheme.onSurfaceVariant,
+            ),
           ),
         ),
       ),
@@ -329,10 +326,11 @@ class _ConversationPeekViewState extends State<ConversationPeekView>
               style: context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
             ),
             trailing: Icon(
-                widget.chat.hasUnreadMessage!
-                    ? (ios ? cupertino.CupertinoIcons.person_crop_circle_badge_xmark : Icons.mark_chat_unread)
-                    : (ios ? cupertino.CupertinoIcons.person_crop_circle_badge_checkmark : Icons.mark_chat_read),
-                color: context.theme.colorScheme.onSurfaceVariant),
+              widget.chat.hasUnreadMessage!
+                  ? (ios ? cupertino.CupertinoIcons.person_crop_circle_badge_xmark : Icons.mark_chat_unread)
+                  : (ios ? cupertino.CupertinoIcons.person_crop_circle_badge_checkmark : Icons.mark_chat_read),
+              color: context.theme.colorScheme.onSurfaceVariant,
+            ),
           ),
         ),
       ),
@@ -352,10 +350,11 @@ class _ConversationPeekViewState extends State<ConversationPeekView>
               style: context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
             ),
             trailing: Icon(
-                widget.chat.isArchived!
-                    ? (ios ? cupertino.CupertinoIcons.tray_arrow_up : Icons.unarchive)
-                    : (ios ? cupertino.CupertinoIcons.tray_arrow_down : Icons.archive),
-                color: context.theme.colorScheme.onSurfaceVariant),
+              widget.chat.isArchived!
+                  ? (ios ? cupertino.CupertinoIcons.tray_arrow_up : Icons.unarchive)
+                  : (ios ? cupertino.CupertinoIcons.tray_arrow_down : Icons.archive),
+              color: context.theme.colorScheme.onSurfaceVariant,
+            ),
           ),
         ),
       ),
@@ -367,9 +366,7 @@ class _ConversationPeekViewState extends State<ConversationPeekView>
               final group = await showBBListSelector<CustomGroup>(
                 context: context,
                 title: "Add to Custom Group",
-                options: CustomGroupsSvc.groups
-                    .map((g) => BBListSelectorOption(label: g.name, value: g))
-                    .toList(),
+                options: CustomGroupsSvc.groups.map((g) => BBListSelectorOption(label: g.name, value: g)).toList(),
               );
               if (group != null) {
                 final chatGuids = group.chats.map((c) => c.guid).toSet();
@@ -386,8 +383,9 @@ class _ConversationPeekViewState extends State<ConversationPeekView>
                 style: context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
               ),
               trailing: Icon(
-                  ios ? cupertino.CupertinoIcons.folder_badge_plus : Icons.playlist_add,
-                  color: context.theme.colorScheme.onSurfaceVariant),
+                ios ? cupertino.CupertinoIcons.folder_badge_plus : Icons.playlist_add,
+                color: context.theme.colorScheme.onSurfaceVariant,
+              ),
             ),
           ),
         ),
@@ -401,10 +399,7 @@ class _ConversationPeekViewState extends State<ConversationPeekView>
               title: "Are you sure?",
               body: "This chat will be deleted from this device only",
               actions: [
-                BBDialogAction(
-                  text: "No",
-                  onPressed: () => Navigator.of(context, rootNavigator: true).pop(),
-                ),
+                BBDialogAction(text: "No", onPressed: () => Navigator.of(context, rootNavigator: true).pop()),
                 BBDialogAction(
                   text: "Yes",
                   isDefault: true,
@@ -436,13 +431,17 @@ class _ConversationPeekViewState extends State<ConversationPeekView>
       child: BackdropFilter(
         filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
         child: Container(
-          color: (ThemeSvc.inDarkMode(context)
-                  ? context.theme.colorScheme.surfaceContainerHighest
-                  : context.theme.colorScheme.surface)
-              .withAlpha(150),
+          color:
+              (ThemeSvc.inDarkMode(context)
+                      ? context.theme.colorScheme.surfaceContainerHighest
+                      : context.theme.colorScheme.surface)
+                  .withAlpha(150),
           width: maxMenuWidth,
-          child:
-              Column(mainAxisSize: MainAxisSize.min, mainAxisAlignment: MainAxisAlignment.center, children: allActions),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: allActions,
+          ),
         ),
       ),
     );

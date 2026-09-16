@@ -15,10 +15,16 @@ import 'package:get/get.dart' hide Response;
 // ignore: unnecessary_import
 import 'package:objectbox/objectbox.dart';
 import 'package:universal_io/io.dart';
+import 'package:bluebubbles/services/ui/chat/logical_conversation_view.dart';
+import 'package:collection/collection.dart';
 
 @Entity()
 class Chat {
   int? id;
+
+  /// Immutable source ROWID from the BlueBubbles server's Messages chat row.
+  /// This is provenance only; [id] remains the Android/ObjectBox identity.
+  int? originalROWID;
 
   @Index(type: IndexType.value)
   @Unique()
@@ -102,6 +108,7 @@ class Chat {
 
   Chat({
     this.id,
+    this.originalROWID,
     required this.guid,
     this.chatIdentifier,
     this.isArchived = false,
@@ -138,10 +145,12 @@ class Chat {
     final message = json['lastMessage'] != null ? Message.fromMap(json['lastMessage']!.cast<String, Object>()) : null;
     return Chat(
       id: json["ROWID"] ?? json["id"],
+      originalROWID: (json["originalROWID"] as num?)?.toInt(),
       guid: json["guid"],
       chatIdentifier: json["chatIdentifier"],
-      participants:
-          (json['participants'] as List? ?? []).map((e) => Handle.fromMap(e!.cast<String, Object>())).toList(),
+      participants: (json['participants'] as List? ?? [])
+          .map((e) => Handle.fromMap(e!.cast<String, Object>()))
+          .toList(),
       isArchived: json['isArchived'] ?? false,
       muteType: json["muteType"],
       muteArgs: json["muteArgs"],
@@ -221,6 +230,7 @@ class Chat {
 
   /// Change a chat's display name
   Future<Chat> changeNameAsync(String? name) async {
+    if (LogicalConversationViewPolicy.isApprovedSourceRowId(originalROWID)) return this;
     if (kIsWeb) {
       displayName = name;
       return this;
@@ -315,8 +325,13 @@ class Chat {
 
   /// Toggle unread status - pure DB operation
   /// Note: For full unread toggle with active chat awareness, use ChatsSvc.toggleChatHasUnread
-  Future<Chat> toggleHasUnreadAsync(bool hasUnread,
-      {bool force = false, bool clearLocalNotifications = true, bool privateMark = true}) async {
+  Future<Chat> toggleHasUnreadAsync(
+    bool hasUnread, {
+    bool force = false,
+    bool clearLocalNotifications = true,
+    bool privateMark = true,
+  }) async {
+    if (privateMark && LogicalConversationViewPolicy.isApprovedSourceRowId(originalROWID)) return this;
     if (kIsDesktop && !hasUnread) {
       NotificationsSvc.clearDesktopNotificationsForChat(guid);
     }
@@ -327,17 +342,10 @@ class Chat {
 
     try {
       if (clearLocalNotifications && !hasUnread) {
-        ChatInterface.clearNotificationForChat(
-          chatId: id!,
-          chatGuid: guid,
-        );
+        ChatInterface.clearNotificationForChat(chatId: id!, chatGuid: guid);
       }
       if (privateMark && (autoSendReadReceipts ?? SettingsSvc.settings.privateMarkChatAsRead.value)) {
-        ChatInterface.markChatReadUnread(
-          chatGuid: guid,
-          markAsRead: !hasUnread,
-          shouldMarkOnServer: true,
-        );
+        ChatInterface.markChatReadUnread(chatGuid: guid, markAsRead: !hasUnread, shouldMarkOnServer: true);
       }
     } catch (e, s) {
       Logger.warn("Failed to mark chat as read on message add", error: e, trace: s, tag: 'Chat');
@@ -348,11 +356,13 @@ class Chat {
 
   /// Add message to chat - pure DB operation
   /// Note: For full message add with service updates, use ChatsSvc.addMessageToChat
-  Future<MessageSaveResult> addMessage(Message message,
-      {bool changeUnreadStatus = true,
-      bool checkForMessageText = true,
-      bool clearNotificationsIfFromMe = true,
-      List<Attachment> attachments = const []}) async {
+  Future<MessageSaveResult> addMessage(
+    Message message, {
+    bool changeUnreadStatus = true,
+    bool checkForMessageText = true,
+    bool clearNotificationsIfFromMe = true,
+    List<Attachment> attachments = const [],
+  }) async {
     // Save the message using the interface
     Message? latest = dbLatestMessage.target;
     Message? newMessage;
@@ -373,8 +383,11 @@ class Chat {
     } catch (ex, stacktrace) {
       newMessage = Message.findOne(guid: message.guid);
       if (newMessage == null) {
-        Logger.error("Failed to add message (GUID: ${message.guid}) to chat (GUID: $guid)",
-            error: ex, trace: stacktrace);
+        Logger.error(
+          "Failed to add message (GUID: ${message.guid}) to chat (GUID: $guid)",
+          error: ex,
+          trace: stacktrace,
+        );
       }
     }
 
@@ -442,12 +455,17 @@ class Chat {
     final stopwatch = Stopwatch()..start();
 
     /// Query the messages for this chat using ObjectBox's async API
-    final messageQuery = (Database.messages.query(fetchDeleted
-            ? Message_.dateCreated.notNull().and(Message_.dateDeleted.isNull().or(Message_.dateDeleted.notNull()))
-            : Message_.dateDeleted.isNull().and(Message_.dateCreated.notNull()))
-          ..link(Message_.chat, Chat_.id.equals(id!))
-          ..order(Message_.dateCreated, flags: Order.descending))
-        .build();
+    final messageQuery =
+        (Database.messages.query(
+                fetchDeleted
+                    ? Message_.dateCreated.notNull().and(
+                        Message_.dateDeleted.isNull().or(Message_.dateDeleted.notNull()),
+                      )
+                    : Message_.dateDeleted.isNull().and(Message_.dateCreated.notNull()),
+              )
+              ..link(Message_.chat, Chat_.id.equals(id!))
+              ..order(Message_.dateCreated, flags: Order.descending))
+            .build();
 
     // Execute query in worker isolate
     final messages = await messageQuery.findAsync();
@@ -463,9 +481,9 @@ class Chat {
     final messageIds = messages.map((e) => e.id!).toList();
 
     // Query attachments linked to these messages asynchronously
-    final attachmentQuery = (Database.attachments.query(Attachment_.mimeType.notNull())
-          ..link(Attachment_.message, Message_.id.oneOf(messageIds)))
-        .build();
+    final attachmentQuery = (Database.attachments.query(
+      Attachment_.mimeType.notNull(),
+    )..link(Attachment_.message, Message_.id.oneOf(messageIds))).build();
 
     final attachments = await attachmentQuery.findAsync();
     attachmentQuery.close();
@@ -483,16 +501,29 @@ class Chat {
 
   /// Gets messages synchronously - DO NOT use in performance-sensitive areas,
   /// otherwise prefer [getMessagesAsync]
-  static List<Message> getMessages(Chat chat,
-      {int offset = 0, int limit = 25, bool includeDeleted = false, bool getDetails = false}) {
-    if (kIsWeb || chat.id == null) return [];
+  static List<Message> getMessages(
+    Chat chat, {
+    int offset = 0,
+    int limit = 25,
+    bool includeDeleted = false,
+    bool getDetails = false,
+    List<Chat>? sourceChats,
+  }) {
+    final effectiveChats = sourceChats ?? <Chat>[chat];
+    final chatIds = effectiveChats.map((source) => source.id).whereType<int>().toList();
+    if (kIsWeb || chatIds.length != effectiveChats.length || chatIds.isEmpty) return [];
     return Database.runInTransaction(TxMode.read, () {
-      final query = (Database.messages.query(includeDeleted
-              ? Message_.dateCreated.notNull().and(Message_.dateDeleted.isNull().or(Message_.dateDeleted.notNull()))
-              : Message_.dateDeleted.isNull().and(Message_.dateCreated.notNull()))
-            ..link(Message_.chat, Chat_.id.equals(chat.id!))
-            ..order(Message_.dateCreated, flags: Order.descending))
-          .build();
+      final query =
+          (Database.messages.query(
+                  includeDeleted
+                      ? Message_.dateCreated.notNull().and(
+                          Message_.dateDeleted.isNull().or(Message_.dateDeleted.notNull()),
+                        )
+                      : Message_.dateDeleted.isNull().and(Message_.dateCreated.notNull()),
+                )
+                ..link(Message_.chat, Chat_.id.oneOf(chatIds))
+                ..order(Message_.dateCreated, flags: Order.descending))
+              .build();
       query
         ..limit = limit
         ..offset = offset;
@@ -500,8 +531,10 @@ class Chat {
       query.close();
       for (int i = 0; i < messages.length; i++) {
         Message message = messages[i];
-        if (chat.handles.isNotEmpty && !message.isFromMe! && message.handleId != null && message.handleId != 0) {
-          Handle? handle = chat.handles.firstWhereOrNull((e) => e.originalROWID == message.handleId) ??
+        final sourceHandles = effectiveChats.expand((source) => source.handles);
+        if (sourceHandles.isNotEmpty && !message.isFromMe! && message.handleId != null && message.handleId != 0) {
+          Handle? handle =
+              sourceHandles.firstWhereOrNull((e) => e.originalROWID == message.handleId) ??
               message.handleRelation.target;
           if (handle == null) {
             messages.remove(message);
@@ -512,9 +545,9 @@ class Chat {
       // fetch attachments and reactions if requested
       if (getDetails) {
         final messageGuids = messages.map((e) => e.guid!).toList();
-        final associatedMessagesQuery = (Database.messages.query(Message_.associatedMessageGuid.oneOf(messageGuids))
-              ..order(Message_.originalROWID))
-            .build();
+        final associatedMessagesQuery = (Database.messages.query(
+          Message_.associatedMessageGuid.oneOf(messageGuids),
+        )..order(Message_.originalROWID)).build();
         List<Message> associatedMessages = associatedMessagesQuery.find();
         associatedMessagesQuery.close();
         associatedMessages = MessageHelper.normalizedAssociatedMessages(associatedMessages);
@@ -528,21 +561,27 @@ class Chat {
 
   /// Fetch messages asynchronously with progressive loading
   /// Returns messages with attachments, then loads reactions in background
-  static Future<List<Message>> getMessagesAsync(Chat chat,
-      {int offset = 0,
-      int limit = 25,
-      bool includeDeleted = false,
-      int? searchAround,
-      Function? onSupplementalDataLoaded}) async {
-    if (kIsWeb || chat.id == null) return [];
+  static Future<List<Message>> getMessagesAsync(
+    Chat chat, {
+    int offset = 0,
+    int limit = 25,
+    bool includeDeleted = false,
+    int? searchAround,
+    List<Chat>? sourceChats,
+    Function? onSupplementalDataLoaded,
+  }) async {
+    final effectiveChats = sourceChats ?? <Chat>[chat];
+    final chatIds = effectiveChats.map((source) => source.id).whereType<int>().toList();
+    if (kIsWeb || chatIds.length != effectiveChats.length || chatIds.isEmpty) return [];
 
     final totalStopwatch = Stopwatch()..start();
 
     // PHASE 1: Query messages with attachments using interface/actions pattern
     final messages = await ChatInterface.getMessagesAsync(
       chatId: chat.id!,
+      chatIds: chatIds,
       chatGuid: chat.guid,
-      participantsData: chat.handles.map((e) => e.toMap()).toList(),
+      participantsData: effectiveChats.expand((source) => source.handles).map((e) => e.toMap()).toList(),
       offset: offset,
       limit: limit,
       includeDeleted: includeDeleted,
@@ -576,9 +615,7 @@ class Chat {
     final supplementalStopwatch = Stopwatch()..start();
 
     try {
-      var associatedMessages = await ChatInterface.loadSupplementalData(
-        messageGuids: messageGuids,
-      );
+      var associatedMessages = await ChatInterface.loadSupplementalData(messageGuids: messageGuids);
 
       Logger.debug("[getMessagesAsync] Phase 2 - Supplemental query: ${supplementalStopwatch.elapsedMilliseconds}ms");
 
@@ -592,14 +629,17 @@ class Chat {
         m.associatedMessages = messageReactions;
         if (messageReactions.isNotEmpty) {
           messagesWithReactions++;
-          Logger.debug("[getMessagesAsync] Phase 2 - Added ${messageReactions.length} reactions to message ${m.guid}",
-              tag: "MessageReactivity");
+          Logger.debug(
+            "[getMessagesAsync] Phase 2 - Added ${messageReactions.length} reactions to message ${m.guid}",
+            tag: "MessageReactivity",
+          );
         }
       }
 
       supplementalStopwatch.stop();
       Logger.debug(
-          "[getMessagesAsync] Phase 2 - COMPLETE: ${supplementalStopwatch.elapsedMilliseconds}ms (${associatedMessages.length} reactions on $messagesWithReactions messages)");
+        "[getMessagesAsync] Phase 2 - COMPLETE: ${supplementalStopwatch.elapsedMilliseconds}ms (${associatedMessages.length} reactions on $messagesWithReactions messages)",
+      );
 
       // Notify caller that supplemental data has been loaded
       if (onComplete != null) {
@@ -618,6 +658,7 @@ class Chat {
   /// Toggle pin status - pure DB operation
   /// Note: For full pin toggle with service updates, use ChatsSvc.toggleChatPin
   Future<Chat> togglePinAsync(bool isPinned) async {
+    if (LogicalConversationViewPolicy.isApprovedSourceRowId(originalROWID)) return this;
     if (id == null) return this;
     this.isPinned = isPinned;
     _pinIndex.value = null;
@@ -626,6 +667,7 @@ class Chat {
   }
 
   Future<Chat> toggleMuteAsync(bool isMuted) async {
+    if (LogicalConversationViewPolicy.isApprovedSourceRowId(originalROWID)) return this;
     if (id == null) return this;
     muteType = isMuted ? "mute" : null;
     muteArgs = null;
@@ -636,6 +678,7 @@ class Chat {
   /// Toggle archive status - pure DB operation
   /// Note: For full archive toggle with service updates, use ChatsSvc.toggleChatArchive
   Future<Chat> toggleArchivedAsync(bool isArchived) async {
+    if (LogicalConversationViewPolicy.isApprovedSourceRowId(originalROWID)) return this;
     if (id == null) return this;
     isPinned = false;
     this.isArchived = isArchived;
@@ -644,6 +687,7 @@ class Chat {
   }
 
   Future<Chat> toggleAutoReadAsync(bool? autoSendReadReceipts) async {
+    if (LogicalConversationViewPolicy.isApprovedSourceRowId(originalROWID)) return this;
     if (id == null) return this;
     this.autoSendReadReceipts = autoSendReadReceipts;
     await saveAsync(updateAutoSendReadReceipts: true);
@@ -654,6 +698,7 @@ class Chat {
   }
 
   Future<Chat> toggleAutoTypeAsync(bool? autoSendTypingIndicators) async {
+    if (LogicalConversationViewPolicy.isApprovedSourceRowId(originalROWID)) return this;
     if (id == null) return this;
     this.autoSendTypingIndicators = autoSendTypingIndicators;
     await saveAsync(updateAutoSendTypingIndicators: true);
@@ -688,11 +733,7 @@ class Chat {
   static Future<List<Chat>> getChatsAsync({int limit = 15, int offset = 0, List<int> ids = const []}) async {
     if (kIsWeb) throw Exception("Use socket to get chats on Web!");
 
-    final chats = await ChatInterface.getChatsAsync(
-      limit: limit,
-      offset: offset,
-      ids: ids,
-    );
+    final chats = await ChatInterface.getChatsAsync(limit: limit, offset: offset, ids: ids);
 
     // Populate contact name cache on main thread for ALL chats in one transaction
     // The cache populated in the isolate doesn't transfer through JSON serialization
@@ -728,13 +769,11 @@ class Chat {
     if (kIsWeb) throw Exception("Web does not support saving chats!");
     if (chats.isEmpty) return [];
 
-    return (await ChatInterface.bulkSyncChats(
-      chatsData: chats.map((e) => e.toMap()).toList(),
-    ))
-        .chats;
+    return (await ChatInterface.bulkSyncChats(chatsData: chats.map((e) => e.toMap()).toList())).chats;
   }
 
   void clearTranscript() {
+    if (LogicalConversationViewPolicy.isApprovedSourceRowId(originalROWID)) return;
     if (kIsWeb) return;
     Database.runInTransaction(TxMode.write, () {
       final toDelete = List<Message>.from(messages);
@@ -746,12 +785,10 @@ class Chat {
   }
 
   Future<void> clearTranscriptAsync() async {
+    if (LogicalConversationViewPolicy.isApprovedSourceRowId(originalROWID)) return;
     if (kIsWeb || id == null) return;
 
-    await ChatInterface.clearTranscriptAsync(
-      chatId: id!,
-      chatGuid: guid,
-    );
+    await ChatInterface.clearTranscriptAsync(chatId: id!, chatGuid: guid);
   }
 
   /// The messaging service this chat belongs to, derived from the GUID prefix.
@@ -768,6 +805,7 @@ class Chat {
 
   Chat merge(Chat other) {
     id ??= other.id;
+    originalROWID ??= other.originalROWID;
     _customAvatarPath.value ??= other._customAvatarPath.value;
     _customBackgroundPath.value ??= other._customBackgroundPath.value;
     _pinIndex.value ??= other._pinIndex.value;
@@ -849,6 +887,7 @@ class Chat {
     final participants = handles.isEmpty ? this.participants : handles.toList();
     return {
       "ROWID": id,
+      "originalROWID": originalROWID,
       "guid": guid,
       "chatIdentifier": chatIdentifier,
       "isArchived": isArchived!,

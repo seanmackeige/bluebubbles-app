@@ -9,6 +9,7 @@ import 'package:bluebubbles/helpers/backend/startup_tasks.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/backend/interfaces/chat_interface.dart';
+import 'package:bluebubbles/services/backend/interfaces/sync_interface.dart';
 import 'package:bluebubbles/services/backend/notifications/desktop_notification.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
@@ -21,6 +22,7 @@ import 'package:get/get.dart' hide Response;
 import 'package:universal_io/io.dart';
 import 'package:bluebubbles/database/database.dart';
 import 'package:get_it/get_it.dart';
+import 'package:bluebubbles/services/ui/chat/logical_conversation_view.dart';
 
 // ignore: non_constant_identifier_names
 ChatsService get ChatsSvc => GetIt.I<ChatsService>();
@@ -90,7 +92,7 @@ class ChatsService {
   /// Get all chats as a list (non-reactive), sorted by pin index and latest message date
   /// Returns the pre-sorted list for O(1) access instead of O(n log n) sorting
   List<Chat> get allChats {
-    return _sortedChats;
+    return _projectLogicalChatList(_sortedChats);
   }
 
   /// Check if chats list is empty
@@ -100,7 +102,105 @@ class ChatsService {
 
   /// Get number of chats
   int get length {
-    return chatStates.length;
+    return allChats.length;
+  }
+
+  List<ChatState> get presentationChatStates =>
+      allChats.map((chat) => chatStates[chat.guid]).whereType<ChatState>().toList();
+
+  List<Chat> _logicalCandidateChats() {
+    final byGuid = <String, Chat>{
+      for (final state in chatStates.values)
+        if (LogicalConversationViewPolicy.isApprovedSourceRowId(state.chat.originalROWID)) state.chat.guid: state.chat,
+    };
+    if (LogicalConversationViewPolicy.resolve(byGuid.values.map((chat) => chat.originalROWID)) != null) {
+      return byGuid.values.toList();
+    }
+    if (!kIsWeb) {
+      final query = Database.chats
+          .query(Chat_.originalROWID.oneOf(LogicalConversationViewPolicy.goldenPair.sourceChatRowIds.toList()))
+          .build();
+      for (final chat in query.find()) {
+        byGuid.putIfAbsent(chat.guid, () => chat);
+      }
+      query.close();
+    }
+    return byGuid.values.toList();
+  }
+
+  LogicalConversationDefinition? get _logicalDefinition =>
+      LogicalConversationViewPolicy.resolve(_logicalCandidateChats().map((chat) => chat.originalROWID));
+
+  List<Chat> _logicalSourceChats(LogicalConversationDefinition definition) {
+    final sources = _logicalCandidateChats()
+        .where((chat) => definition.containsSourceRowId(chat.originalROWID))
+        .map((chat) => findChatByGuid(chat.guid) ?? chat)
+        .toList();
+    sources.sort((a, b) => a.originalROWID!.compareTo(b.originalROWID!));
+    return sources;
+  }
+
+  /// True for either protected source ROWID even while the second source is
+  /// absent. Write guards intentionally fail closed before projection activates.
+  bool isApprovedLogicalSource(Chat chat) => LogicalConversationViewPolicy.isApprovedSourceRowId(chat.originalROWID);
+
+  bool isLogicalConversation(Chat chat) {
+    final definition = _logicalDefinition;
+    return definition != null && definition.containsSourceRowId(chat.originalROWID);
+  }
+
+  List<Chat> logicalSourceChatsFor(Chat chat) {
+    final definition = _logicalDefinition;
+    if (definition == null || !definition.containsSourceRowId(chat.originalROWID)) return <Chat>[chat];
+    return _logicalSourceChats(definition);
+  }
+
+  Chat presentationChatFor(Chat chat) {
+    final definition = _logicalDefinition;
+    if (definition == null || !definition.containsSourceRowId(chat.originalROWID)) return chat;
+    return _logicalSourceChats(
+      definition,
+    ).firstWhere((source) => source.originalROWID == definition.presentationSourceChatRowId);
+  }
+
+  String presentationGuidFor(String guid) {
+    final chat = findChatByGuid(guid);
+    return chat == null ? guid : presentationChatFor(chat).guid;
+  }
+
+  List<Chat> _projectLogicalChatList(Iterable<Chat> rawChats) {
+    final projected = LogicalConversationViewPolicy.projectConversationList(rawChats, (chat) => chat.originalROWID);
+    projected.sort(_sortCompare);
+    return projected;
+  }
+
+  void _syncLogicalPresentationState() {
+    final definition = _logicalDefinition;
+    if (definition == null) return;
+    final sources = _logicalSourceChats(definition);
+    final presentation = sources.firstWhere((chat) => chat.originalROWID == definition.presentationSourceChatRowId);
+    final presentationState = chatStates[presentation.guid];
+    if (presentationState == null) return;
+
+    final latestMessages = sources.map((source) => source.dbLatestMessage.target).whereType<Message>().toList()
+      ..sort(Message.sort);
+    if (latestMessages.isNotEmpty && presentationState.latestMessage.value?.guid != latestMessages.first.guid) {
+      presentationState.updateLatestMessageInternal(latestMessages.first);
+    }
+    final unread = LogicalConversationViewPolicy.logicalUnread(
+      sources.map((source) => source.hasUnreadMessage ?? false),
+    );
+    presentationState.updateHasUnreadInternal(unread);
+  }
+
+  void _refreshLogicalPresentation({bool immediate = true}) {
+    _syncLogicalPresentationState();
+    final definition = _logicalDefinition;
+    if (definition == null) return;
+    final presentation = _logicalSourceChats(
+      definition,
+    ).firstWhere((chat) => chat.originalROWID == definition.presentationSourceChatRowId);
+    _repositionChat(presentation, immediate: immediate);
   }
 
   /// Find chat by GUID
@@ -157,7 +257,9 @@ class ChatsService {
         // updates ChatState.hasUnreadMessage instantly but writes the underlying
         // Chat.hasUnreadMessage field asynchronously via a background DB/HTTP call,
         // so the model field can briefly lag behind the reactive state.
-        chats = chats.where((e) => getChatState(e.guid)?.hasUnreadMessage.value ?? (e.hasUnreadMessage ?? false)).toList();
+        chats = chats
+            .where((e) => getChatState(e.guid)?.hasUnreadMessage.value ?? (e.hasUnreadMessage ?? false))
+            .toList();
       }
 
       // The legacy "Filter Unknown Senders" setting already siphons unknown-sender
@@ -262,8 +364,9 @@ class ChatsService {
     if (headless) return;
     if (!kIsWeb) {
       // watch for new chats
-      final countQuery = (Database.chats.query(Chat_.dateDeleted.isNull())..order(Chat_.id, flags: Order.descending))
-          .watch(triggerImmediately: true);
+      final countQuery = (Database.chats.query(
+        Chat_.dateDeleted.isNull(),
+      )..order(Chat_.id, flags: Order.descending)).watch(triggerImmediately: true);
       countSub = countQuery.listen((event) async {
         if (!SettingsSvc.settings.finishedSetup.value) return;
         final newCount = event.count();
@@ -296,13 +399,18 @@ class ChatsService {
     // chat count, so set this up unconditionally.
     _loadDefaultChatListFilters();
 
+    // Existing ObjectBox rows predate source-ROWID persistence. Refresh only
+    // the two reviewed source rows from the normal read API so an upgrade can
+    // activate deterministically without clearing the cache.
+    await _backfillApprovedLogicalSourceRows();
+
     // Get current count from database or server
-    currentCount = getChatCount() ??
+    currentCount =
+        getChatCount() ??
         (await HttpSvc.chat.getCount().catchError((err) {
           Logger.info("Error when fetching chat count!", tag: "ChatBloc");
           return Response(requestOptions: RequestOptions(path: ''));
-        }))
-            .data['data']['total'] ??
+        })).data['data']['total'] ??
         0;
 
     loadedAllChats = Completer();
@@ -354,6 +462,8 @@ class ChatsService {
     loadedAllChats.complete();
     Logger.info("Finished fetching chats (${chatStates.length}).", tag: "ChatBloc");
 
+    _refreshLogicalPresentation(immediate: false);
+
     // Calculate initial unread count now that all chat states are populated.
     // The listener only fires on changes, so we need an explicit call here to
     // seed the badge with the correct value before any message is received.
@@ -361,7 +471,12 @@ class ChatsService {
 
     if (kIsDesktop) {
       unawaited(
-        DesktopNotifications.cancelStale(keepGroups: chatStates.values.where((s) => s.hasUnreadMessage.value).map((s) => s.chat.guid).toList())
+        DesktopNotifications.cancelStale(
+          keepGroups: presentationChatStates
+              .where((state) => state.hasUnreadMessage.value)
+              .map((state) => state.chat.guid)
+              .toList(),
+        ),
       );
     }
 
@@ -386,10 +501,12 @@ class ChatsService {
       final _appLinks = AppLinks();
       _appLinks.stringLinkStream.listen((String string) async {
         if (!string.startsWith("imessage://")) return;
-        final uri = Uri.tryParse(string
-            .replaceFirst("imessage://", "imessage:")
-            .replaceFirst("&body=", "?body=")
-            .replaceFirst(RegExp(r'/$'), ''));
+        final uri = Uri.tryParse(
+          string
+              .replaceFirst("imessage://", "imessage:")
+              .replaceFirst("&body=", "?body=")
+              .replaceFirst(RegExp(r'/$'), ''),
+        );
         if (uri == null) return;
 
         final address = uri.path;
@@ -526,7 +643,21 @@ class ChatsService {
 
   /// Recalculate the global unread count based on all chat states
   void _recalculateUnreadCount() {
-    final count = chatStates.values.where((state) => state.hasUnreadMessage.value).length;
+    _syncLogicalPresentationState();
+    final definition = _logicalDefinition;
+    final count = definition == null
+        ? chatStates.values.where((state) => state.hasUnreadMessage.value).length
+        : chatStates.values
+                  .where(
+                    (state) =>
+                        !definition.containsSourceRowId(state.chat.originalROWID) && state.hasUnreadMessage.value,
+                  )
+                  .length +
+              (LogicalConversationViewPolicy.logicalUnread(
+                    _logicalSourceChats(definition).map((chat) => chat.hasUnreadMessage ?? false),
+                  )
+                  ? 1
+                  : 0);
     if (unreadCount.value != count) {
       unreadCount.value = count;
     }
@@ -574,7 +705,7 @@ class ChatsService {
   /// Get sorted chats (pin index first, then by latest message date)
   /// Returns the pre-sorted list - sorting is maintained on add/update
   List<Chat> getSortedChats() {
-    return _sortedChats;
+    return _projectLogicalChatList(_sortedChats);
   }
 
   /// State-aware sort comparison used by [_findInsertionIndex] and [refreshSortOrder].
@@ -603,10 +734,12 @@ class ChatsService {
 
     // Both unpinned (or both pinned without an index): sort by most-recent message.
     // Use ChatState latestMessage date to avoid the DB-write race condition.
-    final aDate = chatStates[a.guid]?.latestMessage.value?.dateCreated ??
+    final aDate =
+        chatStates[a.guid]?.latestMessage.value?.dateCreated ??
         a.dbOnlyLatestMessageDate ??
         DateTime.fromMillisecondsSinceEpoch(0);
-    final bDate = chatStates[b.guid]?.latestMessage.value?.dateCreated ??
+    final bDate =
+        chatStates[b.guid]?.latestMessage.value?.dateCreated ??
         b.dbOnlyLatestMessageDate ??
         DateTime.fromMillisecondsSinceEpoch(0);
     return -aDate.compareTo(bDate);
@@ -676,7 +809,8 @@ class ChatsService {
       final currentIsPinned = state.isPinned.value;
 
       // Check if sort-order-relevant fields have changed
-      final latestMessageChanged = updated.dbLatestMessage.target?.guid != currentLatestMessage?.guid ||
+      final latestMessageChanged =
+          updated.dbLatestMessage.target?.guid != currentLatestMessage?.guid ||
           updated.dbOnlyLatestMessageDate != currentLatestMessage?.dateCreated;
       final latestMessageTimestampChanged = updated.dbOnlyLatestMessageDate != currentLatestMessage?.dateCreated;
       final pinIndexChanged = updated.pinIndex != currentPinIndex;
@@ -691,6 +825,8 @@ class ChatsService {
       if (sortOrderChanged || override) {
         _repositionChat(state.chat, immediate: immediate);
       }
+
+      _refreshLogicalPresentation(immediate: immediate);
 
       return true;
     }
@@ -720,12 +856,15 @@ class ChatsService {
     // Insert into sorted list at correct position
     _insertChatSorted(toAdd);
 
+    _refreshLogicalPresentation(immediate: immediate);
+
     // _sortedChats isn't reactive; bump the list version so the UI rebuilds.
     _scheduleListVersionUpdate(immediate: immediate);
   }
 
   void removeChat(Chat toRemove) {
     if (headless) return;
+    if (isApprovedLogicalSource(toRemove)) return;
     chatStates.remove(toRemove.guid);
     _sortedChats.removeWhere((c) => c.guid == toRemove.guid);
     _scheduleListVersionUpdate(immediate: true);
@@ -738,7 +877,12 @@ class ChatsService {
     try {
       // Phase 1: instant UI update from in-memory state — no DB query needed
       final unreadStates = chatStates.values
-          .where((s) => s.hasUnreadMessage.value && (chatGuids == null || chatGuids.contains(s.chat.guid)))
+          .where(
+            (s) =>
+                !isApprovedLogicalSource(s.chat) &&
+                s.hasUnreadMessage.value &&
+                (chatGuids == null || chatGuids.contains(s.chat.guid)),
+          )
           .toList();
       final chatIds = <int>[];
 
@@ -748,10 +892,7 @@ class ChatsService {
         if (id != null) {
           chatIds.add(id);
           if (!kIsDesktop && !kIsWeb) {
-            MethodChannelSvc.actions.deleteNotification(
-              notificationId: id,
-              tag: NotificationsService.NEW_MESSAGE_TAG,
-            );
+            MethodChannelSvc.actions.deleteNotification(notificationId: id, tag: NotificationsService.NEW_MESSAGE_TAG);
           }
         }
       }
@@ -865,9 +1006,9 @@ class ChatsService {
     final response = await HttpSvc.chat
         .query(withQuery: withQuery, offset: offset, limit: limit, sort: withLastMessage ? "lastmessage" : null)
         .catchError((err, stack) {
-      Logger.error("Failed to fetch chats!", error: err, trace: stack, tag: "Fetch-Chat");
-      return Response(requestOptions: RequestOptions(path: ''));
-    });
+          Logger.error("Failed to fetch chats!", error: err, trace: stack, tag: "Fetch-Chat");
+          return Response(requestOptions: RequestOptions(path: ''));
+        });
 
     // parse chats from the response
     final chats = <Chat>[];
@@ -883,35 +1024,110 @@ class ChatsService {
     return chats;
   }
 
-  Future<List<dynamic>> getMessages(String guid,
-      {bool withAttachment = true,
-      bool withHandle = true,
-      int offset = 0,
-      int limit = 25,
-      String sort = "DESC",
-      int? after,
-      int? before}) async {
+  Future<void> _backfillApprovedLogicalSourceRows() async {
+    if (kIsWeb) return;
+    final query = Database.chats
+        .query(Chat_.originalROWID.oneOf(LogicalConversationViewPolicy.goldenPair.sourceChatRowIds.toList()))
+        .build();
+    final existingCount = query.count();
+    query.close();
+    if (existingCount == LogicalConversationViewPolicy.goldenPair.sourceChatRowIds.length) return;
+
+    const maxPages = 100;
+    for (var page = 0; page < maxPages; page++) {
+      try {
+        final response = await HttpSvc.chat.query(
+          withQuery: const ['participants', 'lastmessage'],
+          offset: page * batchSize,
+          limit: batchSize,
+        );
+        final rawPage = response.data?['data'];
+        if (rawPage is! List) return;
+        final approved = rawPage
+            .whereType<Map>()
+            .map((item) => item.cast<String, dynamic>())
+            .where(
+              (item) => LogicalConversationViewPolicy.isApprovedSourceRowId((item['originalROWID'] as num?)?.toInt()),
+            )
+            .toList();
+        if (approved.isNotEmpty) {
+          await ChatInterface.bulkSyncChats(chatsData: approved);
+        }
+
+        final refreshedQuery = Database.chats
+            .query(Chat_.originalROWID.oneOf(LogicalConversationViewPolicy.goldenPair.sourceChatRowIds.toList()))
+            .build();
+        final refreshedCount = refreshedQuery.count();
+        refreshedQuery.close();
+        if (refreshedCount == LogicalConversationViewPolicy.goldenPair.sourceChatRowIds.length) return;
+        if (rawPage.length < batchSize) return;
+      } catch (error, stack) {
+        Logger.warn(
+          'Logical source provenance backfill unavailable; projection remains fail closed',
+          error: error,
+          trace: stack,
+          tag: 'LogicalConversationView',
+        );
+        return;
+      }
+    }
+  }
+
+  Future<List<dynamic>> getMessages(
+    String guid, {
+    bool withAttachment = true,
+    bool withHandle = true,
+    int offset = 0,
+    int limit = 25,
+    String sort = "DESC",
+    int? after,
+    int? before,
+  }) async {
     Completer<List<dynamic>> completer = Completer();
     final withQuery = <String>["message.attributedBody", "message.messageSummaryInfo", "message.payloadData"];
     if (withAttachment) withQuery.add("attachment");
     if (withHandle) withQuery.add("handle");
 
     HttpSvc.chat
-        .getMessages(guid,
-            withQuery: withQuery.join(","), offset: offset, limit: limit, sort: sort, after: after, before: before)
+        .getMessages(
+          guid,
+          withQuery: withQuery.join(","),
+          offset: offset,
+          limit: limit,
+          sort: sort,
+          after: after,
+          before: before,
+        )
         .then((response) {
-      if (!completer.isCompleted) completer.complete(response.data["data"]);
-    }).catchError((err) {
-      late final dynamic error;
-      if (err is Response) {
-        error = err.data["error"]["message"];
-      } else {
-        error = err.toString();
-      }
-      if (!completer.isCompleted) completer.completeError(error);
-    });
+          if (!completer.isCompleted) completer.complete(response.data["data"]);
+        })
+        .catchError((err) {
+          late final dynamic error;
+          if (err is Response) {
+            error = err.data["error"]["message"];
+          } else {
+            error = err.toString();
+          }
+          if (!completer.isCompleted) completer.completeError(error);
+        });
 
     return completer.future;
+  }
+
+  /// Fetches enough records from each approved physical source to satisfy a
+  /// page in the merged chronology, then persists every record against its
+  /// original chat. No synthetic chat or rewritten provenance is introduced.
+  Future<void> hydrateLogicalMessageSources(Chat chat, {required int offset, required int limit}) async {
+    final sources = logicalSourceChatsFor(chat);
+    if (sources.length == 1) return;
+    final perSourceLimit = offset + limit;
+    for (final source in sources) {
+      final rawMessages = await getMessages(source.guid, offset: 0, limit: perSourceLimit);
+      await SyncInterface.bulkSyncData(
+        chatData: source.toMap(),
+        messagesData: rawMessages.cast<Map<String, dynamic>>(),
+      );
+    }
   }
 
   // ========== Chat Lifecycle Management Methods (migrated from ChatManager) ==========
@@ -948,12 +1164,14 @@ class ChatsService {
 
   /// Set a chat as the active chat
   Future<void> setActiveChat(Chat chat, {bool clearNotifications = true}) async {
+    chat = presentationChatFor(chat);
     await PrefsSvc.messaging.setLastOpenedChat(chat.guid);
     setActiveChatSync(chat, clearNotifications: clearNotifications, save: false);
   }
 
   /// Set a chat as the active chat synchronously
   void setActiveChatSync(Chat chat, {bool clearNotifications = true, bool save = true}) {
+    chat = presentationChatFor(chat);
     Logger.debug('Setting active chat to ${chat.guid} (${chat.displayName})');
 
     // Get or create the chat state
@@ -966,7 +1184,7 @@ class ChatsService {
     // Clear all other chats to inactive
     setAllInactiveSync(save: false, clearActive: false);
 
-    if (clearNotifications) {
+    if (clearNotifications && !isLogicalConversation(chat)) {
       // Defer the observable update to avoid updating during build phase
       Future.microtask(() {
         setChatHasUnread(chatState.chat, false, force: true);
@@ -992,7 +1210,7 @@ class ChatsService {
 
   /// Check if a chat is currently active (both active and alive)
   bool isChatActive(String guid) {
-    final state = getChatState(guid);
+    final state = getChatState(presentationGuidFor(guid));
     return state?.isChatActive ?? false;
   }
 
@@ -1014,6 +1232,7 @@ class ChatsService {
   /// Set [deleteHandles] to true to also remove the chat's participant handles.
   Future<void> deleteChat(Chat chat, {bool deleteHandles = false}) async {
     if (kIsWeb) return;
+    if (isApprovedLogicalSource(chat)) return;
 
     // Handle active chat cleanup
     if (activeChat?.chat.guid == chat.guid) {
@@ -1106,6 +1325,7 @@ class ChatsService {
   /// Soft delete a chat with full UI cleanup and service state management
   Future<void> softDeleteChat(Chat chat) async {
     if (kIsWeb) return;
+    if (isApprovedLogicalSource(chat)) return;
 
     // Handle active chat cleanup
     if (activeChat?.chat.guid == chat.guid) {
@@ -1129,6 +1349,7 @@ class ChatsService {
   /// Undelete a chat
   Future<void> unDeleteChat(Chat chat) async {
     if (kIsWeb) return;
+    if (isApprovedLogicalSource(chat)) return;
     await ChatInterface.unDeleteChat(chatData: chat.toMap());
   }
 
@@ -1163,8 +1384,13 @@ class ChatsService {
   }
 
   /// Toggle chat unread status with active chat awareness
-  Future<Chat> _toggleChatHasUnread(Chat chat, bool hasUnread,
-      {bool force = false, bool clearLocalNotifications = true, bool privateMark = true}) async {
+  Future<Chat> _toggleChatHasUnread(
+    Chat chat,
+    bool hasUnread, {
+    bool force = false,
+    bool clearLocalNotifications = true,
+    bool privateMark = true,
+  }) async {
     // Check if chat is active and adjust behavior
     final isActive = isChatActive(chat.guid);
 
@@ -1185,8 +1411,12 @@ class ChatsService {
     }
 
     // Perform DB operation with adjusted parameters
-    await chat.toggleHasUnreadAsync(hasUnread,
-        force: actualForce, clearLocalNotifications: actualClearNotifications, privateMark: actualPrivateMark);
+    await chat.toggleHasUnreadAsync(
+      hasUnread,
+      force: actualForce,
+      clearLocalNotifications: actualClearNotifications,
+      privateMark: actualPrivateMark,
+    );
 
     // Update service state
     updateChat(chat);
@@ -1195,13 +1425,20 @@ class ChatsService {
   }
 
   /// Add message to chat with full service orchestration
-  Future<MessageSaveResult> addMessageToChat(Chat chat, Message message,
-      {bool changeUnreadStatus = true, bool checkForMessageText = true, bool clearNotificationsIfFromMe = true}) async {
+  Future<MessageSaveResult> addMessageToChat(
+    Chat chat,
+    Message message, {
+    bool changeUnreadStatus = true,
+    bool checkForMessageText = true,
+    bool clearNotificationsIfFromMe = true,
+  }) async {
     // Perform the DB operation to add the message
-    final result = await chat.addMessage(message,
-        changeUnreadStatus: false, // We'll handle this with service awareness
-        checkForMessageText: checkForMessageText,
-        clearNotificationsIfFromMe: clearNotificationsIfFromMe);
+    final result = await chat.addMessage(
+      message,
+      changeUnreadStatus: false, // We'll handle this with service awareness
+      checkForMessageText: checkForMessageText,
+      clearNotificationsIfFromMe: clearNotificationsIfFromMe,
+    );
 
     final isNewer = result.isNewer;
 
@@ -1222,8 +1459,13 @@ class ChatsService {
 
       if (message.isFromMe! || isActive) {
         // Mark as read if from me or chat is active
-        await _toggleChatHasUnread(chat, false,
-            clearLocalNotifications: clearNotificationsIfFromMe, force: isActive, privateMark: isActive);
+        await _toggleChatHasUnread(
+          chat,
+          false,
+          clearLocalNotifications: clearNotificationsIfFromMe,
+          force: isActive,
+          privateMark: isActive,
+        );
       } else {
         // Mark as unread if not from me and chat is not active
         await _toggleChatHasUnread(chat, true, privateMark: false);
@@ -1238,6 +1480,7 @@ class ChatsService {
 
   /// Set chat pinned status
   Future<void> setChatPinned(Chat chat, bool value) async {
+    if (isApprovedLogicalSource(chat)) return;
     final state = getChatState(chat.guid);
 
     if (state != null && state.isPinned.value == value) return;
@@ -1251,6 +1494,7 @@ class ChatsService {
 
   /// Set chat pin index
   Future<void> setChatPinIndex(Chat chat, int? value) async {
+    if (isApprovedLogicalSource(chat)) return;
     final state = getChatState(chat.guid);
 
     if (state != null && state.pinIndex.value == value) return;
@@ -1272,13 +1516,19 @@ class ChatsService {
     bool clearLocalNotifications = true,
     bool privateMark = true,
   }) async {
+    if (isApprovedLogicalSource(chat)) return;
     final state = getChatState(chat.guid);
 
     if (state != null && state.hasUnreadMessage.value == value && !force) return;
 
     // Update DB with active chat awareness
-    await _toggleChatHasUnread(chat, value,
-        force: force, clearLocalNotifications: clearLocalNotifications, privateMark: privateMark);
+    await _toggleChatHasUnread(
+      chat,
+      value,
+      force: force,
+      clearLocalNotifications: clearLocalNotifications,
+      privateMark: privateMark,
+    );
 
     // Update state if available
     state?.updateHasUnreadInternal(value);
@@ -1286,6 +1536,7 @@ class ChatsService {
 
   /// Set chat muted status
   Future<void> setChatMuted(Chat chat, bool isMuted) async {
+    if (isApprovedLogicalSource(chat)) return;
     final state = getChatState(chat.guid);
 
     final newMuteType = isMuted ? "mute" : null;
@@ -1301,6 +1552,7 @@ class ChatsService {
 
   /// Set chat archived status
   Future<void> setChatArchived(Chat chat, bool value) async {
+    if (isApprovedLogicalSource(chat)) return;
     final state = getChatState(chat.guid);
 
     if (state != null && state.isArchived.value == value) return;
@@ -1314,6 +1566,7 @@ class ChatsService {
 
   /// Set chat auto send read receipts
   Future<void> setChatAutoSendReadReceipts(Chat chat, bool? value) async {
+    if (isApprovedLogicalSource(chat)) return;
     final state = getChatState(chat.guid);
 
     if (state != null && state.autoSendReadReceipts.value == value) return;
@@ -1328,6 +1581,7 @@ class ChatsService {
 
   /// Set chat auto send typing indicators
   Future<void> setChatAutoSendTypingIndicators(Chat chat, bool? value) async {
+    if (isApprovedLogicalSource(chat)) return;
     final state = getChatState(chat.guid);
 
     if (state != null && state.autoSendTypingIndicators.value == value) return;
@@ -1342,6 +1596,7 @@ class ChatsService {
 
   /// Set chat lock name status
   Future<void> setChatLockName(Chat chat, bool value) async {
+    if (isApprovedLogicalSource(chat)) return;
     final state = getChatState(chat.guid);
 
     if (state != null && state.lockChatName.value == value) return;
@@ -1357,6 +1612,7 @@ class ChatsService {
 
   /// Set chat lock icon status
   Future<void> setChatLockIcon(Chat chat, bool value) async {
+    if (isApprovedLogicalSource(chat)) return;
     final state = getChatState(chat.guid);
 
     if (state != null && state.lockChatIcon.value == value) return;
@@ -1372,6 +1628,7 @@ class ChatsService {
 
   /// Set chat display name
   Future<void> setChatDisplayName(Chat chat, String? value) async {
+    if (isApprovedLogicalSource(chat)) return;
     final state = getChatState(chat.guid);
 
     if (state != null && state.displayName.value == value) return;
@@ -1388,6 +1645,7 @@ class ChatsService {
 
   /// Set chat custom avatar path
   Future<void> setChatCustomAvatarPath(Chat chat, String? value) async {
+    if (isApprovedLogicalSource(chat)) return;
     final state = getChatState(chat.guid);
     final chatToUpdate = state?.chat ?? chat;
     final oldPath = chatToUpdate.customAvatarPath;
@@ -1412,6 +1670,7 @@ class ChatsService {
 
   /// Set chat custom background path
   Future<void> setChatCustomBackgroundPath(Chat chat, String? value) async {
+    if (isApprovedLogicalSource(chat)) return;
     final state = getChatState(chat.guid);
     final resolvedPath = value ?? FilesystemSvc.getExistingChatBackgroundPath(chat.guid);
     final oldPath = state?.customBackgroundPath.value ?? FilesystemSvc.getExistingChatBackgroundPath(chat.guid);
@@ -1425,7 +1684,7 @@ class ChatsService {
     final darkThemeName = state?.customThemeDark.value ?? chat.customThemeDark;
     final usesAdaptiveBackgroundTheme =
         (lightThemeName != null && ThemesService.isAdaptiveBackgroundThemeName(lightThemeName)) ||
-            (darkThemeName != null && ThemesService.isAdaptiveBackgroundThemeName(darkThemeName));
+        (darkThemeName != null && ThemesService.isAdaptiveBackgroundThemeName(darkThemeName));
     if (resolvedPath != null && usesAdaptiveBackgroundTheme) {
       await ThemesService.upsertAdaptiveBackgroundThemesFromImage(resolvedPath, scopeKey: chat.guid);
     }
@@ -1434,11 +1693,8 @@ class ChatsService {
   }
 
   /// Set the custom light and dark themes for a specific chat.
-  Future<void> setChatCustomThemes(
-    Chat chat, {
-    String? lightTheme,
-    String? darkTheme,
-  }) async {
+  Future<void> setChatCustomThemes(Chat chat, {String? lightTheme, String? darkTheme}) async {
+    if (isApprovedLogicalSource(chat)) return;
     final state = getChatState(chat.guid);
     final changed =
         state == null || state.customThemeLight.value != lightTheme || state.customThemeDark.value != darkTheme;
@@ -1463,12 +1719,16 @@ class ChatsService {
     final chatToUpdate = state.chat;
 
     // Only save in the DB if it's not already the same latest message.
-    if (state.latestMessage.value?.guid != value.guid) {
+    final currentGuid = isLogicalConversation(chat)
+        ? chatToUpdate.dbLatestMessage.target?.guid
+        : state.latestMessage.value?.guid;
+    if (currentGuid != value.guid) {
       chatToUpdate.setLatestMessage(value);
     }
 
     // Update state if available
     state.updateLatestMessageInternal(value);
+    _refreshLogicalPresentation();
   }
 
   /// Update chat latest message and subtitle in response to a new or updated message.
@@ -1484,7 +1744,7 @@ class ChatsService {
     if (state == null) return;
 
     if (!allowOlder) {
-      final current = state.latestMessage.value;
+      final current = isLogicalConversation(state.chat) ? state.chat.dbLatestMessage.target : state.latestMessage.value;
       final currentDate = current?.dateCreated;
       final incomingDate = message.dateCreated;
       const staleTolerance = Duration(seconds: 2);
@@ -1503,15 +1763,18 @@ class ChatsService {
     final hideContactInfo = redacted && SettingsSvc.settings.hideContactInfo.value;
     final hideMessageContent = redacted && SettingsSvc.settings.hideMessageContent.value;
     state.updateSubtitleInternal(
-        message.getNotificationText(hideContactInfo: hideContactInfo, hideMessageContent: hideMessageContent));
+      message.getNotificationText(hideContactInfo: hideContactInfo, hideMessageContent: hideMessageContent),
+    );
     state.chat.setLatestMessage(message);
     _repositionChat(state.chat, immediate: true);
+    _refreshLogicalPresentation();
   }
 
   /// Set chat text field text
   /// ChatState is updated synchronously and is the source of truth for the UI.
   /// The DB write is fire-and-forget so callers never need to await this.
   Future<void> setChatTextFieldText(Chat chat, String? value) async {
+    if (isApprovedLogicalSource(chat)) return;
     final state = getChatState(chat.guid);
 
     if (state != null && state.textFieldText.value == value) return;
@@ -1529,6 +1792,7 @@ class ChatsService {
   /// ChatState is updated synchronously and is the source of truth for the UI.
   /// The DB write is fire-and-forget so callers never need to await this.
   Future<void> setChatTextFieldAttachments(Chat chat, List<String> value) async {
+    if (isApprovedLogicalSource(chat)) return;
     final state = getChatState(chat.guid);
 
     if (state != null && listEquals(state.textFieldAttachments, value)) return;

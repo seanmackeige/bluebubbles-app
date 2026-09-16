@@ -5,6 +5,7 @@
 |------|---------|
 | `chats_service.dart` | Global chat list state — the source of truth for all `ChatState` objects |
 | `conversation_view_controller.dart` | Per-chat controller for the active conversation screen |
+| `logical_conversation_view.dart` | Fail-closed golden-pair policy and deterministic read-only projection helpers |
 
 ---
 

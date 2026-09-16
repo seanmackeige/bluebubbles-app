@@ -48,6 +48,7 @@ String getFullChatTitle(Chat _chat) {
 
 class Chat {
   int? id;
+  int? originalROWID;
   String guid;
   String? chatIdentifier;
   bool? isArchived;
@@ -102,6 +103,7 @@ class Chat {
 
   Chat({
     this.id,
+    this.originalROWID,
     required this.guid,
     this.chatIdentifier,
     this.isArchived = false,
@@ -139,6 +141,7 @@ class Chat {
     final message = json['lastMessage'] != null ? Message.fromMap(json['lastMessage']) : null;
     return Chat(
       id: json["ROWID"] ?? json["id"],
+      originalROWID: (json["originalROWID"] as num?)?.toInt(),
       guid: json["guid"],
       chatIdentifier: json["chatIdentifier"],
       isArchived: json['isArchived'] ?? false,
@@ -205,8 +208,9 @@ class Chat {
   /// Get a chat's title
   String getChatCreatorSubtitle() {
     // generate names for group chats or DMs
-    List<String> titles =
-        participants.map((e) => e.displayName.trim().split(isGroup ? " " : String.fromCharCode(65532)).first).toList();
+    List<String> titles = participants
+        .map((e) => e.displayName.trim().split(isGroup ? " " : String.fromCharCode(65532)).first)
+        .toList();
     if (titles.isEmpty) {
       if (chatIdentifier!.startsWith("urn:biz")) {
         return "Business Chat";
@@ -277,8 +281,12 @@ class Chat {
     return;
   }
 
-  Chat toggleHasUnread(bool hasUnread,
-      {bool force = false, bool clearLocalNotifications = true, bool privateMark = true}) {
+  Chat toggleHasUnread(
+    bool hasUnread, {
+    bool force = false,
+    bool clearLocalNotifications = true,
+    bool privateMark = true,
+  }) {
     if (hasUnreadMessage == hasUnread && !force) return this;
     if (!ChatsSvc.isChatActive(guid) || !hasUnread || force) {
       hasUnreadMessage = hasUnread;
@@ -300,8 +308,12 @@ class Chat {
     return this;
   }
 
-  Future<Chat> addMessage(Message message,
-      {bool changeUnreadStatus = true, bool checkForMessageText = true, bool clearNotificationsIfFromMe = true}) async {
+  Future<Chat> addMessage(
+    Message message, {
+    bool changeUnreadStatus = true,
+    bool checkForMessageText = true,
+    bool clearNotificationsIfFromMe = true,
+  }) async {
     // Save the message
     Message? latest = _latestMessage;
     Message? newMessage;
@@ -311,8 +323,11 @@ class Chat {
     } catch (ex, stacktrace) {
       newMessage = Message.findOne(guid: message.guid);
       if (newMessage == null) {
-        Logger.error("Failed to add message (GUID: ${message.guid}) to chat (GUID: $guid)",
-            error: ex, trace: stacktrace);
+        Logger.error(
+          "Failed to add message (GUID: ${message.guid}) to chat (GUID: $guid)",
+          error: ex,
+          trace: stacktrace,
+        );
       }
     }
     bool isNewer = false;
@@ -320,7 +335,8 @@ class Chat {
     // If the message was saved correctly, update this chat's latestMessage info,
     // but only if the incoming message's date is newer
     if ((newMessage?.id != null || kIsWeb) && checkForMessageText) {
-      isNewer = message.dateCreated!.isAfter(latest?.dateCreated ?? DateTime.fromMillisecondsSinceEpoch(0)) ||
+      isNewer =
+          message.dateCreated!.isAfter(latest?.dateCreated ?? DateTime.fromMillisecondsSinceEpoch(0)) ||
           (message.guid != latest?.guid && message.dateCreated == latest?.dateCreated);
       if (isNewer) {
         setLatestMessage(message);
@@ -382,13 +398,23 @@ class Chat {
     return [];
   }
 
-  static List<Message> getMessages(Chat chat,
-      {int offset = 0, int limit = 25, bool includeDeleted = false, bool getDetails = false}) {
+  static List<Message> getMessages(
+    Chat chat, {
+    int offset = 0,
+    int limit = 25,
+    bool includeDeleted = false,
+    bool getDetails = false,
+  }) {
     return [];
   }
 
-  static Future<List<Message>> getMessagesAsync(Chat chat,
-      {int offset = 0, int limit = 25, bool includeDeleted = false, int? searchAround}) async {
+  static Future<List<Message>> getMessagesAsync(
+    Chat chat, {
+    int offset = 0,
+    int limit = 25,
+    bool includeDeleted = false,
+    int? searchAround,
+  }) async {
     return [];
   }
 
@@ -553,34 +579,35 @@ class Chat {
     if (a.isPinned! && !b.isPinned!) return -1;
 
     // Compare the last message dates (negate to sort newest first)
-    return -((a.dbOnlyLatestMessageDate ?? DateTime.fromMillisecondsSinceEpoch(0))
-        .compareTo(b.dbOnlyLatestMessageDate ?? DateTime.fromMillisecondsSinceEpoch(0)));
+    return -((a.dbOnlyLatestMessageDate ?? DateTime.fromMillisecondsSinceEpoch(0)).compareTo(
+      b.dbOnlyLatestMessageDate ?? DateTime.fromMillisecondsSinceEpoch(0),
+    ));
   }
 
   static Future<void> getIcon(Chat c, {bool force = false}) async {}
 
   Map<String, dynamic> toMap() => {
-        "ROWID": id,
-        "guid": guid,
-        "chatIdentifier": chatIdentifier,
-        "isArchived": isArchived!,
-        "muteType": muteType,
-        "muteArgs": muteArgs,
-        "isPinned": isPinned!,
-        "displayName": displayName,
-        "participants": participants.map((item) => item.toMap()).toList(),
-        "hasUnreadMessage": hasUnreadMessage!,
-        "_customAvatarPath": _customAvatarPath.value,
-        "_customBackgroundPath": _customBackgroundPath.value,
-        "_pinIndex": _pinIndex.value,
-        "autoSendReadReceipts": autoSendReadReceipts!,
-        "autoSendTypingIndicators": autoSendTypingIndicators!,
-        "dateDeleted": dateDeleted?.millisecondsSinceEpoch,
-        "style": style,
-        "lockChatName": lockChatName,
-        "lockChatIcon": lockChatIcon,
-        "lastReadMessageGuid": lastReadMessageGuid,
-        "customThemeLight": customThemeLight,
-        "customThemeDark": customThemeDark,
-      };
+    "ROWID": id,
+    "guid": guid,
+    "chatIdentifier": chatIdentifier,
+    "isArchived": isArchived!,
+    "muteType": muteType,
+    "muteArgs": muteArgs,
+    "isPinned": isPinned!,
+    "displayName": displayName,
+    "participants": participants.map((item) => item.toMap()).toList(),
+    "hasUnreadMessage": hasUnreadMessage!,
+    "_customAvatarPath": _customAvatarPath.value,
+    "_customBackgroundPath": _customBackgroundPath.value,
+    "_pinIndex": _pinIndex.value,
+    "autoSendReadReceipts": autoSendReadReceipts!,
+    "autoSendTypingIndicators": autoSendTypingIndicators!,
+    "dateDeleted": dateDeleted?.millisecondsSinceEpoch,
+    "style": style,
+    "lockChatName": lockChatName,
+    "lockChatIcon": lockChatIcon,
+    "lastReadMessageGuid": lastReadMessageGuid,
+    "customThemeLight": customThemeLight,
+    "customThemeDark": customThemeDark,
+  };
 }

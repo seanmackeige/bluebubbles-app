@@ -28,7 +28,9 @@ class ManualMarkState extends State<ManualMark> with ThemeHelpers {
 
   @override
   Widget build(BuildContext context) {
-    final manualMark = SettingsSvc.settings.enablePrivateAPI.value &&
+    if (ChatsSvc.isLogicalConversation(chat)) return const SizedBox.shrink();
+    final manualMark =
+        SettingsSvc.settings.enablePrivateAPI.value &&
         SettingsSvc.settings.privateManualMarkAsRead.value &&
         !(chat.autoSendReadReceipts ?? false);
     return Obx(() {
@@ -41,23 +43,23 @@ class ManualMarkState extends State<ManualMark> with ThemeHelpers {
               widget.controller.inSelectMode.value
                   ? (iOS ? CupertinoIcons.trash : Icons.delete_outlined)
                   : marking
-                      ? (iOS ? CupertinoIcons.arrow_2_circlepath : Icons.sync)
-                      : marked
-                          ? (iOS ? CupertinoIcons.app : Icons.mark_chat_read_outlined)
-                          : (iOS ? CupertinoIcons.app_badge : Icons.mark_chat_unread_outlined),
+                  ? (iOS ? CupertinoIcons.arrow_2_circlepath : Icons.sync)
+                  : marked
+                  ? (iOS ? CupertinoIcons.app : Icons.mark_chat_read_outlined)
+                  : (iOS ? CupertinoIcons.app_badge : Icons.mark_chat_unread_outlined),
               color: !iOS
                   ? context.theme.colorScheme.onSurface
                   : (!marked && !marking || widget.controller.inSelectMode.value)
-                      ? context.theme.colorScheme.primary
-                      : context.theme.colorScheme.outline,
+                  ? context.theme.colorScheme.primary
+                  : context.theme.colorScheme.outline,
             ),
             tooltip: widget.controller.inSelectMode.value
                 ? "Delete"
                 : marking
-                    ? null
-                    : marked
-                        ? "Mark Unread"
-                        : "Mark Read",
+                ? null
+                : marked
+                ? "Mark Unread"
+                : "Mark Read",
             onPressed: () async {
               if (widget.controller.inSelectMode.value) {
                 for (Message m in widget.controller.selected) {
@@ -99,12 +101,7 @@ class ManualMarkState extends State<ManualMark> with ThemeHelpers {
                   for (PlatformFile a in _attachments) {
                     Uint8List? bytes = a.bytes;
                     bytes ??= await File(a.path!).readAsBytes();
-                    attachments.add(PlatformFile(
-                      name: a.name,
-                      path: a.path,
-                      size: bytes.length,
-                      bytes: bytes,
-                    ));
+                    attachments.add(PlatformFile(name: a.name, path: a.path, size: bytes.length, bytes: bytes));
                   }
                   if (!isNullOrEmpty(m.text)) {
                     if (text.isEmpty) {
@@ -118,10 +115,7 @@ class ManualMarkState extends State<ManualMark> with ThemeHelpers {
                 widget.controller.selected.clear();
                 NavigationSvc.pushAndRemoveUntil(
                   context,
-                  NewChatCreator(
-                    initialText: text,
-                    initialAttachments: attachments,
-                  ),
+                  NewChatCreator(initialText: text, initialAttachments: attachments),
                   (route) => route.isFirst,
                 );
               },
@@ -230,26 +224,21 @@ class HeaderProgressIndicator extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final chat = ChatStateScope.chatOf(context);
-    return Obx(() => TweenAnimationBuilder<double>(
-          duration: chat.sendProgress.value == 0
-              ? Duration.zero
-              : chat.sendProgress.value == 1
-                  ? const Duration(milliseconds: 250)
-                  : const Duration(seconds: 10),
-          curve: chat.sendProgress.value == 1 ? Curves.easeInOut : Curves.easeOutExpo,
-          tween: Tween<double>(
-            begin: 0,
-            end: chat.sendProgress.value,
-          ),
-          builder: (context, value, _) => AnimatedOpacity(
-            opacity: value == 1 ? 0 : 1,
-            duration: const Duration(milliseconds: 250),
-            child: LinearProgressIndicator(
-              value: value,
-              backgroundColor: Colors.transparent,
-              minHeight: 3,
-            ),
-          ),
-        ));
+    return Obx(
+      () => TweenAnimationBuilder<double>(
+        duration: chat.sendProgress.value == 0
+            ? Duration.zero
+            : chat.sendProgress.value == 1
+            ? const Duration(milliseconds: 250)
+            : const Duration(seconds: 10),
+        curve: chat.sendProgress.value == 1 ? Curves.easeInOut : Curves.easeOutExpo,
+        tween: Tween<double>(begin: 0, end: chat.sendProgress.value),
+        builder: (context, value, _) => AnimatedOpacity(
+          opacity: value == 1 ? 0 : 1,
+          duration: const Duration(milliseconds: 250),
+          child: LinearProgressIndicator(value: value, backgroundColor: Colors.transparent, minHeight: 3),
+        ),
+      ),
+    );
   }
 }

@@ -112,19 +112,21 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
             builder: (context) {
               final bottomInset = MediaQuery.paddingOf(context).bottom;
               if (bottomInset <= 0) return const SizedBox.shrink();
-              return Obx(() => Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    height: bottomInset,
-                    child: IgnorePointer(
-                      child: ColoredBox(
-                        color: controller.showAttachmentPicker.value
-                            ? context.theme.colorScheme.surface
-                            : Colors.transparent,
-                      ),
+              return Obx(
+                () => Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  height: bottomInset,
+                  child: IgnorePointer(
+                    child: ColoredBox(
+                      color: controller.showAttachmentPicker.value
+                          ? context.theme.colorScheme.surface
+                          : Colors.transparent,
                     ),
-                  ));
+                  ),
+                ),
+              );
             },
           ),
           Builder(
@@ -148,12 +150,19 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
                         ],
                       ),
                     ),
-                    GestureDetector(
-                      onPanUpdate: _onPanUpdate,
-                      child: ConversationTextField(
-                        parentController: controller,
+                    if (ChatsSvc.isLogicalConversation(chat))
+                      const SafeArea(
+                        top: false,
+                        child: Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                          child: Text('Logical conversation view — read only', textAlign: TextAlign.center),
+                        ),
+                      )
+                    else
+                      GestureDetector(
+                        onPanUpdate: _onPanUpdate,
+                        child: ConversationTextField(parentController: controller),
                       ),
-                    ),
                   ],
                 ),
               );
@@ -165,11 +174,9 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
   }
 
   void _buildActionsMap() {
-    _actionsMap = {
-      OpenChatDetailsIntent: OpenChatDetailsAction(context, widget.chat.guid),
-    };
+    _actionsMap = {OpenChatDetailsIntent: OpenChatDetailsAction(context, widget.chat.guid)};
 
-    if (SettingsSvc.settings.enablePrivateAPI.value) {
+    if (SettingsSvc.settings.enablePrivateAPI.value && !ChatsSvc.isLogicalConversation(chat)) {
       _actionsMap.addAll({
         ReplyRecentIntent: ReplyRecentAction(widget.chat.guid),
         HeartRecentIntent: HeartRecentAction(widget.chat.guid),
@@ -226,23 +233,20 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
         final bubbleColors = baseTheme.extensions[BubbleColors] as BubbleColors?;
         final bubbleColor = bubbleColors != null
             ? (chat.isIMessage
-                ? bubbleColors.iMessageBubbleColor ?? colorScheme.iMessageBubble
-                : bubbleColors.smsBubbleColor ?? colorScheme.smsBubble)
+                  ? bubbleColors.iMessageBubbleColor ?? colorScheme.iMessageBubble
+                  : bubbleColors.smsBubbleColor ?? colorScheme.smsBubble)
             : colorScheme.bubble(context, chat.isIMessage);
         final onBubbleColor = bubbleColors != null
             ? (chat.isIMessage
-                ? bubbleColors.oniMessageBubbleColor ?? colorScheme.oniMessageBubble
-                : bubbleColors.onSmsBubbleColor ?? colorScheme.onSmsBubble)
+                  ? bubbleColors.oniMessageBubbleColor ?? colorScheme.oniMessageBubble
+                  : bubbleColors.onSmsBubbleColor ?? colorScheme.onSmsBubble)
             : colorScheme.onBubble(context, chat.isIMessage);
 
         return Theme(
           data: baseTheme.copyWith(
             // Override primary color with our custom bubble color.
             primaryColor: bubbleColor,
-            colorScheme: colorScheme.copyWith(
-              primary: bubbleColor,
-              onPrimary: onBubbleColor,
-            ),
+            colorScheme: colorScheme.copyWith(primary: bubbleColor, onPrimary: onBubbleColor),
           ),
           child: PopScope(
             canPop: false,
@@ -269,10 +273,7 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
               backgroundColor: windowEffect != WindowEffect.disabled ? Colors.transparent : colorScheme.surface,
               extendBodyBehindAppBar: true,
               appBar: _appBar,
-              body: Actions(
-                actions: _actionsMap,
-                child: _bodyContent,
-              ),
+              body: Actions(actions: _actionsMap, child: _bodyContent),
             ),
           ),
         );

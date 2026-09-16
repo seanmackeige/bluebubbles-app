@@ -48,11 +48,14 @@ class IntentsService {
     final intent = await ReceiveIntent.getInitialIntent();
     handleIntent(intent, isInitialIntent: true);
 
-    sub = ReceiveIntent.receivedIntentStream.listen((Intent? intent) {
-      handleIntent(intent, isInitialIntent: false);
-    }, onError: (err) {
-      Logger.error("Failed to get intent!", error: err);
-    });
+    sub = ReceiveIntent.receivedIntentStream.listen(
+      (Intent? intent) {
+        handleIntent(intent, isInitialIntent: false);
+      },
+      onError: (err) {
+        Logger.error("Failed to get intent!", error: err);
+      },
+    );
   }
 
   void close() async {
@@ -81,30 +84,21 @@ class IntentsService {
               if (s == null) continue;
               final path = await MethodChannelSvc.actions.getContentUriPath(uri: s);
               final bytes = await File(path).readAsBytes();
-              files.add(PlatformFile(
-                path: path,
-                name: basename(path),
-                bytes: bytes,
-                size: bytes.length,
-              ));
+              files.add(PlatformFile(path: path, name: basename(path), bytes: bytes, size: bytes.length));
             }
           } else if (data != null) {
             final path = await MethodChannelSvc.actions.getContentUriPath(uri: data.toString());
             final bytes = await File(path).readAsBytes();
-            files.add(PlatformFile(
-              path: path,
-              name: basename(path),
-              bytes: bytes,
-              size: bytes.length,
-            ));
+            files.add(PlatformFile(path: path, name: basename(path), bytes: bytes, size: bytes.length));
           }
         }
         await openChat(id, text: text, attachments: files, isInitialIntent: isInitialIntent);
         return;
       default:
         if (intent.data?.startsWith("imessage://") ?? false) {
-          final uri =
-              Uri.tryParse(intent.data!.replaceFirst("imessage://", "imessage:").replaceFirst("&body=", "?body="));
+          final uri = Uri.tryParse(
+            intent.data!.replaceFirst("imessage://", "imessage:").replaceFirst("&body=", "?body="),
+          );
           if (uri != null) {
             final address = uri.path;
             final handle = Handle.findOne(addressAndService: HandleLookupKey(address, "iMessage"));
@@ -134,25 +128,23 @@ class IntentsService {
   Future<void> answerFaceTime(String callUuid) async {
     if (Get.context != null) {
       showDialog(
-          context: Get.context!,
-          builder: (BuildContext context) {
-            return AlertDialog(
-              backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-              title: Text(
-                "Generating link for call...",
-                style: context.theme.textTheme.titleLarge,
-              ),
-              content: SizedBox(
-                height: 70,
-                child: Center(
-                  child: CircularProgressIndicator(
-                    backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-                    valueColor: AlwaysStoppedAnimation<Color>(context.theme.colorScheme.primary),
-                  ),
+        context: Get.context!,
+        builder: (BuildContext context) {
+          return AlertDialog(
+            backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
+            title: Text("Generating link for call...", style: context.theme.textTheme.titleLarge),
+            content: SizedBox(
+              height: 70,
+              child: Center(
+                child: CircularProgressIndicator(
+                  backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
+                  valueColor: AlwaysStoppedAnimation<Color>(context.theme.colorScheme.primary),
                 ),
               ),
-            );
-          });
+            ),
+          );
+        },
+      );
       hideFaceTimeOverlay(callUuid);
     }
 
@@ -177,8 +169,12 @@ class IntentsService {
     }
   }
 
-  Future<void> openChat(String? guid,
-      {String? text, List<PlatformFile> attachments = const [], required bool isInitialIntent}) async {
+  Future<void> openChat(
+    String? guid, {
+    String? text,
+    List<PlatformFile> attachments = const [],
+    required bool isInitialIntent,
+  }) async {
     Logger.info("Handling open chat intent with guid: $guid", tag: "IntentsService");
 
     if (guid == null) {
@@ -186,10 +182,7 @@ class IntentsService {
       await StartupTasks.waitForUI();
       NavigationSvc.pushAndRemoveUntil(
         Get.context!,
-        NewChatCreator(
-          initialAttachments: attachments,
-          initialText: text,
-        ),
+        NewChatCreator(initialAttachments: attachments, initialText: text),
         (route) => route.isFirst,
       );
     } else if (guid == "-1") {
@@ -216,13 +209,17 @@ class IntentsService {
         ),
       );
     } else {
-      Logger.debug("Opening existing chat (Attachments: ${attachments.length}; Text: ${text?.shorten(10) ?? 'N/A'})",
-          tag: "IntentsService");
-      final chat = Chat.findOne(guid: guid);
-      if (chat == null) {
+      Logger.debug(
+        "Opening existing chat (Attachments: ${attachments.length}; Text: ${text?.shorten(10) ?? 'N/A'})",
+        tag: "IntentsService",
+      );
+      final sourceChat = Chat.findOne(guid: guid);
+      if (sourceChat == null) {
         Logger.debug("Chat not found with guid: $guid", tag: "IntentsService");
         return;
       }
+      final chat = ChatsSvc.presentationChatFor(sourceChat);
+      final resolvedGuid = chat.guid;
 
       await StartupTasks.waitForUI();
 
@@ -230,7 +227,7 @@ class IntentsService {
       // comment in init()), so activeChat may be a stale leftover from before the
       // Activity was torn down — always navigate explicitly in that case rather
       // than trusting it to already reflect what's on screen.
-      bool chatIsOpen = !isInitialIntent && ChatsSvc.activeChat?.chat.guid == guid;
+      bool chatIsOpen = !isInitialIntent && ChatsSvc.activeChat?.chat.guid == resolvedGuid;
       Logger.debug("Chat is active: $chatIsOpen", tag: "IntentsService");
 
       setPickedAttachments() {
@@ -248,7 +245,7 @@ class IntentsService {
         // which fires while we are suspended at waitForUI / Future.delayed, can
         // see that we are about to switch chats and must not mark the current
         // active chat as read prematurely.
-        pendingOpenChatGuid = guid;
+        pendingOpenChatGuid = resolvedGuid;
         Logger.debug("Navigating to conversation view...", tag: "IntentsService");
 
         // Rather than waiting for paging to eventually reach this chat,
@@ -262,11 +259,7 @@ class IntentsService {
         setPickedAttachments();
         pendingOpenChatGuid = null;
 
-        await NavigationSvc.pushAndRemoveUntil(
-          Get.context!,
-          ConversationView(chat: chat),
-          (route) => route.isFirst,
-        );
+        await NavigationSvc.pushAndRemoveUntil(Get.context!, ConversationView(chat: chat), (route) => route.isFirst);
       } else {
         Logger.debug("Chat is already open, not navigating", tag: "IntentsService");
         setPickedAttachments();
