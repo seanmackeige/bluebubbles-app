@@ -1,15 +1,10 @@
 import 'dart:collection';
-import 'dart:convert';
 
-import 'package:crypto/crypto.dart';
-
-const logicalConversationOutboundRouteSchema = 'LOGICAL_CONVERSATION_OUTBOUND_ROUTE_V1';
+const logicalConversationOutboundRouteSchema = 'LOGICAL_CONVERSATION_OUTBOUND_ROUTE_V2_GENERIC_PROVENANCE';
 
 enum LogicalMutationClass { newMessage, reply, reaction, attachment, markRead, unsupported }
 
 enum LogicalRouteState { qualified, routeNotProven }
-
-enum LogicalStaleRouteState { absentCurrentAccepted, present, unknown }
 
 enum LogicalRouteRuntimeStage { unchecked, checking, qualified, routeNotProven }
 
@@ -29,11 +24,23 @@ class LogicalRouteRuntimeStatus {
   bool get isQualified => stage == LogicalRouteRuntimeStage.qualified && targetRowId != null;
 }
 
+class LogicalAddressEvidence {
+  const LogicalAddressEvidence({required this.address, this.country});
+
+  final String address;
+  final String? country;
+}
+
 class LogicalSuccessfulOutboundEvidence {
-  const LogicalSuccessfulOutboundEvidence({required this.messageGuid, required this.messageRowId});
+  const LogicalSuccessfulOutboundEvidence({
+    required this.messageGuid,
+    required this.messageRowId,
+    required this.createdAtEpoch,
+  });
 
   final String messageGuid;
   final int messageRowId;
+  final int createdAtEpoch;
 }
 
 class LogicalRouteCandidateEvidence {
@@ -43,8 +50,8 @@ class LogicalRouteCandidateEvidence {
     required this.chatIdentifier,
     required this.style,
     required this.lastAddressedHandle,
-    required this.participantAddresses,
-    required this.accountIdentity,
+    required this.participants,
+    required this.messageSnapshotComplete,
     required this.successfulOutbounds,
   });
 
@@ -52,9 +59,9 @@ class LogicalRouteCandidateEvidence {
   final String sourceChatGuid;
   final String chatIdentifier;
   final int style;
-  final String lastAddressedHandle;
-  final Set<String> participantAddresses;
-  final String accountIdentity;
+  final LogicalAddressEvidence lastAddressedHandle;
+  final List<LogicalAddressEvidence> participants;
+  final bool messageSnapshotComplete;
   final List<LogicalSuccessfulOutboundEvidence> successfulOutbounds;
 }
 
@@ -62,21 +69,29 @@ class LogicalRouteEvidence {
   const LogicalRouteEvidence({
     required this.logicalId,
     required this.certificateId,
+    required this.certifiedSourceChatGuids,
     required this.backendComputerId,
     required this.detectedIMessage,
     required this.privateApiConnected,
     required this.helperConnected,
-    required this.staleRouteState,
+    required this.accountSnapshotBeforeSha256,
+    required this.accountSnapshotAfterSha256,
+    required this.activeSelfAlias,
+    required this.vettedSelfAliases,
     required this.candidates,
   });
 
   final String logicalId;
   final String? certificateId;
+  final Map<int, String> certifiedSourceChatGuids;
   final String backendComputerId;
   final bool detectedIMessage;
   final bool privateApiConnected;
   final bool helperConnected;
-  final LogicalStaleRouteState staleRouteState;
+  final String accountSnapshotBeforeSha256;
+  final String accountSnapshotAfterSha256;
+  final LogicalAddressEvidence activeSelfAlias;
+  final List<LogicalAddressEvidence> vettedSelfAliases;
   final List<LogicalRouteCandidateEvidence> candidates;
 }
 
@@ -119,110 +134,22 @@ class LogicalRouteDecision {
   bool get isSingleTarget => isQualified && physicalTargetRowIds.length == 1;
 }
 
-class LogicalRouteSourceBinding {
-  const LogicalRouteSourceBinding({
-    required this.sourceChatRowId,
-    required this.sourceChatGuidSha256,
-    required this.chatIdentifierSha256,
-    required this.participantSetSha256,
-    required this.successfulOutboundAnchorGuidSha256,
-    required this.successfulOutboundAnchorRowId,
-    required this.minimumSuccessfulOutboundCount,
-  });
-
-  final int sourceChatRowId;
-  final String sourceChatGuidSha256;
-  final String chatIdentifierSha256;
-  final String participantSetSha256;
-  final String successfulOutboundAnchorGuidSha256;
-  final int successfulOutboundAnchorRowId;
-  final int minimumSuccessfulOutboundCount;
-}
-
-class LogicalConversationOutboundRouteCertificate {
-  const LogicalConversationOutboundRouteCertificate({
-    required this.id,
-    required this.logicalId,
-    required this.acceptedBackendComputerIdSha256,
-    required this.acceptedAccountIdentitySha256,
-    required this.acceptedLastAddressedHandleSha256,
-    required this.canonicalNewMessageSourceChatRowId,
-    required this.sourceBindings,
-  });
-
-  final String id;
-  final String logicalId;
-  final String acceptedBackendComputerIdSha256;
-  final String acceptedAccountIdentitySha256;
-  final String acceptedLastAddressedHandleSha256;
-  final int canonicalNewMessageSourceChatRowId;
-  final Map<int, LogicalRouteSourceBinding> sourceBindings;
-}
-
+/// Generic writable-source qualification for an already-certified logical
+/// read union.
+///
+/// The read certificate supplies only current member bindings. It never names
+/// a writable member. This policy derives one writable member from current,
+/// typed account and participant evidence plus successful source provenance.
 class LogicalConversationOutboundRoutePolicy {
   LogicalConversationOutboundRoutePolicy._();
 
-  static const certificate = LogicalConversationOutboundRouteCertificate(
-    id: 'LOGICAL_CONVERSATION_OUTBOUND_ROUTE_V1_GOLDEN_2155_2156',
-    logicalId: 'LGC_V1_8ef6ba9306f2e2c3c2a28990d01a583e5c270c5ec61a313992c9d40322367c7f',
-    acceptedBackendComputerIdSha256: '8d12784c10d80c37e13e3af6a529db4f818deb8e8d7714b49ddbc1edee13d573',
-    acceptedAccountIdentitySha256: '9d0f0cca5a425056e4ee48ad78610c647324bc75ce12dd4d6e8eafea51fe3f04',
-    acceptedLastAddressedHandleSha256: 'c9e9a8dfed9d92a88448038c99c941ebe854f7607326a7d63156601ec29e47de',
-    canonicalNewMessageSourceChatRowId: 2156,
-    sourceBindings: {
-      2155: LogicalRouteSourceBinding(
-        sourceChatRowId: 2155,
-        sourceChatGuidSha256: '48cf84dd195bd118d7b44be8f4740b23e6e07041366c56b5a0150d6a275d008d',
-        chatIdentifierSha256: '017e35d3e012f32ae2c53934fc9f490b0e55f2677b9e15e9c9f8b5ab06983a9e',
-        participantSetSha256: 'f08e4939a03d1390cb6cf84f40656138dad758c5d1fe12634c90e03c174d646e',
-        successfulOutboundAnchorGuidSha256: '05ea146ac4adeedd92583133c1b8a36ff3c50f54d22bb7e83601b072e40b233f',
-        successfulOutboundAnchorRowId: 156315,
-        minimumSuccessfulOutboundCount: 12,
-      ),
-      2156: LogicalRouteSourceBinding(
-        sourceChatRowId: 2156,
-        sourceChatGuidSha256: 'bfd04ec33281be066323d0a38e4e93f1f61fe946f469c004b86c86d15665a9d4',
-        chatIdentifierSha256: 'bf850a10dbe40feeae73baee0171e33ef3583b91cd5206131f875af3724b4828',
-        participantSetSha256: '77894bb11eca455210491a4ba9a0e780b0f1577ae3d1296dc11cc26c5ef0e0f1',
-        successfulOutboundAnchorGuidSha256: '339de9644a64d7931b265dc9c228e0618120e8315f61ebf1e9868e49cf8ffd37',
-        successfulOutboundAnchorRowId: 157690,
-        minimumSuccessfulOutboundCount: 109,
-      ),
-    },
-  );
-
-  static String sha256Text(String value) => sha256.convert(utf8.encode(value)).toString();
-
-  static String normalizeIdentity(String value) => value.trim().toLowerCase();
-
-  static Set<String> participantFingerprints(Iterable<String> addresses) =>
-      addresses.map(normalizeIdentity).where((value) => value.isNotEmpty).map(sha256Text).toSet();
-
-  static String participantSetSha256(Iterable<String> addresses) {
-    final fingerprints = participantFingerprints(addresses).toList()..sort();
-    return sha256Text(jsonEncode(fingerprints));
-  }
-
-  static bool matchesCertifiedSourceBinding(int? rowId, String? guid) {
-    if (rowId == null || guid == null) return false;
-    final binding = certificate.sourceBindings[rowId];
-    return binding != null && sha256Text(guid) == binding.sourceChatGuidSha256;
-  }
-
-  static LogicalRouteDecision resolve(
-    LogicalRouteEvidence evidence,
-    LogicalMutationRequest request, {
-    LogicalConversationOutboundRouteCertificate routeCertificate = certificate,
-  }) {
-    final qualification = _qualify(evidence, routeCertificate);
-    if (!qualification.isQualified) return qualification;
-
+  static LogicalRouteDecision resolve(LogicalRouteEvidence evidence, LogicalMutationRequest request) {
+    final sourceQualification = _qualifyCertifiedSources(evidence);
+    if (!sourceQualification.isQualified) return sourceQualification;
     final byRow = {for (final candidate in evidence.candidates) candidate.sourceChatRowId: candidate};
     switch (request.mutationClass) {
       case LogicalMutationClass.newMessage:
-        return LogicalRouteDecision.qualified('CERTIFIED_CANONICAL_NEW_MESSAGE_ROUTE', [
-          routeCertificate.canonicalNewMessageSourceChatRowId,
-        ]);
+        return _qualifyWritableSource(evidence);
       case LogicalMutationClass.reply:
       case LogicalMutationClass.reaction:
         return _targetMessageRoute(byRow, request);
@@ -234,9 +161,12 @@ class LogicalConversationOutboundRoutePolicy {
           }
           return _persistedExecutionRoute(byRow, request);
         }
-        return LogicalRouteDecision.qualified('CERTIFIED_CANONICAL_ATTACHMENT_ROUTE', [
-          routeCertificate.canonicalNewMessageSourceChatRowId,
-        ]);
+        final qualification = _qualifyWritableSource(evidence);
+        if (!qualification.isSingleTarget) return qualification;
+        return LogicalRouteDecision.qualified(
+          'CURRENT_PROVENANCE_ATTACHMENT_SOURCE',
+          qualification.physicalTargetRowIds,
+        );
       case LogicalMutationClass.markRead:
         if (request.unreadSourceChatRowIds.any((rowId) => !byRow.containsKey(rowId))) {
           return const LogicalRouteDecision.notProven('UNREAD_SOURCE_OUTSIDE_CERTIFICATE');
@@ -251,81 +181,174 @@ class LogicalConversationOutboundRoutePolicy {
     }
   }
 
-  static LogicalRouteDecision _qualify(
-    LogicalRouteEvidence evidence,
-    LogicalConversationOutboundRouteCertificate routeCertificate,
-  ) {
-    if (evidence.logicalId != routeCertificate.logicalId || evidence.certificateId != routeCertificate.id) {
-      return const LogicalRouteDecision.notProven('MISSING_OR_MISMATCHED_EQUIVALENCE_CERTIFICATE');
+  /// Conservative typed normalization used only for equality and set
+  /// membership. Opaque identities remain unqualified instead of being
+  /// coalesced heuristically.
+  static String? normalizeRoutableAddress(LogicalAddressEvidence evidence) {
+    var value = evidence.address.trim();
+    if (value.isEmpty) return null;
+    final lower = value.toLowerCase();
+    if (lower.startsWith('tel:')) {
+      value = value.substring(4);
+    } else if (lower.startsWith('mailto:')) {
+      value = value.substring(7);
     }
-    if (sha256Text(evidence.backendComputerId) != routeCertificate.acceptedBackendComputerIdSha256) {
-      return const LogicalRouteDecision.notProven('BACKEND_IDENTITY_MISMATCH');
+
+    final email = RegExp(r'^[^\s@:]+@[^\s@:]+\.[^\s@:]+$');
+    if (email.hasMatch(value)) return 'EMAIL:${value.toLowerCase()}';
+
+    if (!RegExp(r'^\+?[0-9 () .-]+$').hasMatch(value)) return null;
+    final digits = value.replaceAll(RegExp(r'\D'), '');
+    String? national;
+    if (digits.length == 11 && digits.startsWith('1')) {
+      national = digits.substring(1);
+    } else {
+      final country = evidence.country?.toUpperCase();
+      if (digits.length == 10 &&
+          !value.startsWith('+') &&
+          (country == null || country.isEmpty || country == 'US' || country == 'USA')) {
+        national = digits;
+      }
+    }
+    if (national != null && RegExp(r'^[2-9][0-9]{2}[2-9][0-9]{6}$').hasMatch(national)) {
+      return 'PHONE:+1$national';
+    }
+    if (value.startsWith('+') && !digits.startsWith('1') && RegExp(r'^[1-9][0-9]{7,14}$').hasMatch(digits)) {
+      return 'PHONE:+$digits';
+    }
+    return null;
+  }
+
+  static LogicalRouteDecision _qualifyWritableSource(LogicalRouteEvidence evidence) {
+    final sourceQualification = _qualifyCertifiedSources(evidence);
+    if (!sourceQualification.isQualified) return sourceQualification;
+
+    final vettedAliases = evidence.vettedSelfAliases.map(normalizeRoutableAddress).whereType<String>().toSet();
+    final selfMembershipByRow = <int, Set<String>>{};
+    for (final candidate in evidence.candidates) {
+      final participants = candidate.participants.map(normalizeRoutableAddress).whereType<String>().toSet();
+      selfMembershipByRow[candidate.sourceChatRowId] = participants.intersection(vettedAliases);
+    }
+
+    final writable = evidence.candidates
+        .where((candidate) => selfMembershipByRow[candidate.sourceChatRowId]!.isEmpty)
+        .toList();
+    if (writable.length != 1) {
+      return const LogicalRouteDecision.notProven('AMBIGUOUS_WRITE_ELIGIBLE_SOURCE');
+    }
+    final selected = writable.single;
+    if (selected.successfulOutbounds.isEmpty) {
+      return const LogicalRouteDecision.notProven('NO_SUCCESSFUL_WRITABLE_SOURCE_PROVENANCE');
+    }
+    final selectedLatest = selected.successfulOutbounds
+        .map((outbound) => outbound.createdAtEpoch)
+        .reduce((a, b) => a > b ? a : b);
+    final otherDates = evidence.candidates
+        .where((candidate) => candidate.sourceChatRowId != selected.sourceChatRowId)
+        .expand((candidate) => candidate.successfulOutbounds)
+        .map((outbound) => outbound.createdAtEpoch)
+        .toList();
+    if (otherDates.isNotEmpty && selectedLatest <= otherDates.reduce((a, b) => a > b ? a : b)) {
+      return const LogicalRouteDecision.notProven('CURRENT_OUTBOUND_PROVENANCE_CONTRADICTION');
+    }
+
+    return LogicalRouteDecision.qualified('UNIQUE_CURRENT_PROVENANCE_WRITABLE_SOURCE', [selected.sourceChatRowId]);
+  }
+
+  static LogicalRouteDecision _qualifyCertifiedSources(LogicalRouteEvidence evidence) {
+    if (evidence.logicalId.isEmpty || evidence.certificateId == null || evidence.certificateId!.isEmpty) {
+      return const LogicalRouteDecision.notProven('MISSING_EQUIVALENCE_CERTIFICATE');
+    }
+    if (evidence.certificateId != '$logicalConversationOutboundRouteSchema:${evidence.logicalId}') {
+      return const LogicalRouteDecision.notProven('EQUIVALENCE_CERTIFICATE_BINDING_MISMATCH');
+    }
+    if (evidence.certifiedSourceChatGuids.length < 2 || evidence.certifiedSourceChatGuids.length > 8) {
+      return const LogicalRouteDecision.notProven('CERTIFIED_SOURCE_SCOPE_INVALID');
+    }
+    if (evidence.backendComputerId.isEmpty) {
+      return const LogicalRouteDecision.notProven('BACKEND_IDENTITY_MISSING');
     }
     if (!evidence.detectedIMessage || !evidence.privateApiConnected || !evidence.helperConnected) {
       return const LogicalRouteDecision.notProven('CURRENT_TRANSPORT_CONTEXT_UNPROVEN');
     }
-    if (evidence.staleRouteState != LogicalStaleRouteState.absentCurrentAccepted) {
-      return const LogicalRouteDecision.notProven('STALE_OR_UNKNOWN_ROUTE_EVIDENCE');
-    }
-    if (evidence.candidates.length != routeCertificate.sourceBindings.length) {
-      return const LogicalRouteDecision.notProven('ZERO_OR_AMBIGUOUS_EXECUTION_CANDIDATES');
+    if (evidence.accountSnapshotBeforeSha256.isEmpty ||
+        evidence.accountSnapshotBeforeSha256 != evidence.accountSnapshotAfterSha256) {
+      return const LogicalRouteDecision.notProven('CURRENT_ACCOUNT_IDENTITY_UNSTABLE');
     }
 
+    final vettedAliases = <String>{};
+    for (final alias in evidence.vettedSelfAliases) {
+      final normalized = normalizeRoutableAddress(alias);
+      if (normalized == null || !vettedAliases.add(normalized)) {
+        return const LogicalRouteDecision.notProven('VETTED_SELF_ALIAS_IDENTITY_UNPROVEN');
+      }
+    }
+    final activeAlias = normalizeRoutableAddress(evidence.activeSelfAlias);
+    if (activeAlias == null || !vettedAliases.contains(activeAlias)) {
+      return const LogicalRouteDecision.notProven('ACTIVE_SENDER_NOT_CURRENT_VETTED_ALIAS');
+    }
+
+    if (evidence.candidates.length != evidence.certifiedSourceChatGuids.length) {
+      return const LogicalRouteDecision.notProven('ZERO_OR_AMBIGUOUS_EXECUTION_CANDIDATES');
+    }
     final byRow = <int, LogicalRouteCandidateEvidence>{};
+    final seenGuids = <String>{};
     for (final candidate in evidence.candidates) {
-      if (byRow.containsKey(candidate.sourceChatRowId)) {
+      if (byRow.containsKey(candidate.sourceChatRowId) || !seenGuids.add(candidate.sourceChatGuid)) {
         return const LogicalRouteDecision.notProven('DUPLICATE_EXECUTION_CANDIDATE');
       }
       byRow[candidate.sourceChatRowId] = candidate;
     }
-    if (!routeCertificate.sourceBindings.keys.every(byRow.containsKey)) {
+    if (!_sameSet(byRow.keys.toSet(), evidence.certifiedSourceChatGuids.keys.toSet())) {
       return const LogicalRouteDecision.notProven('CERTIFIED_SOURCE_BINDING_MISSING');
     }
 
-    for (final entry in routeCertificate.sourceBindings.entries) {
-      final candidate = byRow[entry.key]!;
-      final binding = entry.value;
-      if (sha256Text(candidate.sourceChatGuid) != binding.sourceChatGuidSha256 ||
-          sha256Text(candidate.chatIdentifier) != binding.chatIdentifierSha256 ||
-          candidate.style != 43 ||
-          participantSetSha256(candidate.participantAddresses) != binding.participantSetSha256 ||
-          sha256Text(candidate.lastAddressedHandle) != routeCertificate.acceptedLastAddressedHandleSha256) {
+    Set<String>? acceptedExternalParticipants;
+    final globallySeenOutboundRows = <int>{};
+    final globallySeenOutboundGuids = <String>{};
+    for (final candidate in evidence.candidates) {
+      if (evidence.certifiedSourceChatGuids[candidate.sourceChatRowId] != candidate.sourceChatGuid ||
+          candidate.sourceChatGuid.isEmpty ||
+          candidate.chatIdentifier.isEmpty ||
+          candidate.style != 43) {
         return const LogicalRouteDecision.notProven('CURRENT_SOURCE_BINDING_CONTRADICTION');
       }
-      final anchorPresent = candidate.successfulOutbounds.any(
-        (outbound) =>
-            outbound.messageRowId == binding.successfulOutboundAnchorRowId &&
-            sha256Text(outbound.messageGuid) == binding.successfulOutboundAnchorGuidSha256,
-      );
-      if (!anchorPresent) {
-        return const LogicalRouteDecision.notProven('ACCEPTED_SUCCESSFUL_OUTBOUND_PROVENANCE_MISSING');
+      final currentRoute = normalizeRoutableAddress(candidate.lastAddressedHandle);
+      if (currentRoute == null || currentRoute != activeAlias) {
+        return const LogicalRouteDecision.notProven('STALE_OR_CONFLICTING_CURRENT_ROUTE');
       }
-      if (candidate.successfulOutbounds.length < binding.minimumSuccessfulOutboundCount) {
-        return const LogicalRouteDecision.notProven('ACCEPTED_OUTBOUND_PROVENANCE_FLOOR_NOT_MET');
+      if (!candidate.messageSnapshotComplete) {
+        return const LogicalRouteDecision.notProven('CURRENT_MESSAGE_PROVENANCE_INCOMPLETE');
+      }
+
+      final participants = <String>{};
+      for (final participant in candidate.participants) {
+        final normalized = normalizeRoutableAddress(participant);
+        if (normalized == null || !participants.add(normalized)) {
+          return const LogicalRouteDecision.notProven('PARTICIPANT_IDENTITY_UNPROVEN');
+        }
+      }
+      final external = participants.difference(vettedAliases);
+      if (external.length < 2) {
+        return const LogicalRouteDecision.notProven('EXTERNAL_PARTICIPANT_SCOPE_UNPROVEN');
+      }
+      if (acceptedExternalParticipants == null) {
+        acceptedExternalParticipants = external;
+      } else if (!_sameSet(acceptedExternalParticipants, external)) {
+        return const LogicalRouteDecision.notProven('EXTERNAL_PARTICIPANT_IDENTITY_CONTRADICTION');
+      }
+      for (final outbound in candidate.successfulOutbounds) {
+        if (outbound.messageGuid.isEmpty || outbound.messageRowId <= 0 || outbound.createdAtEpoch <= 0) {
+          return const LogicalRouteDecision.notProven('SUCCESSFUL_OUTBOUND_PROVENANCE_INVALID');
+        }
+        if (!globallySeenOutboundRows.add(outbound.messageRowId) ||
+            !globallySeenOutboundGuids.add(outbound.messageGuid)) {
+          return const LogicalRouteDecision.notProven('SUCCESSFUL_OUTBOUND_PROVENANCE_AMBIGUOUS');
+        }
       }
     }
 
-    final accounts = evidence.candidates.map((candidate) => normalizeIdentity(candidate.accountIdentity)).toSet();
-    if (accounts.length != 1 || accounts.single.isEmpty) {
-      return const LogicalRouteDecision.notProven('CONFLICTING_OR_MISSING_ACCOUNT_IDENTITY');
-    }
-    if (sha256Text(accounts.single) != routeCertificate.acceptedAccountIdentitySha256) {
-      return const LogicalRouteDecision.notProven('CURRENT_ACCOUNT_IDENTITY_MISMATCH');
-    }
-
-    final canonicalRow = routeCertificate.canonicalNewMessageSourceChatRowId;
-    final alternateRows = routeCertificate.sourceBindings.keys.where((rowId) => rowId != canonicalRow).toList();
-    if (alternateRows.length != 1 || !byRow.containsKey(canonicalRow)) {
-      return const LogicalRouteDecision.notProven('CERTIFICATE_EXECUTION_TOPOLOGY_INVALID');
-    }
-    final sourceWithSelf = participantFingerprints(byRow[alternateRows.single]!.participantAddresses);
-    final canonicalExternal = participantFingerprints(byRow[canonicalRow]!.participantAddresses);
-    final selfDifference = sourceWithSelf.difference(canonicalExternal);
-    if (!sourceWithSelf.containsAll(canonicalExternal) || selfDifference.length != 1) {
-      return const LogicalRouteDecision.notProven('EXTERNAL_PARTICIPANT_IDENTITY_CONTRADICTION');
-    }
-
-    return const LogicalRouteDecision.qualified('CURRENT_CERTIFIED_ROUTE_CONTEXT_PASS', <int>[]);
+    return LogicalRouteDecision.qualified('CURRENT_CERTIFIED_SOURCE_SET', byRow.keys.toList()..sort());
   }
 
   static LogicalRouteDecision _targetMessageRoute(
@@ -363,6 +386,9 @@ class LogicalConversationOutboundRoutePolicy {
     }
     return LogicalRouteDecision.qualified('CERTIFIED_PERSISTED_ATTACHMENT_RETRY_ROUTE', [sourceRow]);
   }
+
+  static bool _sameSet<T>(Set<T> left, Set<T> right) =>
+      left.length == right.length && left.containsAll(right) && right.containsAll(left);
 }
 
 /// Bounded replay gate for the logical execution handoff.

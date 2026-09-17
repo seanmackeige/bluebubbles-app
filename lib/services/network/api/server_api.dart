@@ -48,9 +48,10 @@ class ServerApi {
   }
 
   /// Get server metadata like server version, macOS version, current URL, etc
-  Future<Response> info({CancelToken? cancelToken}) async {
+  Future<Response> info({CancelToken? cancelToken, bool force = false}) async {
     final now = DateTime.now();
-    if (_serverInfoCache != null &&
+    if (!force &&
+        _serverInfoCache != null &&
         _lastServerInfoFetch != null &&
         now.difference(_lastServerInfoFetch!) < const Duration(minutes: 1)) {
       Logger.debug("Server info was recently fetched. Using cache...");

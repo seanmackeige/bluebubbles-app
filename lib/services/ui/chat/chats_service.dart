@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:app_links/app_links.dart';
 import 'package:bluebubbles/app/layouts/chat_creator/chat_creator.dart';
@@ -14,6 +15,7 @@ import 'package:bluebubbles/services/backend/notifications/desktop_notification.
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:collection/collection.dart';
+import 'package:crypto/crypto.dart';
 import 'package:bluebubbles/models/models.dart' show HandleLookupKey, MessageSaveResult;
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
@@ -173,60 +175,83 @@ class ChatsService {
   }
 
   Future<LogicalRouteEvidence> _collectLogicalRouteEvidence(Chat chat) async {
+    final definition = _logicalDefinition;
     final sources = logicalSourceChatsFor(chat)
       ..sort((a, b) => (a.originalROWID ?? -1).compareTo(b.originalROWID ?? -1));
-    if (sources.length != LogicalConversationViewPolicy.goldenPair.sourceChatRowIds.length) {
+    if (definition == null || sources.length != definition.sourceChatRowIds.length) {
       return LogicalRouteEvidence(
-        logicalId: LogicalConversationViewPolicy.goldenPair.id,
+        logicalId: definition?.id ?? '',
         certificateId: null,
+        certifiedSourceChatGuids: const {},
         backendComputerId: '',
         detectedIMessage: false,
         privateApiConnected: false,
         helperConnected: false,
-        staleRouteState: LogicalStaleRouteState.unknown,
+        accountSnapshotBeforeSha256: '',
+        accountSnapshotAfterSha256: '',
+        activeSelfAlias: const LogicalAddressEvidence(address: ''),
+        vettedSelfAliases: const [],
         candidates: const [],
       );
     }
 
-    final requests = <Future<dynamic>>[HttpSvc.server.info()];
+    final accountBeforeResponse = await HttpSvc.icloud.getAccountInfo();
+    final requests = <Future<dynamic>>[HttpSvc.server.info(force: true)];
     for (final source in sources) {
       requests.add(HttpSvc.chat.fetchOne(source.guid, withQuery: 'participants'));
       requests.add(HttpSvc.chat.getMessages(source.guid, limit: 1000));
     }
     final responses = await Future.wait(requests);
+    final accountAfterResponse = await HttpSvc.icloud.getAccountInfo();
     final serverData = Map<String, dynamic>.from((responses.first.data['data'] as Map).cast<String, dynamic>());
-    final accountIdentity = [
-      serverData['detected_icloud'],
-      serverData['detected_imessage'],
-    ].map((value) => LogicalConversationOutboundRoutePolicy.normalizeIdentity(value?.toString() ?? '')).join('|');
+    final accountBefore = _logicalAccountProjection(accountBeforeResponse.data['data']);
+    final accountAfter = _logicalAccountProjection(accountAfterResponse.data['data']);
 
     final candidates = <LogicalRouteCandidateEvidence>[];
     for (var index = 0; index < sources.length; index++) {
       final chatData = Map<String, dynamic>.from(
         (responses[1 + (index * 2)].data['data'] as Map).cast<String, dynamic>(),
       );
-      final rawMessages = responses[2 + (index * 2)].data['data'];
+      final messageResponse = responses[2 + (index * 2)];
+      final rawMessages = messageResponse.data['data'];
+      final rawMetadata = messageResponse.data['metadata'];
       final successfulOutbounds = <LogicalSuccessfulOutboundEvidence>[];
       if (rawMessages is List) {
         for (final raw in rawMessages.whereType<Map>()) {
           final message = raw.cast<String, dynamic>();
           final rowId = (message['originalROWID'] as num?)?.toInt();
           final guid = message['guid']?.toString();
+          final createdAt = (message['dateCreated'] as num?)?.toInt();
           if (message['isFromMe'] == true &&
               (message['error'] as num?)?.toInt() == 0 &&
               rowId != null &&
               guid != null &&
-              guid.isNotEmpty) {
-            successfulOutbounds.add(LogicalSuccessfulOutboundEvidence(messageGuid: guid, messageRowId: rowId));
+              guid.isNotEmpty &&
+              createdAt != null &&
+              createdAt > 0) {
+            successfulOutbounds.add(
+              LogicalSuccessfulOutboundEvidence(messageGuid: guid, messageRowId: rowId, createdAtEpoch: createdAt),
+            );
           }
         }
       }
-      final participants = <String>{};
+      final metadata = rawMetadata is Map ? rawMetadata.cast<String, dynamic>() : const <String, dynamic>{};
+      final total = (metadata['total'] as num?)?.toInt();
+      final count = (metadata['count'] as num?)?.toInt();
+      final messageSnapshotComplete =
+          rawMessages is List &&
+          total != null &&
+          total <= 1000 &&
+          count == rawMessages.length &&
+          total == rawMessages.length;
+      final participants = <LogicalAddressEvidence>[];
       final rawParticipants = chatData['participants'];
       if (rawParticipants is List) {
         for (final raw in rawParticipants.whereType<Map>()) {
           final address = raw['address']?.toString();
-          if (address != null && address.isNotEmpty) participants.add(address);
+          if (address != null && address.isNotEmpty) {
+            participants.add(LogicalAddressEvidence(address: address, country: raw['country']?.toString()));
+          }
         }
       }
       candidates.add(
@@ -235,39 +260,76 @@ class ChatsService {
           sourceChatGuid: chatData['guid']?.toString() ?? '',
           chatIdentifier: chatData['chatIdentifier']?.toString() ?? '',
           style: (chatData['style'] as num?)?.toInt() ?? -1,
-          lastAddressedHandle: chatData['lastAddressedHandle']?.toString() ?? '',
-          participantAddresses: participants,
-          accountIdentity: accountIdentity,
+          lastAddressedHandle: LogicalAddressEvidence(address: chatData['lastAddressedHandle']?.toString() ?? ''),
+          participants: participants,
+          messageSnapshotComplete: messageSnapshotComplete,
           successfulOutbounds: successfulOutbounds,
         ),
       );
     }
 
-    final hasCurrentRouteFields =
-        accountIdentity.replaceAll('|', '').isNotEmpty &&
-        candidates.every((candidate) => candidate.lastAddressedHandle.isNotEmpty);
-    final acceptedCurrentRoute =
-        LogicalConversationOutboundRoutePolicy.sha256Text(accountIdentity) ==
-            LogicalConversationOutboundRoutePolicy.certificate.acceptedAccountIdentitySha256 &&
-        candidates.every(
-          (candidate) =>
-              LogicalConversationOutboundRoutePolicy.sha256Text(candidate.lastAddressedHandle) ==
-              LogicalConversationOutboundRoutePolicy.certificate.acceptedLastAddressedHandleSha256,
-        );
-
     return LogicalRouteEvidence(
-      logicalId: LogicalConversationViewPolicy.goldenPair.id,
-      certificateId: LogicalConversationOutboundRoutePolicy.certificate.id,
+      logicalId: definition.id,
+      certificateId: '$logicalConversationOutboundRouteSchema:${definition.id}',
+      certifiedSourceChatGuids: {
+        for (final source in sources)
+          if (source.originalROWID != null) source.originalROWID!: source.guid,
+      },
       backendComputerId: serverData['computer_id']?.toString() ?? '',
-      detectedIMessage: (serverData['detected_imessage']?.toString().trim().isNotEmpty ?? false),
+      detectedIMessage: switch (serverData['detected_imessage']) {
+        final String value => value.trim().isNotEmpty,
+        final bool value => value,
+        _ => false,
+      },
       privateApiConnected: serverData['private_api'] == true,
       helperConnected: serverData['helper_connected'] == true,
-      staleRouteState: !hasCurrentRouteFields
-          ? LogicalStaleRouteState.unknown
-          : acceptedCurrentRoute
-          ? LogicalStaleRouteState.absentCurrentAccepted
-          : LogicalStaleRouteState.present,
+      accountSnapshotBeforeSha256: accountBefore.fingerprint,
+      accountSnapshotAfterSha256: accountAfter.fingerprint,
+      activeSelfAlias: LogicalAddressEvidence(address: accountBefore.activeAlias),
+      vettedSelfAliases: accountBefore.vettedAliases.map((alias) => LogicalAddressEvidence(address: alias)).toList(),
       candidates: candidates,
+    );
+  }
+
+  ({String fingerprint, String activeAlias, List<String> vettedAliases}) _logicalAccountProjection(dynamic raw) {
+    if (raw is! Map) return (fingerprint: '', activeAlias: '', vettedAliases: const []);
+    final account = raw.cast<String, dynamic>();
+    List<Map<String, dynamic>> projectAliases(dynamic value) {
+      if (value is! List) return const [];
+      final projected = <Map<String, dynamic>>[];
+      for (final item in value.whereType<Map>()) {
+        final alias = item['Alias'];
+        final status = item['Status'];
+        final visible = item['IsUserVisible'];
+        if (alias is! String || alias.isEmpty || status is! num || visible is! bool) return const [];
+        projected.add({'alias': alias, 'status': status.toInt(), 'visible': visible});
+      }
+      projected.sort((a, b) {
+        final byAlias = (a['alias'] as String).compareTo(b['alias'] as String);
+        if (byAlias != 0) return byAlias;
+        final byStatus = (a['status'] as int).compareTo(b['status'] as int);
+        return byStatus != 0 ? byStatus : (a['visible'] == b['visible'] ? 0 : (a['visible'] == true ? 1 : -1));
+      });
+      return projected;
+    }
+
+    final aliases = projectAliases(account['aliases']);
+    final vetted = projectAliases(account['vetted_aliases']);
+    final activeAlias = account['active_alias'];
+    final appleId = account['apple_id'];
+    if (aliases.isEmpty ||
+        vetted.isEmpty ||
+        activeAlias is! String ||
+        activeAlias.isEmpty ||
+        appleId is! String ||
+        appleId.isEmpty) {
+      return (fingerprint: '', activeAlias: '', vettedAliases: const []);
+    }
+    final projection = {'aliases': aliases, 'vetted_aliases': vetted, 'active_alias': activeAlias, 'apple_id': appleId};
+    return (
+      fingerprint: sha256.convert(utf8.encode(jsonEncode(projection))).toString(),
+      activeAlias: activeAlias,
+      vettedAliases: vetted.map((item) => item['alias'] as String).toList(),
     );
   }
 
