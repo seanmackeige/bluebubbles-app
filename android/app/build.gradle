@@ -201,3 +201,92 @@ dependencies {
 
     implementation 'org.unifiedpush.android:connector:2.5.0'
 }
+
+// Flutter's AOT compiler output is produced before the Android native-library
+// merge, but the AGP merge/strip tasks can incorrectly reuse an older prod
+// release snapshot. That produced Build 92 with current manifest/version
+// metadata and Build 91 Dart execution code. Force the Sean prod native stages
+// to consume the compiler output from this invocation.
+tasks.configureEach { task ->
+    if (task.name in [
+        'mergeProdReleaseJniLibFolders',
+        'mergeProdReleaseNativeLibs',
+        'stripProdReleaseDebugSymbols',
+    ]) {
+        task.outputs.upToDateWhen { false }
+    }
+}
+
+def seanRequiredLogicalRouteSchema = 'LOGICAL_CONVERSATION_OUTBOUND_ROUTE_V2_GENERIC_PROVENANCE'
+def seanForbiddenLogicalRouteSchema = 'LOGICAL_CONVERSATION_OUTBOUND_ROUTE_V1_GOLDEN_2155_2156'
+
+def verifySeanLogicalRouteAot = { File apk ->
+    if (!apk.isFile()) {
+        throw new GradleException("SEAN_RELEASE_APK_MISSING: ${apk}")
+    }
+
+    def archive = new java.util.zip.ZipFile(apk)
+    try {
+        def aotEntries = java.util.Collections.list(archive.entries()).findAll { entry ->
+            !entry.directory &&
+                entry.name.startsWith('lib/') &&
+                entry.name.endsWith('/libapp.so') &&
+                entry.name.count('/') == 2
+        }
+        if (aotEntries.isEmpty()) {
+            throw new GradleException('SEAN_RELEASE_AOT_PAYLOAD_MISSING')
+        }
+
+        aotEntries.each { entry ->
+            byte[] payload = archive.getInputStream(entry).withCloseable { stream -> stream.bytes }
+            String asciiPayload = new String(payload, java.nio.charset.StandardCharsets.ISO_8859_1)
+            boolean hasRequired = asciiPayload.contains(seanRequiredLogicalRouteSchema)
+            boolean hasForbidden = asciiPayload.contains(seanForbiddenLogicalRouteSchema)
+            if (!hasRequired && hasForbidden) {
+                throw new GradleException("SEAN_RELEASE_AOT_STALE_ROUTE_SCHEMA_V1: ${entry.name}")
+            }
+            if (!hasRequired) {
+                throw new GradleException("SEAN_RELEASE_AOT_ROUTE_SCHEMA_MISSING: ${entry.name}")
+            }
+            if (hasForbidden) {
+                throw new GradleException("SEAN_RELEASE_AOT_FORBIDDEN_ROUTE_SCHEMA_PRESENT: ${entry.name}")
+            }
+        }
+    } finally {
+        archive.close()
+    }
+}
+
+def verifySeanProdReleaseAot = tasks.register('verifySeanProdReleaseAot') {
+    group = 'verification'
+    description = 'Rejects a Sean prod APK whose packaged Dart AOT route schema is stale.'
+    doLast {
+        verifySeanLogicalRouteAot(file("${buildDir}/outputs/apk/prod/release/app-prod-release.apk"))
+        logger.lifecycle('SEAN_RELEASE_AOT_ROUTE_SCHEMA_PASS')
+    }
+}
+
+tasks.matching { task -> task.name == 'assembleProdRelease' }.configureEach {
+    finalizedBy(verifySeanProdReleaseAot)
+}
+
+tasks.register('verifySeanStaleAotRegression') {
+    group = 'verification'
+    description = 'Proves that the retained Build 92 stale AOT payload is rejected.'
+    doLast {
+        def regressionPath = providers.gradleProperty('seanStaleAotRegressionApk').orNull
+        if (!regressionPath) {
+            throw new GradleException('SEAN_STALE_AOT_REGRESSION_APK_PROPERTY_REQUIRED')
+        }
+        try {
+            verifySeanLogicalRouteAot(file(regressionPath))
+        } catch (GradleException error) {
+            if (error.message?.startsWith('SEAN_RELEASE_AOT_STALE_ROUTE_SCHEMA_V1:')) {
+                logger.lifecycle('BUILD_92_STALE_AOT_REGRESSION_PASS')
+                return
+            }
+            throw error
+        }
+        throw new GradleException('BUILD_92_STALE_AOT_REGRESSION_NOT_REPRODUCED')
+    }
+}

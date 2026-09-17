@@ -23,3 +23,8 @@ Flutter side: `lib/services/backend/java_dart_interop/`
 ## Build Config
 - Target SDK: 35 | NDK: 27.0 | Java/Kotlin compat: version 21
 - Gradle with Kotlin plugin
+- Sean prod builds force the Flutter native merge/strip stages to rerun and
+  finish with `verifySeanProdReleaseAot`. The verifier rejects a packaged
+  `libapp.so` that does not contain the current V2 logical-route schema or still
+  contains the stale V1 schema. `verifySeanStaleAotRegression` is the retained
+  Build 92 negative control and requires `-PseanStaleAotRegressionApk=<path>`.

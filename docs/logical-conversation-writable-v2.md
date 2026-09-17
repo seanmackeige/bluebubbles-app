@@ -39,6 +39,13 @@ order, highest ROWID, newest message alone, cached selection, and raw set
 inclusion are not route selectors. Missing, duplicated, opaque, incomplete, or
 contradictory evidence produces `ROUTE_NOT_PROVEN`.
 
+Sean prod release assembly also verifies the packaged Dart AOT payload, not
+only the source tree. Every packaged `libapp.so` must contain the V2 route
+schema marker and must not contain the V1 marker. The prod native merge and
+strip stages are forced to consume the current Flutter compiler output. This
+closes the Build 92 failure in which current manifest/version metadata was
+packaged around stale Build 91 Dart code.
+
 UI qualification is never execution authority. Every queued logical mutation
 forces a fresh evidence read before admission.
 
