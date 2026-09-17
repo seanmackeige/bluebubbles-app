@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/header/cupertino_header.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/header/material_header.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/messages_view_components.dart';
@@ -10,6 +12,7 @@ import 'package:bluebubbles/app/layouts/conversation_view/pages/messages_view.da
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/effects/screen_effects_widget.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
+import 'package:bluebubbles/services/ui/chat/logical_conversation_route.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -70,6 +73,9 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
     ChatsSvc.setActiveChatSync(chat);
     ChatsSvc.activeChat?.controller = controller;
     Logger.debug("Conversation View initialized for ${chat.guid}");
+    if (ChatsSvc.isApprovedLogicalSource(chat)) {
+      unawaited(ChatsSvc.prepareLogicalRoute(chat, force: true));
+    }
 
     controller.loadReplyToMessageState(); // P224b
 
@@ -150,14 +156,8 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
                         ],
                       ),
                     ),
-                    if (ChatsSvc.isLogicalConversation(chat))
-                      const SafeArea(
-                        top: false,
-                        child: Padding(
-                          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                          child: Text('Logical conversation view — read only', textAlign: TextAlign.center),
-                        ),
-                      )
+                    if (ChatsSvc.isApprovedLogicalSource(chat))
+                      _LogicalComposerGate(controller: controller, onPanUpdate: _onPanUpdate)
                     else
                       GestureDetector(
                         onPanUpdate: _onPanUpdate,
@@ -176,7 +176,7 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
   void _buildActionsMap() {
     _actionsMap = {OpenChatDetailsIntent: OpenChatDetailsAction(context, widget.chat.guid)};
 
-    if (SettingsSvc.settings.enablePrivateAPI.value && !ChatsSvc.isLogicalConversation(chat)) {
+    if (SettingsSvc.settings.enablePrivateAPI.value) {
       _actionsMap.addAll({
         ReplyRecentIntent: ReplyRecentAction(widget.chat.guid),
         HeartRecentIntent: HeartRecentAction(widget.chat.guid),
@@ -279,5 +279,55 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
         );
       }),
     );
+  }
+}
+
+class _LogicalComposerGate extends StatelessWidget {
+  const _LogicalComposerGate({required this.controller, required this.onPanUpdate});
+
+  final ConversationViewController controller;
+  final GestureDragUpdateCallback onPanUpdate;
+
+  @override
+  Widget build(BuildContext context) {
+    return Obx(() {
+      final status = ChatsSvc.logicalRouteRuntimeStatus.value;
+      if (status.isQualified) {
+        return GestureDetector(
+          onPanUpdate: onPanUpdate,
+          child: ConversationTextField(parentController: controller),
+        );
+      }
+      final checking =
+          status.stage == LogicalRouteRuntimeStage.checking || status.stage == LogicalRouteRuntimeStage.unchecked;
+      return SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              if (checking)
+                const SizedBox.square(dimension: 16, child: CircularProgressIndicator(strokeWidth: 2))
+              else
+                const Icon(Icons.lock_outline, size: 18),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  checking ? 'Checking logical conversation route…' : 'ROUTE_NOT_PROVEN',
+                  textAlign: TextAlign.center,
+                ),
+              ),
+              if (!checking)
+                IconButton(
+                  tooltip: 'Check route again',
+                  onPressed: () => unawaited(ChatsSvc.prepareLogicalRoute(controller.chat, force: true)),
+                  icon: const Icon(Icons.refresh),
+                ),
+            ],
+          ),
+        ),
+      );
+    });
   }
 }

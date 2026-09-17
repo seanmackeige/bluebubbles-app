@@ -30,10 +30,7 @@ import 'package:universal_io/io.dart';
 export 'text_field_component.dart' show TextFieldComponent, TextFieldComponentState;
 
 class ConversationTextField extends CustomStateful<ConversationViewController> {
-  const ConversationTextField({
-    super.key,
-    required super.parentController,
-  });
+  const ConversationTextField({super.key, required super.parentController});
 
   static ConversationTextFieldState? of(BuildContext context) {
     return context.findAncestorStateOfType<ConversationTextFieldState>();
@@ -141,12 +138,9 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
       final file = File(s);
       if (!currentPicked.contains(s) && await file.exists()) {
         final bytes = await file.readAsBytes();
-        controller.pickedAttachments.add(PlatformFile(
-          name: basename(file.path),
-          bytes: bytes,
-          size: bytes.length,
-          path: s,
-        ));
+        controller.pickedAttachments.add(
+          PlatformFile(name: basename(file.path), bytes: bytes, size: bytes.length, path: s),
+        );
       }
     }
   }
@@ -215,8 +209,9 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
               return;
             } else if (localController.oldTextFieldSelection.value.baseOffset < selection.baseOffset) {
               // moving right
-              localController.oldTextFieldSelection.value =
-                  TextSelection.collapsed(offset: behind.length + aheadMatches.first.end);
+              localController.oldTextFieldSelection.value = TextSelection.collapsed(
+                offset: behind.length + aheadMatches.first.end,
+              );
               controller.textController.selection = localController.oldTextFieldSelection.value;
               return;
             }
@@ -230,8 +225,9 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
             return;
           } else {
             // Closer to right
-            localController.oldTextFieldSelection.value =
-                TextSelection.collapsed(offset: behind.length + aheadMatches.first.end);
+            localController.oldTextFieldSelection.value = TextSelection.collapsed(
+              offset: behind.length + aheadMatches.first.end,
+            );
             controller.textController.selection = localController.oldTextFieldSelection.value;
             return;
           }
@@ -246,8 +242,10 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
           final aheadMatches = MentionTextEditingController.escapingChar.allMatches(ahead);
           if (aheadMatches.length % 2 != 0) {
             // Assuming the rest of the code works, we're guaranteed to be inside a mention now
-            localController.oldTextFieldSelection.value =
-                TextSelection(baseOffset: selection.baseOffset, extentOffset: behind.length + aheadMatches.first.end);
+            localController.oldTextFieldSelection.value = TextSelection(
+              baseOffset: selection.baseOffset,
+              extentOffset: behind.length + aheadMatches.first.end,
+            );
             controller.textController.selection = localController.oldTextFieldSelection.value;
             return;
           }
@@ -257,8 +255,10 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
           final behindMatches = MentionTextEditingController.escapingChar.allMatches(behind);
           if (behindMatches.length % 2 != 0) {
             // Assuming the rest of the code works, we're guaranteed to be inside a mention now
-            localController.oldTextFieldSelection.value =
-                TextSelection(baseOffset: selection.baseOffset, extentOffset: behindMatches.last.start);
+            localController.oldTextFieldSelection.value = TextSelection(
+              baseOffset: selection.baseOffset,
+              extentOffset: behindMatches.last.start,
+            );
             controller.textController.selection = localController.oldTextFieldSelection.value;
             return;
           }
@@ -338,6 +338,9 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
   Future<void> sendMessage({String? effect}) async {
     final text = controller.textController.text;
     if (controller.scheduledDate.value != null) {
+      if (ChatsSvc.isLogicalConversation(chat)) {
+        return showSnackbar('ROUTE_NOT_PROVEN', 'Scheduled logical mutations are not certified');
+      }
       final date = controller.scheduledDate.value!;
       if (date.isBefore(DateTime.now())) return showSnackbar("Error", "Pick a date in the future!");
       if (text.contains(MentionTextEditingController.escapingChar)) {
@@ -348,10 +351,7 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
         builder: (BuildContext context) {
           return AlertDialog(
             backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-            title: Text(
-              "Scheduling message...",
-              style: context.theme.textTheme.titleLarge,
-            ),
+            title: Text("Scheduling message...", style: context.theme.textTheme.titleLarge),
             content: SizedBox(
               height: 70,
               child: Center(
@@ -365,6 +365,7 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
         },
       );
       final response = await HttpSvc.message.createScheduled(chat.guid, text, date.toUtc(), {"type": "once"});
+      if (!mounted) return;
       Navigator.of(context).pop();
       if (response.statusCode == 200 && response.data != null) {
         showSnackbar("Notice", "Message scheduled successfully for ${buildFullDate(date)}");
@@ -405,14 +406,16 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
             break;
         }
       }
-      await controller.send(SendData(
-        attachments: controller.pickedAttachments,
-        text: text,
-        subject: controller.subjectTextController.text,
-        replyGuid: controller.replyToMessage?.message.threadOriginatorGuid ?? controller.replyToMessage?.message.guid,
-        replyPart: controller.replyToMessage?.partIndex,
-        effectId: effect,
-      ));
+      await controller.send(
+        SendData(
+          attachments: controller.pickedAttachments,
+          text: text,
+          subject: controller.subjectTextController.text,
+          replyGuid: controller.replyToMessage?.message.threadOriginatorGuid ?? controller.replyToMessage?.message.guid,
+          replyPart: controller.replyToMessage?.partIndex,
+          effectId: effect,
+        ),
+      );
     }
     controller.pickedAttachments.clear();
     controller.textController.clear();
@@ -448,26 +451,28 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
     }
 
     if (file != null) {
-      controller.pickedAttachments.add(PlatformFile(
-        path: file.path,
-        name: file.path.split('/').last,
-        size: await file.length(),
-        bytes: await file.readAsBytes(),
-      ));
+      controller.pickedAttachments.add(
+        PlatformFile(
+          path: file.path,
+          name: file.path.split('/').last,
+          size: await file.length(),
+          bytes: await file.readAsBytes(),
+        ),
+      );
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Obx(() => Padding(
-          padding: EdgeInsets.only(
-            bottom: showAttachmentPicker ? 0 : 10.0,
-            top: 10.0,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+    return Obx(
+      () => Padding(
+        padding: EdgeInsets.only(bottom: showAttachmentPicker ? 0 : 10.0, top: 10.0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
                 TextFieldIconBar(controller: controller, localController: localController),
                 Expanded(
                   child: Stack(
@@ -507,38 +512,42 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
                       sendMessage: sendMessage,
                     ),
                   ),
-              ]),
-              Builder(builder: (context) {
+              ],
+            ),
+            Builder(
+              builder: (context) {
                 // Capture width outside the Obx lambda so the reactive builder does not
                 // register a MediaQuery.of dependency and rebuild on keyboard animation frames.
                 // sizeOf only notifies on actual display-size changes (rotation / resize).
                 final pickerWidth = MediaQuery.sizeOf(context).width;
-                return Obx(() => AnimatedSize(
-                      duration: const Duration(milliseconds: 250),
-                      curve: Curves.easeIn,
-                      alignment: Alignment.bottomCenter,
-                      child: !showAttachmentPicker
-                          ? SizedBox(width: pickerWidth)
-                          : Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const SizedBox(height: 8),
-                                AttachmentPicker(
-                                  controller: controller,
-                                ),
-                              ],
-                            ),
-                    ));
-              }),
-              TextFieldEmojiPickerSection(
-                controller: controller,
-                proxyController: proxyController,
-                emojiScrollController: _emojiScrollController,
-                emojiPickerHeight: emojiPickerHeight,
-                emojiColumns: emojiColumns,
-              ),
-            ],
-          ),
-        ));
+                return Obx(
+                  () => AnimatedSize(
+                    duration: const Duration(milliseconds: 250),
+                    curve: Curves.easeIn,
+                    alignment: Alignment.bottomCenter,
+                    child: !showAttachmentPicker
+                        ? SizedBox(width: pickerWidth)
+                        : Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const SizedBox(height: 8),
+                              AttachmentPicker(controller: controller),
+                            ],
+                          ),
+                  ),
+                );
+              },
+            ),
+            TextFieldEmojiPickerSection(
+              controller: controller,
+              proxyController: proxyController,
+              emojiScrollController: _emojiScrollController,
+              emojiPickerHeight: emojiPickerHeight,
+              emojiColumns: emojiColumns,
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }

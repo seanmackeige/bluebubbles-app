@@ -23,6 +23,7 @@ import 'package:universal_io/io.dart';
 import 'package:bluebubbles/database/database.dart';
 import 'package:get_it/get_it.dart';
 import 'package:bluebubbles/services/ui/chat/logical_conversation_view.dart';
+import 'package:bluebubbles/services/ui/chat/logical_conversation_route.dart';
 
 // ignore: non_constant_identifier_names
 ChatsService get ChatsSvc => GetIt.I<ChatsService>();
@@ -39,6 +40,14 @@ class ChatsService {
 
   /// Global unread count across all chats
   final RxInt unreadCount = 0.obs;
+
+  /// Current read-only qualification of the certified logical execution
+  /// route. This is presentation state only; every queued mutation is resolved
+  /// again before the existing send pipeline can perform optimistic writes.
+  final Rx<LogicalRouteRuntimeStatus> logicalRouteRuntimeStatus = const LogicalRouteRuntimeStatus.unchecked().obs;
+  LogicalRouteEvidence? _logicalRouteEvidence;
+  DateTime? _logicalRouteEvidenceAt;
+  Future<LogicalRouteEvidence>? _logicalRouteEvidenceInFlight;
 
   /// Map of chat states for granular reactivity
   /// Key is the chat GUID, value is the ChatState
@@ -161,6 +170,205 @@ class ChatsService {
     return _logicalSourceChats(
       definition,
     ).firstWhere((source) => source.originalROWID == definition.presentationSourceChatRowId);
+  }
+
+  Future<LogicalRouteEvidence> _collectLogicalRouteEvidence(Chat chat) async {
+    final sources = logicalSourceChatsFor(chat)
+      ..sort((a, b) => (a.originalROWID ?? -1).compareTo(b.originalROWID ?? -1));
+    if (sources.length != LogicalConversationViewPolicy.goldenPair.sourceChatRowIds.length) {
+      return LogicalRouteEvidence(
+        logicalId: LogicalConversationViewPolicy.goldenPair.id,
+        certificateId: null,
+        backendComputerId: '',
+        detectedIMessage: false,
+        privateApiConnected: false,
+        helperConnected: false,
+        staleRouteState: LogicalStaleRouteState.unknown,
+        candidates: const [],
+      );
+    }
+
+    final requests = <Future<dynamic>>[HttpSvc.server.info()];
+    for (final source in sources) {
+      requests.add(HttpSvc.chat.fetchOne(source.guid, withQuery: 'participants'));
+      requests.add(HttpSvc.chat.getMessages(source.guid, limit: 1000));
+    }
+    final responses = await Future.wait(requests);
+    final serverData = Map<String, dynamic>.from((responses.first.data['data'] as Map).cast<String, dynamic>());
+    final accountIdentity = [
+      serverData['detected_icloud'],
+      serverData['detected_imessage'],
+    ].map((value) => LogicalConversationOutboundRoutePolicy.normalizeIdentity(value?.toString() ?? '')).join('|');
+
+    final candidates = <LogicalRouteCandidateEvidence>[];
+    for (var index = 0; index < sources.length; index++) {
+      final chatData = Map<String, dynamic>.from(
+        (responses[1 + (index * 2)].data['data'] as Map).cast<String, dynamic>(),
+      );
+      final rawMessages = responses[2 + (index * 2)].data['data'];
+      final successfulOutbounds = <LogicalSuccessfulOutboundEvidence>[];
+      if (rawMessages is List) {
+        for (final raw in rawMessages.whereType<Map>()) {
+          final message = raw.cast<String, dynamic>();
+          final rowId = (message['originalROWID'] as num?)?.toInt();
+          final guid = message['guid']?.toString();
+          if (message['isFromMe'] == true &&
+              (message['error'] as num?)?.toInt() == 0 &&
+              rowId != null &&
+              guid != null &&
+              guid.isNotEmpty) {
+            successfulOutbounds.add(LogicalSuccessfulOutboundEvidence(messageGuid: guid, messageRowId: rowId));
+          }
+        }
+      }
+      final participants = <String>{};
+      final rawParticipants = chatData['participants'];
+      if (rawParticipants is List) {
+        for (final raw in rawParticipants.whereType<Map>()) {
+          final address = raw['address']?.toString();
+          if (address != null && address.isNotEmpty) participants.add(address);
+        }
+      }
+      candidates.add(
+        LogicalRouteCandidateEvidence(
+          sourceChatRowId: (chatData['originalROWID'] as num?)?.toInt() ?? -1,
+          sourceChatGuid: chatData['guid']?.toString() ?? '',
+          chatIdentifier: chatData['chatIdentifier']?.toString() ?? '',
+          style: (chatData['style'] as num?)?.toInt() ?? -1,
+          lastAddressedHandle: chatData['lastAddressedHandle']?.toString() ?? '',
+          participantAddresses: participants,
+          accountIdentity: accountIdentity,
+          successfulOutbounds: successfulOutbounds,
+        ),
+      );
+    }
+
+    final hasCurrentRouteFields =
+        accountIdentity.replaceAll('|', '').isNotEmpty &&
+        candidates.every((candidate) => candidate.lastAddressedHandle.isNotEmpty);
+    final acceptedCurrentRoute =
+        LogicalConversationOutboundRoutePolicy.sha256Text(accountIdentity) ==
+            LogicalConversationOutboundRoutePolicy.certificate.acceptedAccountIdentitySha256 &&
+        candidates.every(
+          (candidate) =>
+              LogicalConversationOutboundRoutePolicy.sha256Text(candidate.lastAddressedHandle) ==
+              LogicalConversationOutboundRoutePolicy.certificate.acceptedLastAddressedHandleSha256,
+        );
+
+    return LogicalRouteEvidence(
+      logicalId: LogicalConversationViewPolicy.goldenPair.id,
+      certificateId: LogicalConversationOutboundRoutePolicy.certificate.id,
+      backendComputerId: serverData['computer_id']?.toString() ?? '',
+      detectedIMessage: (serverData['detected_imessage']?.toString().trim().isNotEmpty ?? false),
+      privateApiConnected: serverData['private_api'] == true,
+      helperConnected: serverData['helper_connected'] == true,
+      staleRouteState: !hasCurrentRouteFields
+          ? LogicalStaleRouteState.unknown
+          : acceptedCurrentRoute
+          ? LogicalStaleRouteState.absentCurrentAccepted
+          : LogicalStaleRouteState.present,
+      candidates: candidates,
+    );
+  }
+
+  Future<LogicalRouteEvidence> _currentLogicalRouteEvidence(Chat chat, {bool force = false}) async {
+    final now = DateTime.now();
+    if (!force &&
+        _logicalRouteEvidence != null &&
+        _logicalRouteEvidenceAt != null &&
+        now.difference(_logicalRouteEvidenceAt!) < const Duration(minutes: 1)) {
+      return _logicalRouteEvidence!;
+    }
+    if (!force && _logicalRouteEvidenceInFlight != null) return _logicalRouteEvidenceInFlight!;
+    final future = _collectLogicalRouteEvidence(chat);
+    _logicalRouteEvidenceInFlight = future;
+    try {
+      final evidence = await future;
+      _logicalRouteEvidence = evidence;
+      _logicalRouteEvidenceAt = DateTime.now();
+      return evidence;
+    } finally {
+      if (identical(_logicalRouteEvidenceInFlight, future)) _logicalRouteEvidenceInFlight = null;
+    }
+  }
+
+  /// Resolves one mutation class from current server/source evidence. No
+  /// mutation occurs here; this method only selects physical targets.
+  Future<LogicalRouteDecision> resolveLogicalMutation(
+    Chat chat,
+    LogicalMutationRequest request, {
+    bool force = false,
+  }) async {
+    if (!isLogicalConversation(chat)) {
+      if (isApprovedLogicalSource(chat)) {
+        logicalRouteRuntimeStatus.value = const LogicalRouteRuntimeStatus(
+          stage: LogicalRouteRuntimeStage.routeNotProven,
+          reason: 'MISSING_OR_AMBIGUOUS_LOGICAL_SOURCE_BINDING',
+        );
+      }
+      return const LogicalRouteDecision.notProven('NOT_A_CERTIFIED_LOGICAL_CONVERSATION');
+    }
+    if (request.mutationClass == LogicalMutationClass.newMessage) {
+      logicalRouteRuntimeStatus.value = const LogicalRouteRuntimeStatus.checking();
+    }
+    try {
+      final evidence = await _currentLogicalRouteEvidence(chat, force: force);
+      final decision = LogicalConversationOutboundRoutePolicy.resolve(evidence, request);
+      Logger.info(
+        'Logical route decision: mutation=${request.mutationClass.name}, '
+        'reason=${decision.reason}, targetCount=${decision.physicalTargetRowIds.length}, '
+        'targetRowId=${decision.isSingleTarget ? decision.physicalTargetRowIds.single : 'NONE'}',
+        tag: 'LogicalConversationRoute',
+      );
+      if (request.mutationClass == LogicalMutationClass.newMessage) {
+        logicalRouteRuntimeStatus.value = LogicalRouteRuntimeStatus(
+          stage: decision.isSingleTarget ? LogicalRouteRuntimeStage.qualified : LogicalRouteRuntimeStage.routeNotProven,
+          reason: decision.reason,
+          targetRowId: decision.isSingleTarget ? decision.physicalTargetRowIds.single : null,
+        );
+      }
+      return decision;
+    } catch (_) {
+      Logger.warn('Logical route evidence unavailable; mutation remains fail closed', tag: 'LogicalConversationRoute');
+      if (request.mutationClass == LogicalMutationClass.newMessage) {
+        logicalRouteRuntimeStatus.value = const LogicalRouteRuntimeStatus(
+          stage: LogicalRouteRuntimeStage.routeNotProven,
+          reason: 'CURRENT_ROUTE_EVIDENCE_UNAVAILABLE',
+        );
+      }
+      return const LogicalRouteDecision.notProven('CURRENT_ROUTE_EVIDENCE_UNAVAILABLE');
+    }
+  }
+
+  Future<LogicalRouteDecision> prepareLogicalRoute(Chat chat, {bool force = false}) => resolveLogicalMutation(
+    chat,
+    const LogicalMutationRequest(mutationClass: LogicalMutationClass.newMessage),
+    force: force,
+  );
+
+  /// Marks only currently unread certified source chats as read. A logical
+  /// read operation may intentionally have more than one physical target.
+  Future<LogicalRouteDecision> markLogicalConversationRead(Chat chat) async {
+    final sources = logicalSourceChatsFor(chat);
+    final unreadRows = sources
+        .where((source) => source.hasUnreadMessage == true)
+        .map((source) => source.originalROWID)
+        .whereType<int>()
+        .toSet();
+    final decision = await resolveLogicalMutation(
+      chat,
+      LogicalMutationRequest(mutationClass: LogicalMutationClass.markRead, unreadSourceChatRowIds: unreadRows),
+      force: true,
+    );
+    if (!decision.isQualified) return decision;
+    for (final rowId in decision.physicalTargetRowIds) {
+      final source = sources.firstWhere((candidate) => candidate.originalROWID == rowId);
+      await HttpSvc.chat.markRead(source.guid);
+      await source.toggleHasUnreadAsync(false, privateMark: false);
+      getChatState(source.guid)?.updateHasUnreadInternal(false);
+    }
+    _syncLogicalPresentationState();
+    return decision;
   }
 
   String presentationGuidFor(String guid) {

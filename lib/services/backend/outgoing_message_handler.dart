@@ -16,6 +16,7 @@ import 'package:get/get.dart' hide Response;
 import 'package:get_it/get_it.dart';
 import 'package:universal_io/io.dart';
 import 'package:bluebubbles/services/ui/chat/logical_conversation_view.dart';
+import 'package:bluebubbles/services/ui/chat/logical_conversation_route.dart';
 
 // ─── Singleton accessor ───────────────────────────────────────────────────────
 
@@ -109,8 +110,9 @@ class OutgoingMessageHandler {
       attachmentProgress.add(AttachmentUploadProgress(messageGuid, progress.obs));
     }
 
-    if (Get.isRegistered<MessagesService>(tag: chatGuid)) {
-      MessagesSvc(chatGuid).notifyAttachmentUploadProgress(messageGuid, messageGuid, progress);
+    final presentationGuid = ChatsSvc.presentationGuidFor(chatGuid);
+    if (Get.isRegistered<MessagesService>(tag: presentationGuid)) {
+      MessagesSvc(presentationGuid).notifyAttachmentUploadProgress(messageGuid, messageGuid, progress);
     }
   }
 
@@ -166,6 +168,9 @@ class OutgoingMessageHandler {
 
   final Queue<_OutgoingEntry> _queue = Queue();
   bool _isProcessing = false;
+  final LogicalExecutionAdmissionGate _logicalAdmissionGate = LogicalExecutionAdmissionGate();
+
+  String _presentationGuid(Chat chat) => ChatsSvc.presentationGuidFor(chat.guid);
 
   /// Reactive set of chat GUIDs that currently have one or more items waiting
   /// in the queue.  Widgets can wrap reads of this inside [Obx] to show or
@@ -183,12 +188,29 @@ class OutgoingMessageHandler {
   /// or an error is surfaced.
   Future<void> queue(OutgoingQueueItem item) async {
     if (LogicalConversationViewPolicy.isApprovedSourceRowId(item.chat.originalROWID)) {
-      final error = UnsupportedError('Logical conversation sending is disabled');
-      if (item.completer != null && !item.completer!.isCompleted) {
-        item.completer!.completeError(error);
+      _ensureTempGuid(item);
+      final request = _logicalMutationRequest(item);
+      // Execution admission always re-reads current server/source evidence.
+      // The UI preflight is informative only and can never authorize a send.
+      final decision = await ChatsSvc.resolveLogicalMutation(item.chat, request, force: true);
+      if (!decision.isSingleTarget) {
+        _failLogicalAdmission(item, decision.reason);
+        return;
       }
-      Logger.warn('Blocked outbound execution for read-only logical conversation', tag: _tag);
-      return;
+      final targetRowId = decision.physicalTargetRowIds.single;
+      final targetChats = ChatsSvc.logicalSourceChatsFor(
+        item.chat,
+      ).where((candidate) => candidate.originalROWID == targetRowId).toList();
+      if (targetChats.length != 1) {
+        _failLogicalAdmission(item, 'QUALIFIED_TARGET_BINDING_NOT_UNIQUE');
+        return;
+      }
+      final actionId = item.message.guid ?? '';
+      if (!_logicalAdmissionGate.admit(actionId, explicitRetry: item.isRetry)) {
+        _failLogicalAdmission(item, 'DUPLICATE_LOGICAL_ACTION_BLOCKED');
+        return;
+      }
+      item.chat = targetChats.single;
     }
 
     // Every item must have a stable temp GUID before prep/retry begins — see
@@ -217,6 +239,52 @@ class OutgoingMessageHandler {
 
     pendingChatGuids.add(item.chat.guid);
     unawaited(_processNext());
+  }
+
+  LogicalMutationRequest _logicalMutationRequest(OutgoingQueueItem item) {
+    Message? targetMessage;
+    late final LogicalMutationClass mutationClass;
+    if (item is OutgoingReaction) {
+      mutationClass = LogicalMutationClass.reaction;
+      targetMessage = item.selectedMessage;
+    } else if (item is OutgoingAttachment) {
+      mutationClass = LogicalMutationClass.attachment;
+      final targetGuid = item.logicalRouteTargetMessageGuid ?? item.message.threadOriginatorGuid;
+      if (targetGuid != null) targetMessage = Message.findOne(guid: targetGuid);
+    } else if (item.message.threadOriginatorGuid != null) {
+      mutationClass = LogicalMutationClass.reply;
+      targetMessage = Message.findOne(guid: item.message.threadOriginatorGuid);
+    } else if (item is OutgoingMessage || item is OutgoingMultipartMessage) {
+      mutationClass = LogicalMutationClass.newMessage;
+    } else {
+      mutationClass = LogicalMutationClass.unsupported;
+    }
+    final targetChat = targetMessage?.chat.target;
+    return LogicalMutationRequest(
+      mutationClass: mutationClass,
+      targetMessageGuid: targetMessage?.guid,
+      targetSourceChatRowId: targetChat?.originalROWID,
+      targetSourceChatGuid: targetChat?.guid,
+      persistedExecutionSourceChatRowId: item is OutgoingAttachment
+          ? item.logicalPersistedExecutionSourceChatRowId
+          : null,
+      persistedExecutionSourceChatGuid: item is OutgoingAttachment
+          ? item.logicalPersistedExecutionSourceChatGuid
+          : null,
+      isRetry: item.isRetry,
+    );
+  }
+
+  void _failLogicalAdmission(OutgoingQueueItem item, String reason) {
+    ChatsSvc.logicalRouteRuntimeStatus.value = LogicalRouteRuntimeStatus(
+      stage: LogicalRouteRuntimeStage.routeNotProven,
+      reason: reason,
+    );
+    final error = StateError('ROUTE_NOT_PROVEN: $reason');
+    if (item.completer != null && !item.completer!.isCompleted) {
+      item.completer!.completeError(error);
+    }
+    Logger.warn('Blocked logical mutation: $reason', tag: _tag);
   }
 
   /// Ensures [item.message] has a stable temp GUID before prep/retry begins.
@@ -349,6 +417,9 @@ class OutgoingMessageHandler {
         chat: item.chat,
         message: message,
         attachment: item.attachment,
+        logicalRouteTargetMessageGuid: item.logicalRouteTargetMessageGuid,
+        logicalPersistedExecutionSourceChatRowId: item.logicalPersistedExecutionSourceChatRowId,
+        logicalPersistedExecutionSourceChatGuid: item.logicalPersistedExecutionSourceChatGuid,
         isAudioMessage: item.isAudioMessage,
         isRetry: item.isRetry,
         completer: item.completer,
@@ -599,14 +670,15 @@ class OutgoingMessageHandler {
           existing ?? (await c.addMessage(message, clearNotificationsIfFromMe: clearNotificationsIfFromMe)).message;
       saved.add(hydrated);
 
-      final msgSvcRegistered = Get.isRegistered<MessagesService>(tag: c.guid);
+      final presentationGuid = _presentationGuid(c);
+      final msgSvcRegistered = Get.isRegistered<MessagesService>(tag: presentationGuid);
       if (r != null && message.associatedMessageGuid != null && msgSvcRegistered) {
         // Add temp reaction to UI immediately during prep so it appears without
         // waiting for the serial queue (fixes back-to-back text+reaction send delay).
-        final parentState = MessagesSvc(c.guid).getMessageStateIfExists(message.associatedMessageGuid!);
+        final parentState = MessagesSvc(presentationGuid).getMessageStateIfExists(message.associatedMessageGuid!);
         parentState?.addAssociatedMessageInternal(hydrated);
       } else if (message.associatedMessageGuid == null && msgSvcRegistered) {
-        await MessagesSvc(c.guid).addNewMessage(hydrated);
+        await MessagesSvc(presentationGuid).addNewMessage(hydrated);
       }
     }
     // Update ChatState immediately so the tile reflects the outgoing message(s)
@@ -700,11 +772,12 @@ class OutgoingMessageHandler {
     // The DB write goes through the GlobalIsolate, so the main-isolate OB watch
     // subscription won't fire for it.  Explicitly push the message into the view
     // using the Store-hydrated object so _handleNewMessage can load dbAttachments.
-    if (Get.isRegistered<MessagesService>(tag: c.guid)) {
-      await MessagesSvc(c.guid).addNewMessage(savedMessage);
+    final presentationGuid = _presentationGuid(c);
+    if (Get.isRegistered<MessagesService>(tag: presentationGuid)) {
+      await MessagesSvc(presentationGuid).addNewMessage(savedMessage);
       // Register upload-in-progress state.  Must come after addNewMessage so the
       // MessageState already exists.
-      MessagesSvc(c.guid).notifyAttachmentUploadStarted(savedMessage, attachment);
+      MessagesSvc(presentationGuid).notifyAttachmentUploadStarted(savedMessage, attachment);
     }
     // Update ChatState immediately so the tile reflects the outgoing attachment
     // before the queue dispatches the HTTP call.
@@ -779,7 +852,7 @@ class OutgoingMessageHandler {
             ? (confirmed) async {
                 if (confirmed.associatedMessageGuid != null) {
                   final parentState = maybeFindMessagesSvc(
-                    c.guid,
+                    _presentationGuid(c),
                   )?.getMessageStateIfExists(confirmed.associatedMessageGuid!);
                   if (parentState != null) {
                     parentState.updateAssociatedMessageInternal(confirmed, tempGuid: tempGuid);
@@ -806,7 +879,7 @@ class OutgoingMessageHandler {
         // update the parent so the error badge propagates to the UI.
         onExtra: r != null && m.associatedMessageGuid != null
             ? (errorMsg) async {
-                maybeFindMessagesSvc(c.guid)
+                maybeFindMessagesSvc(_presentationGuid(c))
                     ?.getMessageStateIfExists(m.associatedMessageGuid!)
                     ?.updateAssociatedMessageInternal(errorMsg, tempGuid: tempGuid);
               }
@@ -919,9 +992,10 @@ class OutgoingMessageHandler {
             // The state key is intentionally left at the temp attachment GUID
             // so the Obx can still find it; _syncAttachmentStates promotes it
             // to the real key when updateMessage delivers the updated struct.
-            if (Get.isRegistered<MessagesService>(tag: c.guid)) {
-              MessagesSvc(c.guid).notifyAttachmentSendComplete(tempGuid, newMessage.guid!, tempGuid, a);
-              MessagesSvc(c.guid).updateMessage(newMessage);
+            final presentationGuid = _presentationGuid(c);
+            if (Get.isRegistered<MessagesService>(tag: presentationGuid)) {
+              MessagesSvc(presentationGuid).notifyAttachmentSendComplete(tempGuid, newMessage.guid!, tempGuid, a);
+              MessagesSvc(presentationGuid).updateMessage(newMessage);
             }
           } catch (e, st) {
             Logger.warn('Failed to replace attachment ${a.guid}', error: e, trace: st, tag: _tag);
@@ -941,8 +1015,9 @@ class OutgoingMessageHandler {
           // updateMessage (inside _finalizeOutgoingFailure) has already
           // re-keyed MessageState to errorMsg.guid, so notifyAttachmentTransferError
           // can use that key directly.
-          if (Get.isRegistered<MessagesService>(tag: c.guid)) {
-            MessagesSvc(c.guid).notifyAttachmentTransferError(errorMsg.guid!, attachment.guid!);
+          final presentationGuid = _presentationGuid(c);
+          if (Get.isRegistered<MessagesService>(tag: presentationGuid)) {
+            MessagesSvc(presentationGuid).notifyAttachmentTransferError(errorMsg.guid!, attachment.guid!);
           }
           attachmentProgress.removeWhere((e) => e.guid == tempGuid);
         },
@@ -999,7 +1074,7 @@ class OutgoingMessageHandler {
     }
     if (error != null) {
       m = handleSendError(error, m);
-      if (!LifecycleSvc.isAlive || !(ChatsSvc.getChatController(c.guid)?.isAlive.value ?? false)) {
+      if (!LifecycleSvc.isAlive || !(ChatsSvc.getChatController(_presentationGuid(c))?.isAlive.value ?? false)) {
         await NotificationsSvc.createFailedToSend(c);
       }
     }
@@ -1007,8 +1082,9 @@ class OutgoingMessageHandler {
     try {
       // Replace may fail, meaning it's already been replaced (likely by a socket event)
       final errorMsg = await Message.replaceMessage(tempGuid, m);
-      if (Get.isRegistered<MessagesService>(tag: c.guid)) {
-        MessagesSvc(c.guid).updateMessage(errorMsg, oldGuid: tempGuid);
+      final presentationGuid = _presentationGuid(c);
+      if (Get.isRegistered<MessagesService>(tag: presentationGuid)) {
+        MessagesSvc(presentationGuid).updateMessage(errorMsg, oldGuid: tempGuid);
       }
 
       // Only update latest message if the failed message is the current latest message.
@@ -1039,6 +1115,7 @@ class OutgoingMessageHandler {
   ///   the real GUID.
   Future<void> _matchMessageWithExisting(Chat chat, String existingGuid, Message replacement) async {
     final alreadyPresent = Message.findOne(guid: replacement.guid);
+    final presentationGuid = _presentationGuid(chat);
 
     // Track the DB-hydrated confirmed message so we can update ChatState after the swap.
     late Message _confirmedMessage;
@@ -1066,8 +1143,8 @@ class OutgoingMessageHandler {
         final stale = Message.findOne(guid: existingGuid);
         if (stale != null) {
           Message.delete(stale.guid!);
-          if (Get.isRegistered<MessagesService>(tag: chat.guid)) {
-            MessagesSvc(chat.guid).updateMessage(replacement, oldGuid: existingGuid);
+          if (Get.isRegistered<MessagesService>(tag: presentationGuid)) {
+            MessagesSvc(presentationGuid).updateMessage(replacement, oldGuid: existingGuid);
           }
         }
       } else {}
@@ -1077,8 +1154,8 @@ class OutgoingMessageHandler {
         // Capture the return value — it is fetched from the DB and has a valid id.
         final saved = await Message.replaceMessage(existingGuid, replacement);
         _confirmedMessage = saved;
-        if (Get.isRegistered<MessagesService>(tag: chat.guid)) {
-          MessagesSvc(chat.guid).updateMessage(saved, oldGuid: existingGuid);
+        if (Get.isRegistered<MessagesService>(tag: presentationGuid)) {
+          MessagesSvc(presentationGuid).updateMessage(saved, oldGuid: existingGuid);
         }
       } catch (ex, st) {
         // If the temp message isn't found in the isolate store, it was never saved.
@@ -1095,9 +1172,9 @@ class OutgoingMessageHandler {
         // This handles the case where the temp message was never saved to the main thread's store.
         replacement.save(); // sets replacement.id via Database.messages.put()
         _confirmedMessage = replacement;
-        if (Get.isRegistered<MessagesService>(tag: chat.guid)) {
+        if (Get.isRegistered<MessagesService>(tag: presentationGuid)) {
           // Update the UI, treating this as transitioning from temp to real GUID
-          MessagesSvc(chat.guid).updateMessage(replacement, oldGuid: existingGuid);
+          MessagesSvc(presentationGuid).updateMessage(replacement, oldGuid: existingGuid);
         }
       }
     }

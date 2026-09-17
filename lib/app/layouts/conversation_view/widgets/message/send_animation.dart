@@ -153,7 +153,9 @@ class _SendAnimationState extends CustomState<SendAnimation, SendData, Conversat
         PlayerController controller = PlayerController();
         controller
             .preparePlayer(
-                path: SettingsSvc.settings.sendSoundPath.value!, volume: SettingsSvc.settings.soundVolume.value / 100)
+              path: SettingsSvc.settings.sendSoundPath.value!,
+              volume: SettingsSvc.settings.soundVolume.value / 100,
+            )
             .then((_) => controller.startPlayer());
       }
     }
@@ -191,6 +193,7 @@ class _SendAnimationState extends CustomState<SendAnimation, SendData, Conversat
           chat: controller.chat,
           message: message,
           attachment: attachment,
+          logicalRouteTargetMessageGuid: data.replyGuid,
           isAudioMessage: data.isAudioMessage,
         ),
       );
@@ -237,20 +240,13 @@ class _SendAnimationState extends CustomState<SendAnimation, SendData, Conversat
                   : newText.map((e) {
                       if (e is Mentionable) {
                         final run = Run(
-                            range: [currentPos, e.toString().length],
-                            attributes: Attributes(
-                              mention: e.address,
-                              messagePart: 0,
-                            ));
+                          range: [currentPos, e.toString().length],
+                          attributes: Attributes(mention: e.address, messagePart: 0),
+                        );
                         currentPos += e.toString().length;
                         return run;
                       } else {
-                        final run = Run(
-                          range: [currentPos, e.length],
-                          attributes: Attributes(
-                            messagePart: 0,
-                          ),
-                        );
+                        final run = Run(range: [currentPos, e.length], attributes: Attributes(messagePart: 0));
                         currentPos += e.toString().length;
                         return run;
                       }
@@ -260,20 +256,11 @@ class _SendAnimationState extends CustomState<SendAnimation, SendData, Conversat
       );
       OutgoingMsgHandler.queue(
         (_message.attributedBody.isNotEmpty)
-            ? OutgoingMultipartMessage(
-                chat: controller.chat,
-                message: _message,
-              )
-            : OutgoingMessage(
-                chat: controller.chat,
-                message: _message,
-              ),
+            ? OutgoingMultipartMessage(chat: controller.chat, message: _message)
+            : OutgoingMessage(chat: controller.chat, message: _message),
       );
       setState(() {
-        tween = Tween<double>(
-          begin: 0.9,
-          end: 0,
-        );
+        tween = Tween<double>(begin: 0.9, end: 0);
         control = Control.play;
         message = _message;
       });
@@ -318,41 +305,46 @@ class _SendAnimationState extends CustomState<SendAnimation, SendData, Conversat
               scale: (1 - value) < .5 ? lerpDouble(1.1, .9, (1 - value) / .5) : lerpDouble(.9, 1, (.5 - value) / .5),
               alignment: Alignment.centerRight,
               child: ClipPath(
-                clipper: TailClipper(
-                  isFromMe: true,
-                  showTail: true,
-                  connectLower: false,
-                  connectUpper: false,
-                ),
+                clipper: TailClipper(isFromMe: true, showTail: true, connectLower: false, connectUpper: false),
                 child: BackdropFilter(
                   filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
                   child: Container(
-                      constraints: BoxConstraints(
-                        maxWidth: max(messageBoxSize * exp, typicalWidth),
-                        minWidth: messageBoxSize * exp,
-                        minHeight: 36,
+                    constraints: BoxConstraints(
+                      maxWidth: max(messageBoxSize * exp, typicalWidth),
+                      minWidth: messageBoxSize * exp,
+                      minHeight: 36,
+                    ),
+                    color: !message!.isBigEmoji ? context.theme.colorScheme.primary.darkenAmount(0.2) : null,
+                    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 15).add(
+                      EdgeInsets.only(
+                        left: message!.isFromMe! || message!.isBigEmoji ? 0 : 10,
+                        right: message!.isFromMe! && !message!.isBigEmoji ? 10 : 0,
                       ),
-                      color: !message!.isBigEmoji ? context.theme.colorScheme.primary.darkenAmount(0.2) : null,
-                      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 15).add(EdgeInsets.only(
-                          left: message!.isFromMe! || message!.isBigEmoji ? 0 : 10,
-                          right: message!.isFromMe! && !message!.isBigEmoji ? 10 : 0)),
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        widthFactor: 1,
-                        child: Padding(
-                          padding: message!.fullText.length == 1
-                              ? const EdgeInsets.only(left: 3, right: 3)
-                              : EdgeInsets.zero,
-                          child: RichText(
-                            text: TextSpan(
-                              children: buildMessageSpans(context,
-                                  MessagePart(part: 0, text: message!.text, subject: message!.subject), message!,
-                                  colorOverride: Color.lerp(context.theme.colorScheme.onSurfaceVariant,
-                                      context.theme.colorScheme.onPrimary, 1 - value)),
+                    ),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      widthFactor: 1,
+                      child: Padding(
+                        padding: message!.fullText.length == 1
+                            ? const EdgeInsets.only(left: 3, right: 3)
+                            : EdgeInsets.zero,
+                        child: RichText(
+                          text: TextSpan(
+                            children: buildMessageSpans(
+                              context,
+                              MessagePart(part: 0, text: message!.text, subject: message!.subject),
+                              message!,
+                              colorOverride: Color.lerp(
+                                context.theme.colorScheme.onSurfaceVariant,
+                                context.theme.colorScheme.onPrimary,
+                                1 - value,
+                              ),
                             ),
                           ),
                         ),
-                      )),
+                      ),
+                    ),
+                  ),
                 ),
               ),
             );

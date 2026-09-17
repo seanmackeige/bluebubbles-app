@@ -15,12 +15,7 @@ abstract class OutgoingQueueItem extends QueueItem {
   Chat chat;
   Message message;
 
-  OutgoingQueueItem({
-    required super.type,
-    super.completer,
-    required this.chat,
-    required this.message,
-  });
+  OutgoingQueueItem({required super.type, super.completer, required this.chat, required this.message});
 
   /// Whether this item is a user-initiated retry of a previously-failed send.
   /// Retries reuse the message's existing GUID/DB row rather than generating
@@ -73,6 +68,9 @@ class OutgoingReaction extends OutgoingQueueItem {
 class OutgoingAttachment extends OutgoingQueueItem {
   Attachment attachment;
   bool isAudioMessage;
+  final String? logicalRouteTargetMessageGuid;
+  final int? logicalPersistedExecutionSourceChatRowId;
+  final String? logicalPersistedExecutionSourceChatGuid;
   @override
   bool isRetry;
 
@@ -81,6 +79,9 @@ class OutgoingAttachment extends OutgoingQueueItem {
     required super.chat,
     required super.message,
     required this.attachment,
+    this.logicalRouteTargetMessageGuid,
+    this.logicalPersistedExecutionSourceChatRowId,
+    this.logicalPersistedExecutionSourceChatGuid,
     this.isAudioMessage = false,
     this.isRetry = false,
   }) : super(type: QueueType.sendAttachment);

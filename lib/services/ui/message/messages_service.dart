@@ -12,6 +12,7 @@ import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:collection/collection.dart';
 import 'package:dio/dio.dart';
 import 'package:bluebubbles/models/models.dart' show AttachmentUploadProgress, MessageReceiptInfo;
+import 'package:bluebubbles/services/ui/chat/logical_conversation_route.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart' hide Response;
@@ -39,6 +40,7 @@ String? lastReloadedChat() =>
 
 class MessagesService extends GetxController {
   static final Map<String, Size> cachedBubbleSizes = {};
+  bool _logicalRetryInFlight = false;
   late Chat chat;
   StreamSubscription? _webMessageSub;
   final ChatMessages struct = ChatMessages();
@@ -1112,7 +1114,58 @@ class MessagesService extends GetxController {
 
   /// Generates new temp GUID, clears error state, and updates both DB and MessageState
   Future<void> retryFailedMessage(Message message, {String? oldGuid}) async {
-    if (ChatsSvc.isApprovedLogicalSource(chat)) return;
+    final guardedLogicalRetry = ChatsSvc.isApprovedLogicalSource(chat);
+    if (guardedLogicalRetry && _logicalRetryInFlight) return;
+    if (guardedLogicalRetry) _logicalRetryInFlight = true;
+    var executionChat = chat;
+    final persistedExecutionChat = message.chat.target;
+    if (guardedLogicalRetry) {
+      final targetGuid = message.threadOriginatorGuid;
+      final targetMessage = targetGuid == null ? null : Message.findOne(guid: targetGuid);
+      final targetChat = targetMessage?.chat.target;
+      final mutationClass = message.dbAttachments.isNotEmpty
+          ? LogicalMutationClass.attachment
+          : targetGuid != null
+          ? LogicalMutationClass.reply
+          : LogicalMutationClass.newMessage;
+      final decision = await ChatsSvc.resolveLogicalMutation(
+        chat,
+        LogicalMutationRequest(
+          mutationClass: mutationClass,
+          targetMessageGuid: targetMessage?.guid,
+          targetSourceChatRowId: targetChat?.originalROWID,
+          targetSourceChatGuid: targetChat?.guid,
+          persistedExecutionSourceChatRowId: mutationClass == LogicalMutationClass.attachment && targetGuid == null
+              ? persistedExecutionChat?.originalROWID
+              : null,
+          persistedExecutionSourceChatGuid: mutationClass == LogicalMutationClass.attachment && targetGuid == null
+              ? persistedExecutionChat?.guid
+              : null,
+          isRetry: true,
+        ),
+        force: true,
+      );
+      if (!decision.isSingleTarget) {
+        ChatsSvc.logicalRouteRuntimeStatus.value = LogicalRouteRuntimeStatus(
+          stage: LogicalRouteRuntimeStage.routeNotProven,
+          reason: decision.reason,
+        );
+        _logicalRetryInFlight = false;
+        return;
+      }
+      final matches = ChatsSvc.logicalSourceChatsFor(
+        chat,
+      ).where((source) => source.originalROWID == decision.physicalTargetRowIds.single).toList();
+      if (matches.length != 1) {
+        ChatsSvc.logicalRouteRuntimeStatus.value = const LogicalRouteRuntimeStatus(
+          stage: LogicalRouteRuntimeStage.routeNotProven,
+          reason: 'QUALIFIED_TARGET_BINDING_NOT_UNIQUE',
+        );
+        _logicalRetryInFlight = false;
+        return;
+      }
+      executionChat = matches.single;
+    }
     final guidToDelete = oldGuid ?? message.guid!;
 
     // Generate new temp GUID for retry
@@ -1128,7 +1181,7 @@ class MessagesService extends GetxController {
     // Delete old errored message from DB and save with new temp GUID
     await Message.delete(guidToDelete);
     message.id = null;
-    message.save(chat: chat);
+    message.save(chat: executionChat);
 
     // Update struct using the proper map API (struct.messages returns a copy, not the backing map)
     struct.removeMessage(guidToDelete);
@@ -1231,21 +1284,24 @@ class MessagesService extends GetxController {
     if (message.dbAttachments.isNotEmpty) {
       OutgoingMsgHandler.queue(
         OutgoingAttachment(
-          chat: chat,
+          chat: executionChat,
           message: message,
           attachment: message.dbAttachments.first,
+          logicalPersistedExecutionSourceChatRowId: executionChat.originalROWID,
+          logicalPersistedExecutionSourceChatGuid: executionChat.guid,
           isAudioMessage: message.itemType == 5,
           isRetry: true,
         ),
       );
     } else {
-      OutgoingMsgHandler.queue(OutgoingMessage(chat: chat, message: message, isRetry: true));
+      OutgoingMsgHandler.queue(OutgoingMessage(chat: executionChat, message: message, isRetry: true));
     }
 
     // The retried message always gets dateCreated = now, making it the newest
     // message in the chat regardless of what was previously the latest.
     // Always update the chat's latest message, subtitle, and sort position.
     ChatsSvc.updateChatLatestMessage(tag, message);
+    if (guardedLogicalRetry) _logicalRetryInFlight = false;
   }
 
   /// Delete a message from DB, struct, and MessageState.

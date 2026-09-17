@@ -374,9 +374,13 @@ class IncomingMessageHandler {
       // when this chat is the one currently open.  Clear it on the in-memory
       // object before propagating to the UI so the badge never increments for
       // the active chat, then persist the read state asynchronously.
-      if (ChatsSvc.isChatActive(c.guid) && !ChatsSvc.isApprovedLogicalSource(c)) {
-        c.hasUnreadMessage = false;
-        unawaited(ChatsSvc.setChatHasUnread(c, false, force: true));
+      if (ChatsSvc.isChatActive(c.guid)) {
+        if (ChatsSvc.isLogicalConversation(c)) {
+          unawaited(ChatsSvc.markLogicalConversationRead(c));
+        } else {
+          c.hasUnreadMessage = false;
+          unawaited(ChatsSvc.setChatHasUnread(c, false, force: true));
+        }
       }
 
       // The latest message is linked on the guarded sync path (Chat.addMessage,

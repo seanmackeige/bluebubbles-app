@@ -28,7 +28,32 @@ class ManualMarkState extends State<ManualMark> with ThemeHelpers {
 
   @override
   Widget build(BuildContext context) {
-    if (ChatsSvc.isLogicalConversation(chat)) return const SizedBox.shrink();
+    if (ChatsSvc.isLogicalConversation(chat)) {
+      return Obx(() {
+        final unread = ChatsSvc.logicalSourceChatsFor(chat).any(
+          (source) => ChatsSvc.getChatState(source.guid)?.hasUnreadMessage.value ?? source.hasUnreadMessage == true,
+        );
+        if (!unread) return const SizedBox.shrink();
+        return IconButton(
+          icon: Icon(
+            marking
+                ? (iOS ? CupertinoIcons.arrow_2_circlepath : Icons.sync)
+                : (iOS ? CupertinoIcons.app_badge : Icons.mark_chat_read_outlined),
+          ),
+          tooltip: marking ? null : 'Mark logical conversation read',
+          onPressed: marking
+              ? null
+              : () async {
+                  setState(() => marking = true);
+                  final decision = await ChatsSvc.markLogicalConversationRead(chat);
+                  if (!decision.isQualified && context.mounted) {
+                    showSnackbar('ROUTE_NOT_PROVEN', decision.reason);
+                  }
+                  if (mounted) setState(() => marking = false);
+                },
+        );
+      });
+    }
     final manualMark =
         SettingsSvc.settings.enablePrivateAPI.value &&
         SettingsSvc.settings.privateManualMarkAsRead.value &&
@@ -113,6 +138,7 @@ class ManualMarkState extends State<ManualMark> with ThemeHelpers {
                 }
                 widget.controller.inSelectMode.value = false;
                 widget.controller.selected.clear();
+                if (!context.mounted) return;
                 NavigationSvc.pushAndRemoveUntil(
                   context,
                   NewChatCreator(initialText: text, initialAttachments: attachments),
