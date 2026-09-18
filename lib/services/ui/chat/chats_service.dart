@@ -37,6 +37,30 @@ class _LogicalRouteMessageSnapshot {
   final bool complete;
 }
 
+class _LogicalRouteChatScopeSnapshot {
+  const _LogicalRouteChatScopeSnapshot({required this.chats, required this.complete, required this.fingerprint});
+
+  final List<Map<String, dynamic>> chats;
+  final bool complete;
+  final String fingerprint;
+}
+
+class _LogicalChatGenerationProperties {
+  const _LogicalChatGenerationProperties({
+    required this.complete,
+    required this.lastKnownHybridState,
+    required this.shouldForceToSms,
+    required this.lastSeenMessageGuid,
+    required this.groupPhotoGuid,
+  });
+
+  final bool complete;
+  final bool? lastKnownHybridState;
+  final bool? shouldForceToSms;
+  final String? lastSeenMessageGuid;
+  final String? groupPhotoGuid;
+}
+
 class ChatsService {
   static const batchSize = 100;
   int currentCount = 0;
@@ -261,6 +285,59 @@ class ChatsService {
     return _LogicalRouteMessageSnapshot(messages: messages, complete: stable);
   }
 
+  Future<_LogicalRouteChatScopeSnapshot> _collectLogicalRouteChatScope() async {
+    const pageSize = 1000;
+    const maxChats = 10000;
+    final chats = <Map<String, dynamic>>[];
+    int? expectedTotal;
+
+    for (var offset = 0; offset < maxChats; offset += pageSize) {
+      final response = await HttpSvc.chat.query(withQuery: const ['participants'], offset: offset, limit: pageSize);
+      final rawPage = response.data['data'];
+      final rawMetadata = response.data['metadata'];
+      if (rawPage is! List || rawMetadata is! Map) {
+        return const _LogicalRouteChatScopeSnapshot(chats: [], complete: false, fingerprint: '');
+      }
+      final page = rawPage.whereType<Map>().map((item) => item.cast<String, dynamic>()).toList();
+      if (page.length != rawPage.length) {
+        return const _LogicalRouteChatScopeSnapshot(chats: [], complete: false, fingerprint: '');
+      }
+      final metadata = rawMetadata.cast<String, dynamic>();
+      final total = (metadata['total'] as num?)?.toInt();
+      final count = (metadata['count'] as num?)?.toInt();
+      if (total == null || total < 0 || total > maxChats || count != page.length) {
+        return const _LogicalRouteChatScopeSnapshot(chats: [], complete: false, fingerprint: '');
+      }
+      expectedTotal ??= total;
+      if (expectedTotal != total) {
+        return const _LogicalRouteChatScopeSnapshot(chats: [], complete: false, fingerprint: '');
+      }
+      chats.addAll(page);
+      if (chats.length >= total) break;
+      if (page.length != pageSize) {
+        return const _LogicalRouteChatScopeSnapshot(chats: [], complete: false, fingerprint: '');
+      }
+    }
+
+    if (expectedTotal == null || chats.length != expectedTotal) {
+      return const _LogicalRouteChatScopeSnapshot(chats: [], complete: false, fingerprint: '');
+    }
+    final rows = <int>{};
+    final guids = <String>{};
+    for (final chat in chats) {
+      final rowId = (chat['originalROWID'] as num?)?.toInt();
+      final guid = chat['guid']?.toString();
+      if (rowId == null || rowId <= 0 || guid == null || guid.isEmpty || !rows.add(rowId) || !guids.add(guid)) {
+        return const _LogicalRouteChatScopeSnapshot(chats: [], complete: false, fingerprint: '');
+      }
+    }
+    return _LogicalRouteChatScopeSnapshot(
+      chats: chats,
+      complete: true,
+      fingerprint: _logicalRouteChatScopeFingerprint(chats),
+    );
+  }
+
   Future<LogicalRouteEvidence> _collectLogicalRouteEvidence(Chat chat) async {
     final definition = _logicalDefinition;
     final sources = logicalSourceChatsFor(chat)
@@ -278,11 +355,15 @@ class ChatsService {
         accountSnapshotAfterSha256: '',
         activeSelfAlias: const LogicalAddressEvidence(address: ''),
         vettedSelfAliases: const [],
+        executionGenerationCertificate: null,
+        candidateScopeSnapshotComplete: false,
+        unadmittedPotentialSourceChatGuids: const {},
         candidates: const [],
       );
     }
 
     final accountBeforeResponse = await HttpSvc.icloud.getAccountInfo();
+    final candidateScopeBefore = await _collectLogicalRouteChatScope();
     final requests = <Future<dynamic>>[HttpSvc.server.info(force: true)];
     final messageSnapshots = <Future<_LogicalRouteMessageSnapshot>>[];
     for (final source in sources) {
@@ -291,6 +372,10 @@ class ChatsService {
     }
     final responses = await Future.wait(requests);
     final snapshots = await Future.wait(messageSnapshots);
+    final chatVerificationResponses = await Future.wait(
+      sources.map((source) => HttpSvc.chat.fetchOne(source.guid, withQuery: 'participants')),
+    );
+    final candidateScopeAfter = await _collectLogicalRouteChatScope();
     final accountAfterResponse = await HttpSvc.icloud.getAccountInfo();
     final serverData = Map<String, dynamic>.from((responses.first.data['data'] as Map).cast<String, dynamic>());
     final accountBefore = _logicalAccountProjection(accountBeforeResponse.data['data']);
@@ -299,20 +384,47 @@ class ChatsService {
     final candidates = <LogicalRouteCandidateEvidence>[];
     for (var index = 0; index < sources.length; index++) {
       final chatData = Map<String, dynamic>.from((responses[1 + index].data['data'] as Map).cast<String, dynamic>());
+      final verificationChatData = Map<String, dynamic>.from(
+        (chatVerificationResponses[index].data['data'] as Map).cast<String, dynamic>(),
+      );
       final snapshot = snapshots[index];
       final rawMessages = snapshot.messages;
       final successfulOutbounds = <LogicalSuccessfulOutboundEvidence>[];
+      final messages = <LogicalRouteMessageEvidence>[];
       for (final message in rawMessages) {
         final rowId = (message['originalROWID'] as num?)?.toInt();
         final guid = message['guid']?.toString();
         final createdAt = (message['dateCreated'] as num?)?.toInt();
+        final error = (message['error'] as num?)?.toInt();
+        final itemType = (message['itemType'] as num?)?.toInt();
+        final isFromMe = message['isFromMe'];
+        final associatedMessageGuid = message['associatedMessageGuid']?.toString();
+        if (rowId == null ||
+            rowId <= 0 ||
+            guid == null ||
+            guid.isEmpty ||
+            createdAt == null ||
+            createdAt <= 0 ||
+            error == null ||
+            itemType == null ||
+            isFromMe is! bool) {
+          continue;
+        }
+        messages.add(
+          LogicalRouteMessageEvidence(
+            messageGuid: guid,
+            messageRowId: rowId,
+            createdAtEpoch: createdAt,
+            isFromMe: isFromMe,
+            error: error,
+            itemType: itemType,
+            associatedMessageGuid: associatedMessageGuid,
+          ),
+        );
         if (message['isFromMe'] == true &&
-            (message['error'] as num?)?.toInt() == 0 &&
-            rowId != null &&
-            guid != null &&
-            guid.isNotEmpty &&
-            createdAt != null &&
-            createdAt > 0) {
+            error == 0 &&
+            itemType == 0 &&
+            (associatedMessageGuid == null || associatedMessageGuid.isEmpty)) {
           successfulOutbounds.add(
             LogicalSuccessfulOutboundEvidence(messageGuid: guid, messageRowId: rowId, createdAtEpoch: createdAt),
           );
@@ -328,19 +440,43 @@ class ChatsService {
           }
         }
       }
+      final properties = _logicalChatGenerationProperties(chatData);
+      final verificationProperties = _logicalChatGenerationProperties(verificationChatData);
       candidates.add(
         LogicalRouteCandidateEvidence(
           sourceChatRowId: (chatData['originalROWID'] as num?)?.toInt() ?? -1,
           sourceChatGuid: chatData['guid']?.toString() ?? '',
+          sourceService: _logicalChatService(chatData['guid']),
           chatIdentifier: chatData['chatIdentifier']?.toString() ?? '',
           style: (chatData['style'] as num?)?.toInt() ?? -1,
           lastAddressedHandle: LogicalAddressEvidence(address: chatData['lastAddressedHandle']?.toString() ?? ''),
           participants: participants,
-          messageSnapshotComplete: snapshot.complete,
+          chatSnapshotComplete:
+              properties.complete &&
+              verificationProperties.complete &&
+              _logicalChatRouteFingerprint(chatData) == _logicalChatRouteFingerprint(verificationChatData),
+          messageSnapshotComplete: snapshot.complete && messages.length == rawMessages.length,
+          lastKnownHybridState: properties.lastKnownHybridState,
+          shouldForceToSms: properties.shouldForceToSms,
+          lastSeenMessageGuid: properties.lastSeenMessageGuid,
+          groupPhotoGuid: properties.groupPhotoGuid,
+          messages: messages,
           successfulOutbounds: successfulOutbounds,
         ),
       );
     }
+
+    final candidateScopeSnapshotComplete =
+        candidateScopeBefore.complete &&
+        candidateScopeAfter.complete &&
+        candidateScopeBefore.fingerprint == candidateScopeAfter.fingerprint;
+    final unadmittedPotentialSources = candidateScopeSnapshotComplete
+        ? _logicalUnadmittedPotentialSources(
+            candidateScopeAfter.chats,
+            candidates,
+            accountBefore.vettedAliases.map((alias) => LogicalAddressEvidence(address: alias)).toList(),
+          )
+        : const <int, String>{};
 
     return LogicalRouteEvidence(
       logicalId: definition.id,
@@ -361,9 +497,174 @@ class ChatsService {
       accountSnapshotAfterSha256: accountAfter.fingerprint,
       activeSelfAlias: LogicalAddressEvidence(address: accountBefore.activeAlias),
       vettedSelfAliases: accountBefore.vettedAliases.map((alias) => LogicalAddressEvidence(address: alias)).toList(),
+      executionGenerationCertificate: LogicalConversationOutboundRoutePolicy.comcastNodeUpdatesGeneration,
+      candidateScopeSnapshotComplete: candidateScopeSnapshotComplete,
+      unadmittedPotentialSourceChatGuids: unadmittedPotentialSources,
       candidates: candidates,
     );
   }
+
+  String _logicalChatService(dynamic rawGuid) {
+    if (rawGuid is! String || rawGuid.isEmpty) return '';
+    final separator = rawGuid.indexOf(';');
+    return separator <= 0 ? '' : rawGuid.substring(0, separator);
+  }
+
+  _LogicalChatGenerationProperties _logicalChatGenerationProperties(Map<String, dynamic> chatData) {
+    final rawProperties = chatData['properties'];
+    if (rawProperties is! List || rawProperties.length != 1 || rawProperties.single is! Map) {
+      return const _LogicalChatGenerationProperties(
+        complete: false,
+        lastKnownHybridState: null,
+        shouldForceToSms: null,
+        lastSeenMessageGuid: null,
+        groupPhotoGuid: null,
+      );
+    }
+    final properties = (rawProperties.single as Map).cast<String, dynamic>();
+    final rawHybrid = properties['lastKnownHybridState'];
+    final rawForceSms = properties['shouldForceToSMS'];
+    final rawLastSeen = properties['lastSeenMessageGuid'];
+    final rawGroupPhoto = properties['groupPhotoGuid'];
+    final valid =
+        (rawHybrid == null || rawHybrid is bool) &&
+        rawForceSms is bool &&
+        rawLastSeen is String &&
+        rawLastSeen.isNotEmpty &&
+        (rawGroupPhoto == null || (rawGroupPhoto is String && rawGroupPhoto.isNotEmpty));
+    return _LogicalChatGenerationProperties(
+      complete: valid,
+      lastKnownHybridState: rawHybrid is bool ? rawHybrid : null,
+      shouldForceToSms: rawForceSms is bool ? rawForceSms : null,
+      lastSeenMessageGuid: rawLastSeen is String && rawLastSeen.isNotEmpty ? rawLastSeen : null,
+      groupPhotoGuid: rawGroupPhoto is String && rawGroupPhoto.isNotEmpty ? rawGroupPhoto : null,
+    );
+  }
+
+  String _logicalChatRouteFingerprint(Map<String, dynamic> chatData) {
+    final properties = _logicalChatGenerationProperties(chatData);
+    final participants = <Map<String, String?>>[];
+    final rawParticipants = chatData['participants'];
+    if (rawParticipants is List) {
+      for (final raw in rawParticipants.whereType<Map>()) {
+        participants.add({
+          'address': raw['address']?.toString(),
+          'country': raw['country']?.toString(),
+          'service': raw['service']?.toString(),
+        });
+      }
+    }
+    participants.sort((left, right) => jsonEncode(left).compareTo(jsonEncode(right)));
+    final projection = {
+      'originalROWID': (chatData['originalROWID'] as num?)?.toInt(),
+      'guid': chatData['guid']?.toString(),
+      'chatIdentifier': chatData['chatIdentifier']?.toString(),
+      'style': (chatData['style'] as num?)?.toInt(),
+      'lastAddressedHandle': chatData['lastAddressedHandle']?.toString(),
+      'participants': participants,
+      'propertiesComplete': properties.complete,
+      'lastKnownHybridState': properties.lastKnownHybridState,
+      'shouldForceToSms': properties.shouldForceToSms,
+      'lastSeenMessageGuid': properties.lastSeenMessageGuid,
+      'groupPhotoGuid': properties.groupPhotoGuid,
+    };
+    return sha256.convert(utf8.encode(jsonEncode(projection))).toString();
+  }
+
+  String _logicalRouteChatScopeFingerprint(List<Map<String, dynamic>> chats) {
+    final projection = chats.map((chat) {
+      final properties = _logicalChatGenerationProperties(chat);
+      final participants = <Map<String, String?>>[];
+      final rawParticipants = chat['participants'];
+      if (rawParticipants is List) {
+        for (final raw in rawParticipants.whereType<Map>()) {
+          participants.add({
+            'address': raw['address']?.toString(),
+            'country': raw['country']?.toString(),
+            'service': raw['service']?.toString(),
+          });
+        }
+      }
+      participants.sort((left, right) => jsonEncode(left).compareTo(jsonEncode(right)));
+      return {
+        'originalROWID': (chat['originalROWID'] as num?)?.toInt(),
+        'guid': chat['guid']?.toString(),
+        'style': (chat['style'] as num?)?.toInt(),
+        'groupId': chat['groupId']?.toString(),
+        'groupPhotoGuid': properties.groupPhotoGuid,
+        'participants': participants,
+      };
+    }).toList()..sort((left, right) => (left['originalROWID'] as int).compareTo(right['originalROWID'] as int));
+    return sha256.convert(utf8.encode(jsonEncode(projection))).toString();
+  }
+
+  Map<int, String> _logicalUnadmittedPotentialSources(
+    List<Map<String, dynamic>> scope,
+    List<LogicalRouteCandidateEvidence> certified,
+    List<LogicalAddressEvidence> vettedAliases,
+  ) {
+    final certifiedRows = certified.map((candidate) => candidate.sourceChatRowId).toSet();
+    final vetted = vettedAliases
+        .map(LogicalConversationOutboundRoutePolicy.normalizeRoutableAddress)
+        .whereType<String>()
+        .toSet();
+    final acceptedExternal = _logicalExternalParticipants(certified.first.participants, vetted);
+    if (acceptedExternal == null) return const {};
+
+    final certifiedScope = scope.where((chat) => certifiedRows.contains((chat['originalROWID'] as num?)?.toInt()));
+    final certifiedGroupIds = certifiedScope
+        .map((chat) => chat['groupId']?.toString())
+        .whereType<String>()
+        .where((value) => value.isNotEmpty)
+        .toSet();
+    final certifiedGroupPhotoGuids = certified
+        .map((candidate) => candidate.groupPhotoGuid)
+        .whereType<String>()
+        .where((value) => value.isNotEmpty)
+        .toSet();
+
+    final potential = <int, String>{};
+    for (final chat in scope) {
+      final rowId = (chat['originalROWID'] as num?)?.toInt();
+      final guid = chat['guid']?.toString();
+      if (rowId == null || guid == null || certifiedRows.contains(rowId) || (chat['style'] as num?)?.toInt() != 43) {
+        continue;
+      }
+      final rawParticipants = chat['participants'];
+      final participants = <LogicalAddressEvidence>[];
+      if (rawParticipants is List) {
+        for (final raw in rawParticipants.whereType<Map>()) {
+          final address = raw['address']?.toString();
+          if (address != null && address.isNotEmpty) {
+            participants.add(LogicalAddressEvidence(address: address, country: raw['country']?.toString()));
+          }
+        }
+      }
+      final external = _logicalExternalParticipants(participants, vetted);
+      final groupId = chat['groupId']?.toString();
+      final groupPhotoGuid = _logicalChatGenerationProperties(chat).groupPhotoGuid;
+      final sameExternal = external != null && _logicalSameSet(external, acceptedExternal);
+      final sameGroupId = groupId != null && groupId.isNotEmpty && certifiedGroupIds.contains(groupId);
+      final sameGroupPhoto =
+          groupPhotoGuid != null && groupPhotoGuid.isNotEmpty && certifiedGroupPhotoGuids.contains(groupPhotoGuid);
+      if (sameExternal || sameGroupId || sameGroupPhoto) {
+        potential[rowId] = guid;
+      }
+    }
+    return potential;
+  }
+
+  Set<String>? _logicalExternalParticipants(List<LogicalAddressEvidence> participants, Set<String> vettedAliases) {
+    final normalized = <String>{};
+    for (final participant in participants) {
+      final value = LogicalConversationOutboundRoutePolicy.normalizeRoutableAddress(participant);
+      if (value == null || !normalized.add(value)) return null;
+    }
+    return normalized.difference(vettedAliases);
+  }
+
+  bool _logicalSameSet<T>(Set<T> left, Set<T> right) =>
+      left.length == right.length && left.containsAll(right) && right.containsAll(left);
 
   ({String fingerprint, String activeAlias, List<String> vettedAliases}) _logicalAccountProjection(dynamic raw) {
     if (raw is! Map) {

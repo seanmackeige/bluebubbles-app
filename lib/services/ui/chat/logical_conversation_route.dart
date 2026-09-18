@@ -1,6 +1,10 @@
 import 'dart:collection';
+import 'dart:convert';
 
-const logicalConversationOutboundRouteSchema = 'LOGICAL_CONVERSATION_OUTBOUND_ROUTE_V2_GENERIC_PROVENANCE';
+import 'package:crypto/crypto.dart';
+
+const logicalConversationOutboundRouteSchema = 'LOGICAL_CONVERSATION_OUTBOUND_ROUTE_V3_GENERATION_PROVENANCE';
+const logicalExecutionGenerationCertificateSchema = 'LOGICAL_EXECUTION_GENERATION_CERTIFICATE_V1';
 
 enum LogicalMutationClass { newMessage, reply, reaction, attachment, markRead, unsupported }
 
@@ -43,25 +47,110 @@ class LogicalSuccessfulOutboundEvidence {
   final int createdAtEpoch;
 }
 
+class LogicalRouteMessageEvidence {
+  const LogicalRouteMessageEvidence({
+    required this.messageGuid,
+    required this.messageRowId,
+    required this.createdAtEpoch,
+    required this.isFromMe,
+    required this.error,
+    required this.itemType,
+    this.associatedMessageGuid,
+  });
+
+  final String messageGuid;
+  final int messageRowId;
+  final int createdAtEpoch;
+  final bool isFromMe;
+  final int error;
+  final int itemType;
+  final String? associatedMessageGuid;
+
+  bool get isNormal => itemType == 0 && (associatedMessageGuid == null || associatedMessageGuid!.isEmpty);
+
+  bool get isSuccessfulOutbound => isNormal && isFromMe && error == 0;
+
+  bool get isInboundNormal => isNormal && !isFromMe;
+}
+
+/// A separately admitted write certificate. It describes observable generation
+/// facts and never names a physical ROWID. The current physical route must be
+/// re-derived from a fresh, complete runtime snapshot before every execution.
+class LogicalExecutionGenerationCertificate {
+  const LogicalExecutionGenerationCertificate({
+    required this.schema,
+    required this.logicalId,
+    required this.evidenceReceiptCommit,
+    required this.currentService,
+    required this.predecessorService,
+    required this.expectedCurrentMemberCount,
+    required this.expectedPredecessorMemberCount,
+    required this.authorizedOutboundGuidSha256,
+    required this.maximumTransitionEdgeDelayMilliseconds,
+    required this.maximumNaturalResponseDelayMilliseconds,
+    required this.explanation,
+  });
+
+  final String schema;
+  final String logicalId;
+  final String evidenceReceiptCommit;
+  final String currentService;
+  final String predecessorService;
+  final int expectedCurrentMemberCount;
+  final int expectedPredecessorMemberCount;
+  final String authorizedOutboundGuidSha256;
+  final int maximumTransitionEdgeDelayMilliseconds;
+  final int maximumNaturalResponseDelayMilliseconds;
+  final String explanation;
+
+  bool get isValid =>
+      schema == logicalExecutionGenerationCertificateSchema &&
+      logicalId.isNotEmpty &&
+      RegExp(r'^[0-9a-f]{40}$').hasMatch(evidenceReceiptCommit) &&
+      currentService.isNotEmpty &&
+      predecessorService.isNotEmpty &&
+      currentService != predecessorService &&
+      expectedCurrentMemberCount > 0 &&
+      expectedPredecessorMemberCount > 0 &&
+      RegExp(r'^[0-9a-f]{64}$').hasMatch(authorizedOutboundGuidSha256) &&
+      maximumTransitionEdgeDelayMilliseconds > 0 &&
+      maximumNaturalResponseDelayMilliseconds > 0 &&
+      explanation.isNotEmpty;
+}
+
 class LogicalRouteCandidateEvidence {
   const LogicalRouteCandidateEvidence({
     required this.sourceChatRowId,
     required this.sourceChatGuid,
+    required this.sourceService,
     required this.chatIdentifier,
     required this.style,
     required this.lastAddressedHandle,
     required this.participants,
+    required this.chatSnapshotComplete,
     required this.messageSnapshotComplete,
+    required this.lastKnownHybridState,
+    required this.shouldForceToSms,
+    required this.lastSeenMessageGuid,
+    required this.groupPhotoGuid,
+    required this.messages,
     required this.successfulOutbounds,
   });
 
   final int sourceChatRowId;
   final String sourceChatGuid;
+  final String sourceService;
   final String chatIdentifier;
   final int style;
   final LogicalAddressEvidence lastAddressedHandle;
   final List<LogicalAddressEvidence> participants;
+  final bool chatSnapshotComplete;
   final bool messageSnapshotComplete;
+  final bool? lastKnownHybridState;
+  final bool? shouldForceToSms;
+  final String? lastSeenMessageGuid;
+  final String? groupPhotoGuid;
+  final List<LogicalRouteMessageEvidence> messages;
   final List<LogicalSuccessfulOutboundEvidence> successfulOutbounds;
 }
 
@@ -78,6 +167,9 @@ class LogicalRouteEvidence {
     required this.accountSnapshotAfterSha256,
     required this.activeSelfAlias,
     required this.vettedSelfAliases,
+    required this.executionGenerationCertificate,
+    required this.candidateScopeSnapshotComplete,
+    required this.unadmittedPotentialSourceChatGuids,
     required this.candidates,
   });
 
@@ -92,6 +184,9 @@ class LogicalRouteEvidence {
   final String accountSnapshotAfterSha256;
   final LogicalAddressEvidence activeSelfAlias;
   final List<LogicalAddressEvidence> vettedSelfAliases;
+  final LogicalExecutionGenerationCertificate? executionGenerationCertificate;
+  final bool candidateScopeSnapshotComplete;
+  final Map<int, String> unadmittedPotentialSourceChatGuids;
   final List<LogicalRouteCandidateEvidence> candidates;
 }
 
@@ -134,6 +229,23 @@ class LogicalRouteDecision {
   bool get isSingleTarget => isQualified && physicalTargetRowIds.length == 1;
 }
 
+class _LogicalGenerationQualification {
+  const _LogicalGenerationQualification._({
+    required this.isQualified,
+    required this.reason,
+    this.currentCandidates = const [],
+  });
+
+  const _LogicalGenerationQualification.qualified(List<LogicalRouteCandidateEvidence> candidates)
+    : this._(isQualified: true, reason: 'CURRENT_EXECUTION_GENERATION_PROVEN', currentCandidates: candidates);
+
+  const _LogicalGenerationQualification.notProven(String reason) : this._(isQualified: false, reason: reason);
+
+  final bool isQualified;
+  final String reason;
+  final List<LogicalRouteCandidateEvidence> currentCandidates;
+}
+
 /// Generic writable-source qualification for an already-certified logical
 /// read union.
 ///
@@ -142,6 +254,23 @@ class LogicalRouteDecision {
 /// typed account and participant evidence plus successful source provenance.
 class LogicalConversationOutboundRoutePolicy {
   LogicalConversationOutboundRoutePolicy._();
+
+  static const comcastNodeUpdatesGeneration = LogicalExecutionGenerationCertificate(
+    schema: logicalExecutionGenerationCertificateSchema,
+    logicalId: 'LGC_V2_377f996e2dfd452ac69370dadda3aaf185c6714a0bda48af92faf8f55282424a',
+    evidenceReceiptCommit: '272fb442c343665459957eaf52b6e61411dd7e3e',
+    currentService: 'SMS',
+    predecessorService: 'iMessage',
+    expectedCurrentMemberCount: 2,
+    expectedPredecessorMemberCount: 1,
+    authorizedOutboundGuidSha256: '7b0b32bebfa9a6a4811d19f7a33a7a6cc451a015b5d2a0ba8118eba97542f649',
+    maximumTransitionEdgeDelayMilliseconds: 60 * 1000,
+    maximumNaturalResponseDelayMilliseconds: 15 * 60 * 1000,
+    explanation:
+        'Apple chat properties and message account/service provenance establish an iMessage-to-SMS generation '
+        'succession. A terminal cross-generation reaction, the independently authorized outbound, its natural '
+        'response, and post-cutover last-seen pointers admit only the current SMS generation for execution.',
+  );
 
   static LogicalRouteDecision resolve(LogicalRouteEvidence evidence, LogicalMutationRequest request) {
     final sourceQualification = _qualifyCertifiedSources(evidence);
@@ -232,11 +361,20 @@ class LogicalConversationOutboundRoutePolicy {
       selfMembershipByRow[candidate.sourceChatRowId] = participants.intersection(vettedAliases);
     }
 
-    final writable = evidence.candidates
+    var routeCandidates = evidence.candidates;
+    if (evidence.executionGenerationCertificate != null) {
+      final generation = _qualifyExecutionGeneration(evidence, selfMembershipByRow);
+      if (!generation.isQualified) {
+        return LogicalRouteDecision.notProven(generation.reason);
+      }
+      routeCandidates = generation.currentCandidates;
+    }
+
+    final writable = routeCandidates
         .where((candidate) => selfMembershipByRow[candidate.sourceChatRowId]!.isEmpty)
         .toList();
     if (writable.length != 1) {
-      if (evidence.candidates.length > 2 && writable.length > 1) {
+      if (routeCandidates.length > 2 && writable.length > 1) {
         return const LogicalRouteDecision.notProven('ROUTE_NOT_PROVEN_EXPANDED_SET_AMBIGUOUS');
       }
       return const LogicalRouteDecision.notProven('AMBIGUOUS_WRITE_ELIGIBLE_SOURCE');
@@ -248,7 +386,7 @@ class LogicalConversationOutboundRoutePolicy {
     final selectedLatest = selected.successfulOutbounds
         .map((outbound) => outbound.createdAtEpoch)
         .reduce((a, b) => a > b ? a : b);
-    final otherDates = evidence.candidates
+    final otherDates = routeCandidates
         .where((candidate) => candidate.sourceChatRowId != selected.sourceChatRowId)
         .expand((candidate) => candidate.successfulOutbounds)
         .map((outbound) => outbound.createdAtEpoch)
@@ -257,8 +395,148 @@ class LogicalConversationOutboundRoutePolicy {
       return const LogicalRouteDecision.notProven('CURRENT_OUTBOUND_PROVENANCE_CONTRADICTION');
     }
 
-    return LogicalRouteDecision.qualified('UNIQUE_CURRENT_PROVENANCE_WRITABLE_SOURCE', [selected.sourceChatRowId]);
+    return LogicalRouteDecision.qualified(
+      evidence.executionGenerationCertificate == null
+          ? 'UNIQUE_CURRENT_PROVENANCE_WRITABLE_SOURCE'
+          : 'CURRENT_EXECUTION_GENERATION_PROVEN_UNIQUE_WRITABLE_SOURCE',
+      [selected.sourceChatRowId],
+    );
   }
+
+  static _LogicalGenerationQualification _qualifyExecutionGeneration(
+    LogicalRouteEvidence evidence,
+    Map<int, Set<String>> selfMembershipByRow,
+  ) {
+    final certificate = evidence.executionGenerationCertificate;
+    if (certificate == null || !certificate.isValid || certificate.logicalId != evidence.logicalId) {
+      return const _LogicalGenerationQualification.notProven('EXECUTION_GENERATION_CERTIFICATE_INVALID');
+    }
+    if (!evidence.candidateScopeSnapshotComplete) {
+      return const _LogicalGenerationQualification.notProven('POTENTIAL_EXECUTION_CANDIDATE_SCOPE_UNSTABLE');
+    }
+    if (evidence.unadmittedPotentialSourceChatGuids.isNotEmpty) {
+      return const _LogicalGenerationQualification.notProven('UNADMITTED_POTENTIAL_EXECUTION_GENERATION_PRESENT');
+    }
+
+    final current = <LogicalRouteCandidateEvidence>[];
+    final predecessor = <LogicalRouteCandidateEvidence>[];
+    for (final candidate in evidence.candidates) {
+      if (!candidate.chatSnapshotComplete) {
+        return const _LogicalGenerationQualification.notProven('CURRENT_CHAT_PROPERTIES_SNAPSHOT_UNSTABLE');
+      }
+      if (candidate.shouldForceToSms != false) {
+        return const _LogicalGenerationQualification.notProven('CURRENT_PROVIDER_FORCE_SMS_STATE_CONTRADICTION');
+      }
+      if (candidate.sourceService == certificate.currentService && candidate.lastKnownHybridState == true) {
+        current.add(candidate);
+      } else if (candidate.sourceService == certificate.predecessorService && candidate.lastKnownHybridState == null) {
+        predecessor.add(candidate);
+      } else {
+        return const _LogicalGenerationQualification.notProven('UNCLASSIFIED_EXECUTION_GENERATION_MEMBER');
+      }
+    }
+    if (current.length != certificate.expectedCurrentMemberCount ||
+        predecessor.length != certificate.expectedPredecessorMemberCount) {
+      return const _LogicalGenerationQualification.notProven('EXECUTION_GENERATION_MEMBER_SCOPE_CHANGED');
+    }
+
+    final predecessorCandidate = predecessor.single;
+    final predecessorNormals = predecessorCandidate.messages.where((message) => message.isNormal).toList();
+    if (predecessorNormals.isEmpty) {
+      return const _LogicalGenerationQualification.notProven('PREDECESSOR_NORMAL_HISTORY_MISSING');
+    }
+    predecessorNormals.sort(_compareMessageChronology);
+    final terminalPredecessorMessage = predecessorNormals.last;
+    if (!terminalPredecessorMessage.isSuccessfulOutbound ||
+        predecessorCandidate.lastSeenMessageGuid != terminalPredecessorMessage.messageGuid) {
+      return const _LogicalGenerationQualification.notProven('PREDECESSOR_TERMINAL_POINTER_CONTRADICTION');
+    }
+
+    final transitionSources = <LogicalRouteCandidateEvidence>{};
+    for (final candidate in current) {
+      for (final message in candidate.messages) {
+        if (_normalizedRelationshipTarget(message.associatedMessageGuid) !=
+            terminalPredecessorMessage.messageGuid.toUpperCase()) {
+          continue;
+        }
+        final delay = message.createdAtEpoch - terminalPredecessorMessage.createdAtEpoch;
+        if (delay >= 0 && delay <= certificate.maximumTransitionEdgeDelayMilliseconds) {
+          transitionSources.add(candidate);
+        }
+      }
+    }
+    if (transitionSources.length != 1) {
+      return const _LogicalGenerationQualification.notProven('TERMINAL_GENERATION_HANDOFF_EDGE_NOT_UNIQUE');
+    }
+    final transitionSource = transitionSources.single;
+    if (selfMembershipByRow[transitionSource.sourceChatRowId]?.isNotEmpty != false) {
+      return const _LogicalGenerationQualification.notProven('GENERATION_HANDOFF_SOURCE_NOT_WRITABLE');
+    }
+    if (transitionSource.groupPhotoGuid == null ||
+        transitionSource.groupPhotoGuid!.isEmpty ||
+        transitionSource.groupPhotoGuid != predecessorCandidate.groupPhotoGuid) {
+      return const _LogicalGenerationQualification.notProven('GENERATION_GROUP_IDENTITY_LINEAGE_CONTRADICTION');
+    }
+
+    for (final candidate in current) {
+      final postTransitionNormals = candidate.messages.where(
+        (message) => message.isNormal && message.createdAtEpoch > terminalPredecessorMessage.createdAtEpoch,
+      );
+      if (postTransitionNormals.isEmpty) {
+        return const _LogicalGenerationQualification.notProven('CURRENT_GENERATION_CONTINUITY_INCOMPLETE');
+      }
+      final lastSeenGuid = candidate.lastSeenMessageGuid;
+      final lastSeen = candidate.messages.where((message) => message.messageGuid == lastSeenGuid).toList();
+      if (lastSeen.length != 1 ||
+          lastSeen.single.itemType != 0 ||
+          lastSeen.single.createdAtEpoch <= terminalPredecessorMessage.createdAtEpoch) {
+        return const _LogicalGenerationQualification.notProven('CURRENT_GENERATION_LAST_SEEN_POINTER_CONTRADICTION');
+      }
+    }
+
+    final anchored = <({LogicalRouteCandidateEvidence candidate, LogicalRouteMessageEvidence message})>[];
+    for (final candidate in current) {
+      for (final message in candidate.messages.where((message) => message.isSuccessfulOutbound)) {
+        if (_anchorFingerprint(message.messageGuid) == certificate.authorizedOutboundGuidSha256) {
+          anchored.add((candidate: candidate, message: message));
+        }
+      }
+    }
+    if (anchored.length != 1 || anchored.single.candidate.sourceChatRowId != transitionSource.sourceChatRowId) {
+      return const _LogicalGenerationQualification.notProven('AUTHORIZED_OUTBOUND_GENERATION_ANCHOR_MISSING');
+    }
+    final anchor = anchored.single.message;
+    if (anchor.createdAtEpoch <= terminalPredecessorMessage.createdAtEpoch) {
+      return const _LogicalGenerationQualification.notProven('AUTHORIZED_OUTBOUND_PRECEDES_GENERATION_HANDOFF');
+    }
+
+    final naturalResponses = current
+        .where((candidate) => candidate.sourceChatRowId != transitionSource.sourceChatRowId)
+        .expand((candidate) => candidate.messages)
+        .where((message) {
+          final delay = message.createdAtEpoch - anchor.createdAtEpoch;
+          return message.isInboundNormal && delay > 0 && delay <= certificate.maximumNaturalResponseDelayMilliseconds;
+        });
+    if (naturalResponses.isEmpty) {
+      return const _LogicalGenerationQualification.notProven('AUTHORIZED_OUTBOUND_NATURAL_RESPONSE_MISSING');
+    }
+
+    return _LogicalGenerationQualification.qualified(current);
+  }
+
+  static int _compareMessageChronology(LogicalRouteMessageEvidence left, LogicalRouteMessageEvidence right) {
+    final byTime = left.createdAtEpoch.compareTo(right.createdAtEpoch);
+    if (byTime != 0) return byTime;
+    return left.messageGuid.compareTo(right.messageGuid);
+  }
+
+  static String? _normalizedRelationshipTarget(String? value) {
+    if (value == null || value.isEmpty) return null;
+    return value.replaceAll('bp:', '').split('/').last.toUpperCase();
+  }
+
+  static String _anchorFingerprint(String messageGuid) =>
+      sha256.convert(utf8.encode('logical-route-anchor-v1\u0000$messageGuid')).toString();
 
   static LogicalRouteDecision _qualifyCertifiedSources(LogicalRouteEvidence evidence) {
     if (evidence.logicalId.isEmpty || evidence.certificateId == null || evidence.certificateId!.isEmpty) {
