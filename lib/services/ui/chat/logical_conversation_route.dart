@@ -154,7 +154,9 @@ class LogicalConversationOutboundRoutePolicy {
       case LogicalMutationClass.reaction:
         return _targetMessageRoute(byRow, request);
       case LogicalMutationClass.attachment:
-        if (request.targetMessageGuid != null) return _targetMessageRoute(byRow, request);
+        if (request.targetMessageGuid != null) {
+          return _targetMessageRoute(byRow, request);
+        }
         if (request.persistedExecutionSourceChatRowId != null || request.persistedExecutionSourceChatGuid != null) {
           if (!request.isRetry) {
             return const LogicalRouteDecision.notProven('UNTRUSTED_ATTACHMENT_EXECUTION_HINT');
@@ -234,6 +236,9 @@ class LogicalConversationOutboundRoutePolicy {
         .where((candidate) => selfMembershipByRow[candidate.sourceChatRowId]!.isEmpty)
         .toList();
     if (writable.length != 1) {
+      if (evidence.candidates.length > 2 && writable.length > 1) {
+        return const LogicalRouteDecision.notProven('ROUTE_NOT_PROVEN_EXPANDED_SET_AMBIGUOUS');
+      }
       return const LogicalRouteDecision.notProven('AMBIGUOUS_WRITE_ELIGIBLE_SOURCE');
     }
     final selected = writable.single;

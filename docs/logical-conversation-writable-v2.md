@@ -1,19 +1,33 @@
-# Logical Conversation View V2 — Generic Writable Execution Contract
+# Logical Conversation View V2 — N-Member Read and Generic Execution Contract
 
-Build 92 preserves the Build 90 presentation union and the Build 91 execution
-boundary while replacing Build 91's unsupported raw-participant certificate
-with `LOGICAL_CONVERSATION_OUTBOUND_ROUTE_V2_GENERIC_PROVENANCE`. The logical
+Build 94 evolves the accepted Build 93 pair projection into
+`LOGICAL_CONVERSATION_READ_CERTIFICATE_V2_N_MEMBER`. Each physical presentation
+member carries its own GUID binding, evidence classes, pairwise differential,
+direct structured relationship evidence, admission receipt, and operator
+explanation. Removing one proof removes only that member. Input order cannot
+change membership, and neither a matching title nor transitive equivalence can
+enroll a candidate.
+
+The certified Comcast Node Updates read set is 2027, 2155, and 2156. Physical
+candidate 1674 is retained separately as a historical/inert prior-participant-
+set lineage and is not enrolled. The presentation layer exposes one chat and
+one chronology while preserving physical chat, message, attachment, reaction,
+reply, delivery, read, and group-metadata provenance. Equal content remains
+distinct unless exact message identity is proven.
+
+The independent write boundary remains
+`LOGICAL_CONVERSATION_OUTBOUND_ROUTE_V2_GENERIC_PROVENANCE`. The logical
 conversation ID is never sent to the BlueBubbles server. A mutation reaches the
 existing outbound pipeline only after current evidence qualifies the relevant
 physical source.
 
 ## Read certification is not write authorization
 
-An existing logical-definition certificate supplies only the current set of
-physical source ROWID-to-GUID bindings admitted into the read projection. It
-does not identify a writable member and contains no target-specific routing
-answer. Similar-looking or future duplicate chats remain ordinary physical
-conversations until their read equivalence is independently certified.
+An N-member read certificate supplies only the physical source ROWID-to-GUID
+bindings admitted into the projection. It does not identify a writable member
+and contains no route-generation or target-specific routing answer. Similar-
+looking or future duplicate chats remain ordinary physical conversations until
+their read equivalence is independently certified.
 
 For a certified union, the runtime reads two stable snapshots of the current
 iCloud account projection around fresh server, chat, participant, and complete
@@ -39,12 +53,20 @@ order, highest ROWID, newest message alone, cached selection, and raw set
 inclusion are not route selectors. Missing, duplicated, opaque, incomplete, or
 contradictory evidence produces `ROUTE_NOT_PROVEN`.
 
+For the expanded 2027/2155/2156 set, both 2027 and 2156 remain write-eligible
+under current evidence. Inbound recency, newest chat/message, ROWID, UI order,
+and successful historical sends cannot establish a current execution epoch.
+The compose route therefore returns
+`ROUTE_NOT_PROVEN_EXPANDED_SET_AMBIGUOUS`. This does not block the proven read
+projection and does not hard-code either physical identity as the writer.
+
 Sean prod release assembly also verifies the packaged Dart AOT payload, not
-only the source tree. Every packaged `libapp.so` must contain the V2 route
-schema marker and must not contain the V1 marker. The prod native merge and
-strip stages are forced to consume the current Flutter compiler output. This
-closes the Build 92 failure in which current manifest/version metadata was
-packaged around stale Build 91 Dart code.
+only the source tree. Every packaged `libapp.so` must contain the V2 route and
+N-member read-certificate markers and must contain neither the V1 route nor
+prior pair-certificate marker. The prod native merge and strip stages are
+forced to consume the current Flutter compiler output. Build 92 is retained as
+the stale-route negative control and Build 93 as the pair-certificate negative
+control.
 
 UI qualification is never execution authority. Every queued logical mutation
 forces a fresh evidence read before admission.
@@ -92,8 +114,8 @@ still blocked unless the mutation-specific resolver qualifies it.
 
 ## Rollback
 
-Build 91 is the immediate Sean-lineage rollback APK, with Build 90 retained as
-the read-only rollback artifact. The safe mechanism is an Android package
+Build 93 is the immediate same-lineage rollback APK, with Build 90 retained as
+the accepted read-only pair rollback artifact. The safe mechanism is an Android package
 downgrade of `com.mackeige.bluebubbles` using a retained same-signer APK and
 data preservation: verify exact device, package, artifact hash, and signer,
 then use the normal replace/downgrade path and verify version, signer,

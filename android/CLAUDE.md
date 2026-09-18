@@ -25,6 +25,8 @@ Flutter side: `lib/services/backend/java_dart_interop/`
 - Gradle with Kotlin plugin
 - Sean prod builds force the Flutter native merge/strip stages to rerun and
   finish with `verifySeanProdReleaseAot`. The verifier rejects a packaged
-  `libapp.so` that does not contain the current V2 logical-route schema or still
-  contains the stale V1 schema. `verifySeanStaleAotRegression` is the retained
-  Build 92 negative control and requires `-PseanStaleAotRegressionApk=<path>`.
+  `libapp.so` that does not contain both the current V2 logical-route schema and
+  the N-member read-certificate schema, or still contains either stale V1 route
+  or pair-certificate marker. `verifySeanStaleAotRegression` is the retained
+  Build 92 route negative control; `verifySeanPreNMemberAotRegression` is the
+  retained Build 93 pair-certificate negative control.

@@ -5,7 +5,8 @@
 |------|---------|
 | `chats_service.dart` | Global chat list state — the source of truth for all `ChatState` objects |
 | `conversation_view_controller.dart` | Per-chat controller for the active conversation screen |
-| `logical_conversation_view.dart` | Fail-closed golden-pair policy and deterministic read-only projection helpers |
+| `logical_conversation_view.dart` | Fail-closed N-member read certificate, member provenance, excluded-candidate evidence, and deterministic projection helpers |
+| `logical_conversation_route.dart` | Separate current-evidence write qualification; read membership never grants execution authority |
 
 ---
 
@@ -30,6 +31,11 @@ GetIt singleton. Accessed via `ChatsSvc`.
 - Never write to a `ChatState` directly from UI — always call a `ChatsService` method
 - Never sort the chat list manually — call `updateChat()` and let the service reposition
 - To read the chat list in a widget: `Obx(() => ChatsSvc.sortedChats)` gated on `chatListVersion`
+- Add a physical chat to a logical projection only with its own complete
+  `LogicalConversationMemberProof`; title similarity and transitive equivalence
+  are not admission evidence.
+- Keep read membership and outbound routing independent. An N-member read
+  certificate has no writable target; current route evidence must qualify one.
 
 ---
 

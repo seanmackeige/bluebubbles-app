@@ -219,6 +219,8 @@ tasks.configureEach { task ->
 
 def seanRequiredLogicalRouteSchema = 'LOGICAL_CONVERSATION_OUTBOUND_ROUTE_V2_GENERIC_PROVENANCE'
 def seanForbiddenLogicalRouteSchema = 'LOGICAL_CONVERSATION_OUTBOUND_ROUTE_V1_GOLDEN_2155_2156'
+def seanRequiredLogicalReadCertificateSchema = 'LOGICAL_CONVERSATION_READ_CERTIFICATE_V2_N_MEMBER'
+def seanForbiddenLogicalPairId = 'LGC_V1_8ef6ba9306f2e2c3c2a28990d01a583e5c270c5ec61a313992c9d40322367c7f'
 
 def verifySeanLogicalRouteAot = { File apk ->
     if (!apk.isFile()) {
@@ -240,16 +242,27 @@ def verifySeanLogicalRouteAot = { File apk ->
         aotEntries.each { entry ->
             byte[] payload = archive.getInputStream(entry).withCloseable { stream -> stream.bytes }
             String asciiPayload = new String(payload, java.nio.charset.StandardCharsets.ISO_8859_1)
-            boolean hasRequired = asciiPayload.contains(seanRequiredLogicalRouteSchema)
-            boolean hasForbidden = asciiPayload.contains(seanForbiddenLogicalRouteSchema)
-            if (!hasRequired && hasForbidden) {
+            boolean hasRequiredRoute = asciiPayload.contains(seanRequiredLogicalRouteSchema)
+            boolean hasForbiddenRoute = asciiPayload.contains(seanForbiddenLogicalRouteSchema)
+            boolean hasRequiredReadCertificate = asciiPayload.contains(seanRequiredLogicalReadCertificateSchema)
+            boolean hasForbiddenPairId = asciiPayload.contains(seanForbiddenLogicalPairId)
+            if (!hasRequiredRoute && hasForbiddenRoute) {
                 throw new GradleException("SEAN_RELEASE_AOT_STALE_ROUTE_SCHEMA_V1: ${entry.name}")
             }
-            if (!hasRequired) {
+            if (!hasRequiredRoute) {
                 throw new GradleException("SEAN_RELEASE_AOT_ROUTE_SCHEMA_MISSING: ${entry.name}")
             }
-            if (hasForbidden) {
+            if (hasForbiddenRoute) {
                 throw new GradleException("SEAN_RELEASE_AOT_FORBIDDEN_ROUTE_SCHEMA_PRESENT: ${entry.name}")
+            }
+            if (!hasRequiredReadCertificate && hasForbiddenPairId) {
+                throw new GradleException("SEAN_RELEASE_AOT_STALE_READ_CERTIFICATE_PAIR: ${entry.name}")
+            }
+            if (!hasRequiredReadCertificate) {
+                throw new GradleException("SEAN_RELEASE_AOT_READ_CERTIFICATE_SCHEMA_MISSING: ${entry.name}")
+            }
+            if (hasForbiddenPairId) {
+                throw new GradleException("SEAN_RELEASE_AOT_FORBIDDEN_PAIR_CERTIFICATE_PRESENT: ${entry.name}")
             }
         }
     } finally {
@@ -259,10 +272,31 @@ def verifySeanLogicalRouteAot = { File apk ->
 
 def verifySeanProdReleaseAot = tasks.register('verifySeanProdReleaseAot') {
     group = 'verification'
-    description = 'Rejects a Sean prod APK whose packaged Dart AOT route schema is stale.'
+    description = 'Rejects a Sean prod APK whose packaged Dart AOT route or read-certificate schema is stale.'
     doLast {
         verifySeanLogicalRouteAot(file("${buildDir}/outputs/apk/prod/release/app-prod-release.apk"))
-        logger.lifecycle('SEAN_RELEASE_AOT_ROUTE_SCHEMA_PASS')
+        logger.lifecycle('SEAN_RELEASE_AOT_ROUTE_AND_READ_CERTIFICATE_SCHEMA_PASS')
+    }
+}
+
+tasks.register('verifySeanPreNMemberAotRegression') {
+    group = 'verification'
+    description = 'Proves that the retained Build 93 pair-certificate AOT payload is rejected.'
+    doLast {
+        def regressionPath = providers.gradleProperty('seanPreNMemberRegressionApk').orNull
+        if (!regressionPath) {
+            throw new GradleException('SEAN_PRE_N_MEMBER_REGRESSION_APK_PROPERTY_REQUIRED')
+        }
+        try {
+            verifySeanLogicalRouteAot(file(regressionPath))
+        } catch (GradleException error) {
+            if (error.message?.startsWith('SEAN_RELEASE_AOT_STALE_READ_CERTIFICATE_PAIR:')) {
+                logger.lifecycle('BUILD_93_PAIR_CERTIFICATE_AOT_REGRESSION_PASS')
+                return
+            }
+            throw error
+        }
+        throw new GradleException('BUILD_93_PAIR_CERTIFICATE_AOT_REGRESSION_NOT_REPRODUCED')
     }
 }
 
