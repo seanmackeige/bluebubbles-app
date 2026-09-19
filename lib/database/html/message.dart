@@ -187,7 +187,8 @@ class Message {
       groupActionType: json["groupActionType"] ?? 0,
       balloonBundleId: json["balloonBundleId"],
       associatedMessageGuid: json["associatedMessageGuid"]?.toString().replaceAll("bp:", "").split("/").last,
-      associatedMessagePart: json["associatedMessagePart"] ??
+      associatedMessagePart:
+          json["associatedMessagePart"] ??
           int.tryParse(json["associatedMessageGuid"].toString().replaceAll("p:", "").split("/").first),
       associatedMessageType: json["associatedMessageType"],
       expressiveSendStyleId: json["expressiveSendStyleId"],
@@ -244,8 +245,12 @@ class Message {
     return [];
   }
 
-  static Future<Message> replaceMessage(String? oldGuid, Message newMessage,
-      {bool awaitNewMessageEvent = true, Chat? chat}) async {
+  static Future<Message> replaceMessage(
+    String? oldGuid,
+    Message newMessage, {
+    bool awaitNewMessageEvent = true,
+    Chat? chat,
+  }) async {
     if (newMessage.handle == null && newMessage.handleId != null) {
       newMessage.handle = Handle.findOne(originalROWID: newMessage.handleId);
     }
@@ -514,6 +519,13 @@ class Message {
   static Message merge(Message existing, Message newMessage) {
     existing.id ??= newMessage.id;
     existing.guid ??= newMessage.guid;
+
+    // Association fields define whether this row is a top-level message or a
+    // relationship event. They are authoritative, nullable state and must be
+    // replaced even when a reaction is removed or re-parented.
+    existing.associatedMessageGuid = newMessage.associatedMessageGuid;
+    existing.associatedMessagePart = newMessage.associatedMessagePart;
+    existing.associatedMessageType = newMessage.associatedMessageType;
 
     // Update date created
     if ((existing.dateCreated == null && newMessage.dateCreated != null) ||

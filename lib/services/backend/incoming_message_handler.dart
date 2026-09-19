@@ -139,7 +139,7 @@ class IncomingMessageHandler {
 
   /// LinkedHashSet gives O(1) lookup while preserving insertion order for
   /// oldest-first eviction when the ring-buffer limit is reached.
-  final LinkedHashSet<String> _processedGuids = LinkedHashSet();
+  final LinkedHashMap<String, String> _processedGuids = LinkedHashMap();
   static const int _processedGuidLimit = 100;
 
   // ── Out-of-order buffering ───────────────────────────────────────────────
@@ -242,6 +242,9 @@ class IncomingMessageHandler {
     final previous = guid != null ? (_inflightByGuid[guid] ?? Future.value()) : Future.value();
 
     final next = previous.then((_) => _dispatchPayload(payload)).catchError((e, st) {
+      if (e.toString().contains('SOURCE_PROVENANCE_CONFLICT')) {
+        ChatsSvc.invalidateLogicalAuthority('SOURCE_PROVENANCE_CONFLICT');
+      }
       Logger.error(
         'Unhandled error processing ${payload.type.name} for ${payload.message.guid}',
         error: e,
@@ -314,9 +317,15 @@ class IncomingMessageHandler {
     );
 
     // 1. Deduplication — skip real GUIDs we have already fully handled.
-    if (m.guid != null && _hasProcessed(m.guid!)) {
-      Logger.debug('[new-message] skipping already-processed ${m.guid}', tag: _tag);
-      return;
+    if (m.guid != null) {
+      final processedSource = _processedSource(m.guid!);
+      if (processedSource != null) {
+        if (processedSource != payload.chat.guid) {
+          throw StateError('MESSAGE_SOURCE_PROVENANCE_CONFLICT:${m.guid}');
+        }
+        Logger.debug('[new-message] skipping already-processed ${m.guid}', tag: _tag);
+        return;
+      }
     }
 
     // 2. If the message already exists in the DB (e.g. the HTTP response
@@ -337,7 +346,6 @@ class IncomingMessageHandler {
     if (!isIsolate && hydrated.affectedHandleIds.isNotEmpty) {
       ContactsSvcV2.notifyHandlesUpdated(hydrated.affectedHandleIds);
     }
-
     // 4. Persist to DB.
     //    Only suppress the "from me" notification clear for reactions so that a
     //    notification-triggered reaction doesn't lose its source notification.
@@ -351,7 +359,7 @@ class IncomingMessageHandler {
 
     // 5. Mark as processed before any async I/O so a duplicate delivery that
     //    races in while we're playing a sound or sending a notification skips.
-    if (saved.guid != null) _markProcessed(saved.guid!);
+    if (saved.guid != null) _markProcessed(saved.guid!, c.guid);
 
     // 6. Complete any pending outgoing send-progress tracker.
     if (tempGuid != null && GetIt.I.isRegistered<OutgoingMessageHandler>()) {
@@ -486,6 +494,10 @@ class IncomingMessageHandler {
 
     // 5. Persist the GUID swap / field update.
     final existingGuid = tempGuid ?? existing.guid!;
+    final existingSource = existing.chat.target;
+    if (existingSource != null && existingSource.guid != c.guid) {
+      throw StateError('MESSAGE_SOURCE_PROVENANCE_CONFLICT:${m.guid ?? existingGuid}');
+    }
     await _replaceMessage(c, existingGuid, existing, m);
 
     // 6. Persist attachment GUID swaps (e.g. temp attachment → real GUID).
@@ -553,6 +565,10 @@ class IncomingMessageHandler {
     final alreadyPresent = Message.findOne(guid: replacement.guid);
 
     if (alreadyPresent != null) {
+      final alreadyPresentSource = alreadyPresent.chat.target;
+      if (alreadyPresentSource != null && alreadyPresentSource.guid != chat.guid) {
+        throw StateError('MESSAGE_SOURCE_PROVENANCE_CONFLICT:${replacement.guid}');
+      }
       // The replacement record already exists (parallel delivery).
       // Only overwrite if the incoming payload is newer.
       if (replacement.isNewerThan(alreadyPresent)) {
@@ -691,6 +707,7 @@ class IncomingMessageHandler {
   /// An `EventDispatcherSvc.emit` is fired in both cases so chat tiles, badge
   /// counts, and any other cross-cutting listeners can react.
   Future<void> _dispatchNewMessage(Chat chat, Message message, {String? tempGuid}) async {
+    ChatsSvc.noteLogicalSourceEvent(chat.guid);
     final presentationChat = ChatsSvc.presentationChatFor(chat);
     final presentationGuid = presentationChat.guid;
     final msvcRegistered = Get.isRegistered<MessagesService>(tag: presentationGuid);
@@ -727,6 +744,7 @@ class IncomingMessageHandler {
 
   /// Notifies the UI layer about an update to an existing message.
   void _dispatchUpdatedMessage(Chat chat, Message message, {String? oldGuid}) {
+    ChatsSvc.noteLogicalSourceEvent(chat.guid);
     final presentationGuid = ChatsSvc.presentationChatFor(chat).guid;
     if (Get.isRegistered<MessagesService>(tag: presentationGuid)) {
       MessagesSvc(presentationGuid).updateMessage(message, oldGuid: oldGuid);
@@ -832,14 +850,14 @@ class IncomingMessageHandler {
 
   // ── Deduplication helpers ────────────────────────────────────────────────
 
-  bool _hasProcessed(String guid) => _processedGuids.contains(guid);
+  String? _processedSource(String guid) => _processedGuids[guid];
 
-  void _markProcessed(String guid) {
-    if (_processedGuids.contains(guid)) return;
-    _processedGuids.add(guid);
+  void _markProcessed(String guid, String sourceChatGuid) {
+    if (_processedGuids.containsKey(guid)) return;
+    _processedGuids[guid] = sourceChatGuid;
     // Evict oldest entries when the ring-buffer limit is reached.
     while (_processedGuids.length > _processedGuidLimit) {
-      _processedGuids.remove(_processedGuids.first);
+      _processedGuids.remove(_processedGuids.keys.first);
     }
   }
 

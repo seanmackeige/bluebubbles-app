@@ -346,6 +346,12 @@ class ChatActions {
       chatQuery.close();
 
       if (dbChat != null) {
+        if (existing != null &&
+            existing.chat.targetId != 0 &&
+            dbChat.id != null &&
+            existing.chat.targetId != dbChat.id) {
+          throw StateError('MESSAGE_SOURCE_PROVENANCE_CONFLICT:${inputMessage.guid}');
+        }
         inputMessage.chat.target = dbChat;
       }
 
@@ -388,6 +394,9 @@ class ChatActions {
               attachQuery.close();
 
               if (existingAttach != null) {
+                if (existingAttach.message.targetId != 0 && existingAttach.message.targetId != dbMessage.id) {
+                  throw StateError('ATTACHMENT_SOURCE_PROVENANCE_CONFLICT:${attachment.guid}');
+                }
                 attachment.id = existingAttach.id;
               }
 
@@ -731,6 +740,8 @@ class ChatActions {
     final limit = data['limit'] as int? ?? 25;
     final includeDeleted = data['includeDeleted'] as bool? ?? false;
     final searchAround = data['searchAround'] as int?;
+    final beforeDateCreated = data['beforeDateCreated'] as int?;
+    final afterGuidAtBoundary = data['afterGuidAtBoundary'] as String?;
 
     return Database.runInTransaction(TxMode.read, () {
       final participants = participantsData.map((e) => Handle.fromMap(e)).toList();
@@ -738,16 +749,21 @@ class ChatActions {
       final messages = <Message>[];
 
       if (searchAround == null) {
+        var condition = includeDeleted
+            ? Message_.dateCreated.notNull().and(Message_.dateDeleted.isNull().or(Message_.dateDeleted.notNull()))
+            : Message_.dateDeleted.isNull().and(Message_.dateCreated.notNull());
+        if (beforeDateCreated != null && afterGuidAtBoundary != null) {
+          condition = condition.and(
+            Message_.dateCreated
+                .lessThan(beforeDateCreated)
+                .or(Message_.dateCreated.equals(beforeDateCreated).and(Message_.guid.greaterThan(afterGuidAtBoundary))),
+          );
+        }
         final query =
-            (messageBox.query(
-                    includeDeleted
-                        ? Message_.dateCreated.notNull().and(
-                            Message_.dateDeleted.isNull().or(Message_.dateDeleted.notNull()),
-                          )
-                        : Message_.dateDeleted.isNull().and(Message_.dateCreated.notNull()),
-                  )
+            (messageBox.query(condition)
                   ..link(Message_.chat, Chat_.id.oneOf(chatIds))
-                  ..order(Message_.dateCreated, flags: Order.descending))
+                  ..order(Message_.dateCreated, flags: Order.descending)
+                  ..order(Message_.guid))
                 .build();
         query
           ..limit = limit
@@ -768,7 +784,8 @@ class ChatActions {
                         ),
                   )
                   ..link(Message_.chat, Chat_.id.oneOf(chatIds))
-                  ..order(Message_.dateCreated, flags: Order.descending))
+                  ..order(Message_.dateCreated, flags: Order.descending)
+                  ..order(Message_.guid))
                 .build();
         beforeQuery.limit = limit;
         messages.addAll(beforeQuery.find());
@@ -787,7 +804,8 @@ class ChatActions {
                         ),
                   )
                   ..link(Message_.chat, Chat_.id.oneOf(chatIds))
-                  ..order(Message_.dateCreated))
+                  ..order(Message_.dateCreated)
+                  ..order(Message_.guid))
                 .build();
         afterQuery.limit = limit;
         messages.addAll(afterQuery.find());

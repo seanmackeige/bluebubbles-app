@@ -18,8 +18,9 @@ class Share {
     if (kIsDesktop) {
       showSnackbar("Unsupported", "Can't share files on desktop yet!");
     } else {
-      await SharePlus.instance
-          .share(ShareParams(files: filepaths.map((String path) => XFile(path, mimeType: mimeType)).toList()));
+      await SharePlus.instance.share(
+        ShareParams(files: filepaths.map((String path) => XFile(path, mimeType: mimeType)).toList()),
+      );
     }
   }
 
@@ -36,27 +37,22 @@ class Share {
     _serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!_serviceEnabled) {
       await showBBDialog(
-          context: Get.context!,
-          title: "Location Services",
-          body: "Location Services must be enabled to send Locations",
-          actions: [
-            if (!kIsDesktop || !Platform.isLinux)
-              BBDialogAction(
-                text: "Cancel",
-                onPressed: () => Navigator.of(Get.context!, rootNavigator: true).pop(),
-              ),
-            if (!kIsDesktop || !Platform.isLinux)
-              BBDialogAction(
-                text: "Open Settings",
-                isDefault: true,
-                onPressed: () async => await Geolocator.openLocationSettings(),
-              ),
-            if (kIsDesktop && Platform.isLinux)
-              BBDialogAction(
-                text: "OK",
-                onPressed: () => Navigator.of(Get.context!, rootNavigator: true).pop(),
-              ),
-          ]);
+        context: Get.context!,
+        title: "Location Services",
+        body: "Location Services must be enabled to send Locations",
+        actions: [
+          if (!kIsDesktop || !Platform.isLinux)
+            BBDialogAction(text: "Cancel", onPressed: () => Navigator.of(Get.context!, rootNavigator: true).pop()),
+          if (!kIsDesktop || !Platform.isLinux)
+            BBDialogAction(
+              text: "Open Settings",
+              isDefault: true,
+              onPressed: () async => await Geolocator.openLocationSettings(),
+            ),
+          if (kIsDesktop && Platform.isLinux)
+            BBDialogAction(text: "OK", onPressed: () => Navigator.of(Get.context!, rootNavigator: true).pop()),
+        ],
+      );
       if (!_serviceEnabled) {
         return;
       }
@@ -69,20 +65,18 @@ class Share {
       }
       if (_permissionGranted == LocationPermission.denied || _permissionGranted == LocationPermission.deniedForever) {
         await showBBDialog(
-            context: Get.context!,
-            title: "Location Permission",
-            body: "BlueBubbles needs the Location permission to send Locations",
-            actions: [
-              BBDialogAction(
-                text: "Cancel",
-                onPressed: () => Navigator.of(Get.context!, rootNavigator: true).pop(),
-              ),
-              BBDialogAction(
-                text: "Open Settings",
-                isDefault: true,
-                onPressed: () async => await Geolocator.openLocationSettings(),
-              ),
-            ]);
+          context: Get.context!,
+          title: "Location Permission",
+          body: "BlueBubbles needs the Location permission to send Locations",
+          actions: [
+            BBDialogAction(text: "Cancel", onPressed: () => Navigator.of(Get.context!, rootNavigator: true).pop()),
+            BBDialogAction(
+              text: "Open Settings",
+              isDefault: true,
+              onPressed: () async => await Geolocator.openLocationSettings(),
+            ),
+          ],
+        );
         if (_permissionGranted == LocationPermission.denied || _permissionGranted == LocationPermission.deniedForever) {
           return;
         }
@@ -109,7 +103,12 @@ class Share {
       String? title = meta.title;
 
       return LocationAttachmentData(
-          guid: _attachmentGuid, fileName: fileName, bytes: bytes, mapImageUrl: url, title: title);
+        guid: _attachmentGuid,
+        fileName: fileName,
+        bytes: bytes,
+        mapImageUrl: url,
+        title: title,
+      );
     }
 
     bool send = false;
@@ -117,83 +116,101 @@ class Share {
       cvc(chat).showingOverlays = true;
     }
     await showDialog(
-        context: Get.context!,
-        builder: (context) => FutureBuilder(
-            future: getLocationPreview(),
-            builder: (context, snapshot) {
-              if (snapshot.data != null) {
-                _attachmentGuid = snapshot.data!.guid;
-                fileName = snapshot.data!.fileName;
-                bytes = snapshot.data!.bytes;
-                url = snapshot.data!.mapImageUrl;
-                title = snapshot.data!.title;
-              }
-              if (url == null) {
-                return AbsorbPointer(
-                  child: AlertDialog(
-                    backgroundColor: Get.theme.colorScheme.surfaceContainerHighest,
-                    title: Text("Loading Location...", style: Get.textTheme.titleLarge),
-                    content: buildProgressIndicator(context),
-                  ),
-                );
-              }
-              return AlertDialog(
+      context: Get.context!,
+      builder: (context) => FutureBuilder(
+        future: getLocationPreview(),
+        builder: (context, snapshot) {
+          if (snapshot.data != null) {
+            _attachmentGuid = snapshot.data!.guid;
+            fileName = snapshot.data!.fileName;
+            bytes = snapshot.data!.bytes;
+            url = snapshot.data!.mapImageUrl;
+            title = snapshot.data!.title;
+          }
+          if (url == null) {
+            return AbsorbPointer(
+              child: AlertDialog(
                 backgroundColor: Get.theme.colorScheme.surfaceContainerHighest,
-                title: Text("Send Location?", style: Get.textTheme.titleLarge),
-                content: SizedBox(
-                  width: 150,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Image.network(
-                        url!,
-                        gaplessPlayback: true,
-                        filterQuality: FilterQuality.none,
-                        errorBuilder: (_, __, ___) {
-                          return const SizedBox.shrink();
-                        },
-                        frameBuilder: (_, child, frame, __) {
-                          if (frame == null) {
-                            return Center(
-                              heightFactor: 1,
-                              child: buildProgressIndicator(context),
-                            );
-                          } else {
-                            return child;
-                          }
-                        },
-                      ),
-                      const SizedBox(height: 15),
-                      Text(
-                        title ?? "No location details found",
-                        style: context.theme.textTheme.bodyMedium!.apply(fontWeightDelta: 2),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
+                title: Text("Loading Location...", style: Get.textTheme.titleLarge),
+                content: buildProgressIndicator(context),
+              ),
+            );
+          }
+          return AlertDialog(
+            backgroundColor: Get.theme.colorScheme.surfaceContainerHighest,
+            title: Text("Send Location?", style: Get.textTheme.titleLarge),
+            content: SizedBox(
+              width: 150,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Image.network(
+                    url!,
+                    gaplessPlayback: true,
+                    filterQuality: FilterQuality.none,
+                    errorBuilder: (_, _, _) {
+                      return const SizedBox.shrink();
+                    },
+                    frameBuilder: (_, child, frame, _) {
+                      if (frame == null) {
+                        return Center(heightFactor: 1, child: buildProgressIndicator(context));
+                      } else {
+                        return child;
+                      }
+                    },
                   ),
-                ),
-                actions: [
-                  TextButton(
-                      onPressed: () => Navigator.of(Get.context!, rootNavigator: true).pop(),
-                      child: Text("Cancel",
-                          style: Get.textTheme.bodyLarge!.copyWith(color: Get.theme.colorScheme.primary))),
-                  TextButton(
-                      onPressed: () {
-                        send = true;
-                        Navigator.of(Get.context!, rootNavigator: true).pop();
-                      },
-                      child:
-                          Text("Send", style: Get.textTheme.bodyLarge!.copyWith(color: Get.theme.colorScheme.primary)))
+                  const SizedBox(height: 15),
+                  Text(
+                    title ?? "No location details found",
+                    style: context.theme.textTheme.bodyMedium!.apply(fontWeightDelta: 2),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ],
-              );
-            }));
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(Get.context!, rootNavigator: true).pop(),
+                child: Text("Cancel", style: Get.textTheme.bodyLarge!.copyWith(color: Get.theme.colorScheme.primary)),
+              ),
+              TextButton(
+                onPressed: () {
+                  send = true;
+                  Navigator.of(Get.context!, rootNavigator: true).pop();
+                },
+                child: Text("Send", style: Get.textTheme.bodyLarge!.copyWith(color: Get.theme.colorScheme.primary)),
+              ),
+            ],
+          );
+        },
+      ),
+    );
     if (kIsDesktop || kIsWeb) {
       cvc(chat).showingOverlays = false;
     }
 
     if (!send) return;
     if (bytes == null) return;
+
+    LogicalDraft? logicalDraft;
+    if (ChatsSvc.isApprovedLogicalSource(chat)) {
+      if (!ChatsSvc.isLogicalConversation(chat)) {
+        showSnackbar('Send paused', 'The logical route cannot currently be certified.');
+        return;
+      }
+      logicalDraft = await ChatsSvc.saveLogicalSendIntent(
+        chat,
+        text: '',
+        subject: '',
+        attachments: <PlatformFile>[PlatformFile(name: fileName!, bytes: bytes, size: bytes!.length)],
+        reply: null,
+      );
+      if (logicalDraft == null || logicalDraft.attachments.any((intent) => !intent.isRestorable)) {
+        showSnackbar('Send paused', 'The location attachment could not be preserved safely.');
+        return;
+      }
+    }
 
     final message = Message(
       guid: _attachmentGuid,
@@ -214,12 +231,19 @@ class Share {
       totalBytes: bytes!.length,
     );
 
-    OutgoingMsgHandler.queue(
-      OutgoingAttachment(
-        chat: chat,
-        message: message,
-        attachment: attachment,
-      ),
-    );
+    try {
+      await OutgoingMsgHandler.queue(
+        OutgoingAttachment(
+          chat: chat,
+          message: message,
+          attachment: attachment,
+          logicalActionId:
+              logicalDraft?.actionId ?? logicalActionIdentity('shared-location', <Object?>[chat.guid, _attachmentGuid]),
+          logicalDraft: logicalDraft,
+        ),
+      );
+    } on LogicalSendAdmissionException catch (error) {
+      showSnackbar('Send paused', logicalSendAdmissionUserMessage(error.state));
+    }
   }
 }

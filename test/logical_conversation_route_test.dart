@@ -465,14 +465,25 @@ void main() {
       expect(_resolve(request).physicalTargetRowIds, [_writableRow]);
     });
 
-    test('attachment retry remains pinned to its certified persisted physical source', () {
+    test('attachment retry cannot reuse a certified source after authority moved', () {
       const retry = LogicalMutationRequest(
         mutationClass: LogicalMutationClass.attachment,
         persistedExecutionSourceChatRowId: _alternateRow,
         persistedExecutionSourceChatGuid: 'source-b-guid',
         isRetry: true,
       );
-      expect(_resolve(retry).physicalTargetRowIds, [_alternateRow]);
+      expect(_resolve(retry).physicalTargetRowIds, isEmpty);
+      expect(_resolve(retry).reason, 'PERSISTED_ATTACHMENT_ROUTE_NO_LONGER_AUTHORITATIVE');
+    });
+
+    test('attachment retry may reuse only the freshly authoritative source', () {
+      const retry = LogicalMutationRequest(
+        mutationClass: LogicalMutationClass.attachment,
+        persistedExecutionSourceChatRowId: _writableRow,
+        persistedExecutionSourceChatGuid: 'source-a-guid',
+        isRetry: true,
+      );
+      expect(_resolve(retry).physicalTargetRowIds, [_writableRow]);
       expect(_resolve(retry).reason, 'CERTIFIED_PERSISTED_ATTACHMENT_RETRY_ROUTE');
     });
 
@@ -701,6 +712,103 @@ void main() {
       expect(_resolve(attachmentReply).physicalTargetRowIds, [_alternateRow]);
     });
 
+    test('generation-bound relationship cannot execute through historical member', () {
+      const reply = LogicalMutationRequest(
+        mutationClass: LogicalMutationClass.reply,
+        targetMessageGuid: 'predecessor-terminal',
+        targetSourceChatRowId: 30,
+        targetSourceChatGuid: 'predecessor-guid',
+        requireFreshTargetPresence: true,
+      );
+      expect(
+        _resolve(reply, evidence: _generationEvidence()).reason,
+        'RELATIONSHIP_TARGET_NOT_IN_CURRENT_EXECUTION_GENERATION',
+      );
+    });
+
+    test('generation-bound relationship retains exact current-member route', () {
+      const reaction = LogicalMutationRequest(
+        mutationClass: LogicalMutationClass.reaction,
+        targetMessageGuid: 'self-variant-last',
+        targetSourceChatRowId: _alternateRow,
+        targetSourceChatGuid: 'current-self-variant-guid',
+        requireFreshTargetPresence: true,
+      );
+      expect(_resolve(reaction, evidence: _generationEvidence()).physicalTargetRowIds, [_alternateRow]);
+    });
+
+    test('execution-boundary reply requires the exact target in fresh provider evidence', () {
+      const reply = LogicalMutationRequest(
+        mutationClass: LogicalMutationClass.reply,
+        targetMessageGuid: 'target-message',
+        targetSourceChatRowId: _alternateRow,
+        targetSourceChatGuid: 'source-b-guid',
+        replyIntentMessageGuid: 'selected-reply-message',
+        replyIntentSourceChatRowId: _alternateRow,
+        replyIntentSourceChatGuid: 'source-b-guid',
+        requireFreshTargetPresence: true,
+      );
+      final evidence = _evidence(
+        candidates: [
+          _candidate(_writableRow),
+          _candidate(
+            _alternateRow,
+            messages: [_message('target-message', 301, 1000), _message('selected-reply-message', 302, 1100)],
+          ),
+        ],
+      );
+      expect(_resolve(reply, evidence: evidence).physicalTargetRowIds, [_alternateRow]);
+    });
+
+    test('execution-boundary reply fails closed when target vanished or is duplicated', () {
+      const reply = LogicalMutationRequest(
+        mutationClass: LogicalMutationClass.reply,
+        targetMessageGuid: 'target-message',
+        targetSourceChatRowId: _alternateRow,
+        targetSourceChatGuid: 'source-b-guid',
+        requireFreshTargetPresence: true,
+      );
+      final missing = _evidence(
+        candidates: [
+          _candidate(_writableRow),
+          _candidate(_alternateRow, messages: const []),
+        ],
+      );
+      final duplicated = _evidence(
+        candidates: [
+          _candidate(_writableRow),
+          _candidate(
+            _alternateRow,
+            messages: [_message('target-message', 301, 1000), _message('target-message', 302, 1100)],
+          ),
+        ],
+      );
+      expect(_resolve(reply, evidence: missing).reason, 'TARGET_MESSAGE_NOT_EXACTLY_PRESENT');
+      expect(_resolve(reply, evidence: duplicated).reason, 'TARGET_MESSAGE_NOT_EXACTLY_PRESENT');
+    });
+
+    test('execution-boundary reply retains selected-message provenance separately from relationship target', () {
+      const reply = LogicalMutationRequest(
+        mutationClass: LogicalMutationClass.reply,
+        targetMessageGuid: 'root-message',
+        targetSourceChatRowId: _writableRow,
+        targetSourceChatGuid: 'source-a-guid',
+        replyIntentMessageGuid: 'selected-reply-message',
+        replyIntentSourceChatRowId: _alternateRow,
+        replyIntentSourceChatGuid: 'source-b-guid',
+        requireFreshTargetPresence: true,
+      );
+      final evidence = _evidence(
+        candidates: [
+          _candidate(_writableRow, messages: [_message('root-message', 301, 1000)]),
+          _candidate(_alternateRow, messages: [_message('selected-reply-message', 302, 1100)]),
+        ],
+      );
+      final decision = _resolve(reply, evidence: evidence);
+      expect(decision.isSingleTarget, isTrue);
+      expect(decision.physicalTargetRowIds, [_writableRow]);
+    });
+
     test('missing target identity never guesses', () {
       const reply = LogicalMutationRequest(mutationClass: LogicalMutationClass.reply);
       expect(_resolve(reply).reason, 'TARGET_MESSAGE_PROVENANCE_MISSING');
@@ -753,11 +861,19 @@ void main() {
       expect(gate.admit('action-2'), isTrue);
     });
 
-    test('explicit user retry has one separate bounded admission', () {
+    test('retry namespace cannot re-admit the same logical action', () {
       final gate = LogicalExecutionAdmissionGate();
       expect(gate.admit('retry-id'), isTrue);
-      expect(gate.admit('retry-id', explicitRetry: true), isTrue);
       expect(gate.admit('retry-id', explicitRetry: true), isFalse);
+      expect(gate.admit('retry-id', explicitRetry: true), isFalse);
+    });
+
+    test('intact pre-dispatch batch rollback permits one fresh re-admission', () {
+      final gate = LogicalExecutionAdmissionGate();
+      expect(gate.admitBatch(const ['batch-a', 'batch-b']), isTrue);
+      expect(gate.rollbackBatch(const ['batch-a', 'batch-b']), isTrue);
+      expect(gate.admitBatch(const ['batch-a', 'batch-b']), isTrue);
+      expect(gate.rollbackBatch(const ['batch-a', 'missing']), isFalse);
     });
 
     test('empty action identity is never admitted', () {

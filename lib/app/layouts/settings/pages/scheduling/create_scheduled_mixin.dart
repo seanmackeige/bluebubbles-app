@@ -13,8 +13,9 @@ mixin CreateScheduledMixin<T extends StatefulWidget> on State<T> {
 
   late final TextEditingController messageController = TextEditingController(text: existingMessage?.payload.message);
   final FocusNode messageNode = FocusNode();
-  late final TextEditingController numberController =
-      TextEditingController(text: existingMessage?.schedule.interval?.toString() ?? '1');
+  late final TextEditingController numberController = TextEditingController(
+    text: existingMessage?.schedule.interval?.toString() ?? '1',
+  );
 
   late final RxString selectedChat = (existingMessage?.payload.chatGuid ?? '').obs;
   late final RxString schedule = (existingMessage?.schedule.type ?? "once").obs;
@@ -23,8 +24,14 @@ mixin CreateScheduledMixin<T extends StatefulWidget> on State<T> {
   late final Rx<DateTime> date = (existingMessage?.scheduledFor ?? DateTime.now()).obs;
   late final RxBool isEmpty = (existingMessage?.payload.message.isNotEmpty ?? false).obs;
 
+  bool get targetsProtectedLogicalConversation {
+    final chat = ChatsSvc.findChatByGuid(selectedChat.value) ?? Chat.findOne(guid: selectedChat.value);
+    return chat != null && (ChatsSvc.isApprovedLogicalSource(chat) || ChatsSvc.isLogicalConversation(chat));
+  }
+
   String? get validationError {
     if (selectedChat.value.isEmpty) return "Please select a chat!";
+    if (targetsProtectedLogicalConversation) return "Scheduled logical sends are not certified.";
     if (isEmpty.value) return "Please enter a message!";
     if (date.value.isBefore(DateTime.now())) return "Please pick a date in the future!";
     return null;
@@ -52,6 +59,10 @@ mixin CreateScheduledMixin<T extends StatefulWidget> on State<T> {
   }
 
   Future<void> saveScheduledMessage(BuildContext context) async {
+    if (targetsProtectedLogicalConversation) {
+      showSnackbar("Send blocked", "Scheduled logical sends are not certified.");
+      return;
+    }
     if (date.value.isBefore(DateTime.now())) {
       showSnackbar("Error", "Pick a date in the future!");
       return;
@@ -63,10 +74,7 @@ mixin CreateScheduledMixin<T extends StatefulWidget> on State<T> {
       builder: (BuildContext context) {
         return AlertDialog(
           backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-          title: Text(
-            "Scheduling message...",
-            style: context.theme.textTheme.titleLarge,
-          ),
+          title: Text("Scheduling message...", style: context.theme.textTheme.titleLarge),
           content: SizedBox(
             height: 70,
             child: Center(
@@ -157,8 +165,9 @@ mixin CreateScheduledMixin<T extends StatefulWidget> on State<T> {
       keyboardType: TextInputType.multiline,
       maxLines: 14,
       minLines: 1,
-      selectionControls:
-          SettingsSvc.settings.skin.value == Skins.iOS ? cupertinoTextSelectionControls : materialTextSelectionControls,
+      selectionControls: SettingsSvc.settings.skin.value == Skins.iOS
+          ? cupertinoTextSelectionControls
+          : materialTextSelectionControls,
       enableIMEPersonalizedLearning: !SettingsSvc.settings.incognitoKeyboard.value,
       textInputAction: TextInputAction.newline,
       cursorColor: context.theme.colorScheme.primary,

@@ -91,10 +91,7 @@ class _TextFieldSuffixState extends State<TextFieldSuffix> with ThemeHelpers {
               if (!canSend) return const SizedBox.shrink();
               return Padding(
                 padding: const EdgeInsets.all(3.0),
-                child: SendButton(
-                  sendMessage: widget.sendMessage,
-                  onLongPress: () {},
-                ),
+                child: SendButton(sendMessage: widget.sendMessage, onLongPress: () {}),
               );
             });
           }
@@ -103,10 +100,7 @@ class _TextFieldSuffixState extends State<TextFieldSuffix> with ThemeHelpers {
           if (!canSendInCreator) return const SizedBox.shrink();
           return Padding(
             padding: const EdgeInsets.all(3.0),
-            child: SendButton(
-              sendMessage: widget.sendMessage,
-              onLongPress: () {},
-            ),
+            child: SendButton(sendMessage: widget.sendMessage, onLongPress: () {}),
           );
         }
 
@@ -208,8 +202,8 @@ class _RecordingButton extends StatelessWidget {
           backgroundColor: !isIOS || (isIOS && !isChatCreator && !showRecording)
               ? null
               : !isChatCreator && !showRecording
-                  ? context.theme.colorScheme.outline
-                  : context.theme.colorScheme.primary.withValues(alpha: 0.4),
+              ? context.theme.colorScheme.outline
+              : context.theme.colorScheme.primary.withValues(alpha: 0.4),
           shape: const CircleBorder(),
           padding: const EdgeInsets.all(0),
           maximumSize: isDesktop ? const Size(40, 40) : const Size(32, 32),
@@ -219,22 +213,22 @@ class _RecordingButton extends StatelessWidget {
         child: isLinuxArm64
             ? const SizedBox(height: 40)
             : !isChatCreator && !showRecording
-                ? CupertinoIconWrapper(
-                    icon: Icon(
-                      isIOS ? CupertinoIcons.mic_fill : Icons.mic_none,
-                      color: isIOS
-                          ? context.theme.colorScheme.outline.withValues(alpha: 0.8)
-                          : context.theme.colorScheme.onSurfaceVariant,
-                      size: 20,
-                    ),
-                  )
-                : CupertinoIconWrapper(
-                    icon: Icon(
-                      isIOS ? CupertinoIcons.stop_fill : Icons.stop_circle,
-                      color: isIOS ? context.theme.colorScheme.primary : context.theme.colorScheme.onSurfaceVariant,
-                      size: 15,
-                    ),
-                  ),
+            ? CupertinoIconWrapper(
+                icon: Icon(
+                  isIOS ? CupertinoIcons.mic_fill : Icons.mic_none,
+                  color: isIOS
+                      ? context.theme.colorScheme.outline.withValues(alpha: 0.8)
+                      : context.theme.colorScheme.onSurfaceVariant,
+                  size: 20,
+                ),
+              )
+            : CupertinoIconWrapper(
+                icon: Icon(
+                  isIOS ? CupertinoIcons.stop_fill : Icons.stop_circle,
+                  color: isIOS ? context.theme.colorScheme.primary : context.theme.colorScheme.onSurfaceVariant,
+                  size: 15,
+                ),
+              ),
         onPressed: () async {
           if (controller == null) return;
           controller!.showRecording.toggle();
@@ -242,22 +236,21 @@ class _RecordingButton extends StatelessWidget {
           if (controller!.showRecording.value) {
             // Start recording
             if (isDesktop) {
-              File temp = File(join(
-                FilesystemSvc.appDocDir.path,
-                "temp",
-                "recorder",
-                "${controller!.chat.guid.characters.where((c) => c.isAlphabetOnly || c.isNumericOnly).join()}.m4a",
-              ));
+              File temp = File(
+                join(
+                  FilesystemSvc.appDocDir.path,
+                  "temp",
+                  "recorder",
+                  "${controller!.chat.guid.characters.where((c) => c.isAlphabetOnly || c.isNumericOnly).join()}.m4a",
+                ),
+              );
               temp.createSync(recursive: true);
               audioRecorder.start(const RecordConfig(bitRate: 320000), path: temp.path);
               return;
             }
             try {
               await recorderController!.record(
-                recorderSettings: const RecorderSettings(
-                  sampleRate: 44100,
-                  bitRate: 320000,
-                ),
+                recorderSettings: const RecorderSettings(sampleRate: 44100, bitRate: 320000),
               );
               // If the recorder still isn't in a recording state after the call,
               // treat it as a failure and reset the UI.
@@ -310,19 +303,12 @@ class _RecordingButton extends StatelessWidget {
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(
-                    "Review your audio snippet before sending it",
-                    style: context.theme.textTheme.bodyLarge,
-                  ),
+                  Text("Review your audio snippet before sending it", style: context.theme.textTheme.bodyLarge),
                   Container(height: 10.0),
                   ConstrainedBox(
                     constraints: BoxConstraints(maxWidth: context.width * 0.6),
-                    child: AudioPlayer(
-                      key: Key("AudioMessage-$path"),
-                      file: file,
-                      attachment: null,
-                    ),
-                  )
+                    child: AudioPlayer(key: Key("AudioMessage-$path"), file: file, attachment: null),
+                  ),
                 ],
               ),
               actions: <BBDialogAction>[
@@ -338,14 +324,22 @@ class _RecordingButton extends StatelessWidget {
                   text: "Send",
                   isDefault: true,
                   onPressed: () async {
-                    await controller!.send(SendData(
-                      attachments: [file],
-                      text: "",
-                      subject: "",
-                      isAudioMessage: true,
-                    ));
+                    try {
+                      await controller!.send(
+                        SendData(attachments: [file], text: "", subject: "", isAudioMessage: true),
+                      );
+                    } on LogicalSendAdmissionException catch (error) {
+                      if (context.mounted) {
+                        showSnackbar('Send paused', logicalSendAdmissionUserMessage(error.state));
+                      }
+                      return;
+                    } catch (error, stack) {
+                      Logger.warn('Voice message remains unsent', error: error, trace: stack);
+                      if (context.mounted) showSnackbar('Send paused', 'Voice message preserved; please try again.');
+                      return;
+                    }
                     onDeleteRecording(file.path!);
-                    Navigator.of(context, rootNavigator: true).pop();
+                    if (context.mounted) Navigator.of(context, rootNavigator: true).pop();
                   },
                 ),
               ],

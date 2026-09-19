@@ -13,46 +13,39 @@ bool get iOS => SettingsSvc.settings.skin.value == Skins.iOS;
 
 /// Extracted widget for typing indicator row with avatar
 class TypingIndicatorRow extends StatelessWidget {
-  const TypingIndicatorRow({
-    super.key,
-    required this.controller,
-  });
+  const TypingIndicatorRow({super.key, required this.controller});
 
   final ConversationViewController controller;
 
   @override
   Widget build(BuildContext context) {
     final chat = ChatStateScope.chatOf(context);
-    return Obx(() => Row(
-          key: controller.typingInfoKey,
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            if (controller.showTypingIndicator.value && SettingsSvc.settings.alwaysShowAvatars.value && iOS)
-              Padding(
-                padding: const EdgeInsets.only(left: 10.0),
-                child: ContactAvatarWidget(
-                  key: Key("${chat.handles.first.address}-typing-indicator"),
-                  handle: chat.handles.first,
-                  size: 30,
-                  fontSize: 14,
-                  borderThickness: 0.1,
-                ),
+    return Obx(
+      () => Row(
+        key: controller.typingInfoKey,
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          if (controller.showTypingIndicator.value && SettingsSvc.settings.alwaysShowAvatars.value && iOS)
+            Padding(
+              padding: const EdgeInsets.only(left: 10.0),
+              child: ContactAvatarWidget(
+                key: Key("${chat.handles.first.address}-typing-indicator"),
+                handle: chat.handles.first,
+                size: 30,
+                fontSize: 14,
+                borderThickness: 0.1,
               ),
-            TypingIndicator(
-              controller: controller,
-            )
-          ],
-        ));
+            ),
+          TypingIndicator(controller: controller),
+        ],
+      ),
+    );
   }
 }
 
 /// Extracted widget for notifications silenced banner
 class NotificationsSilencedBanner extends StatelessWidget {
-  const NotificationsSilencedBanner({
-    super.key,
-    required this.controller,
-    required this.latestMessage,
-  });
+  const NotificationsSilencedBanner({super.key, required this.controller, required this.latestMessage});
 
   final ConversationViewController controller;
   final Message? latestMessage;
@@ -65,36 +58,39 @@ class NotificationsSilencedBanner extends StatelessWidget {
     return AnimatedSize(
       key: controller.focusInfoKey,
       duration: const Duration(milliseconds: 250),
-      child: Obx(() => controller.recipientNotifsSilenced.value
-          ? Padding(
-              padding: const EdgeInsets.all(10.0),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        String.fromCharCode(moonIcon.codePoint),
-                        style: TextStyle(
-                          fontFamily: moonIcon.fontFamily,
-                          package: moonIcon.fontPackage,
-                          fontSize: context.theme.textTheme.bodyMedium!.fontSize,
-                          color: context.theme.colorScheme.tertiaryContainer,
+      child: Obx(
+        () => controller.recipientNotifsSilenced.value
+            ? Padding(
+                padding: const EdgeInsets.all(10.0),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          String.fromCharCode(moonIcon.codePoint),
+                          style: TextStyle(
+                            fontFamily: moonIcon.fontFamily,
+                            package: moonIcon.fontPackage,
+                            fontSize: context.theme.textTheme.bodyMedium!.fontSize,
+                            color: context.theme.colorScheme.tertiaryContainer,
+                          ),
                         ),
-                      ),
-                      Text(
-                        " ${chat.getTitle()} has notifications silenced",
-                        style: context.theme.textTheme.bodyMedium!
-                            .copyWith(color: context.theme.colorScheme.tertiaryContainer),
-                      ),
-                    ],
-                  ),
-                  _NotifyAnywayButton(latestMessage: latestMessage),
-                ],
-              ),
-            )
-          : const SizedBox.shrink()),
+                        Text(
+                          " ${chat.getTitle()} has notifications silenced",
+                          style: context.theme.textTheme.bodyMedium!.copyWith(
+                            color: context.theme.colorScheme.tertiaryContainer,
+                          ),
+                        ),
+                      ],
+                    ),
+                    _NotifyAnywayButton(latestMessage: latestMessage),
+                  ],
+                ),
+              )
+            : const SizedBox.shrink(),
+      ),
     );
   }
 }
@@ -189,26 +185,31 @@ class SmartRepliesRow extends StatelessWidget {
       child: InkWell(
         borderRadius: BorderRadius.circular(19),
         onTap: () {
-          OutgoingMsgHandler.queue(OutgoingMessage(
-            chat: controller.chat,
-            message: Message(
-              text: suggestion,
-              dateCreated: DateTime.now(),
-              hasAttachments: false,
-              isFromMe: true,
-              handleId: 0,
+          if (ChatsSvc.isLogicalConversation(controller.chat)) {
+            controller.textController.text = suggestion;
+            controller.textController.selection = TextSelection.collapsed(offset: suggestion.length);
+            controller.focusNode.requestFocus();
+            return;
+          }
+          OutgoingMsgHandler.queue(
+            OutgoingMessage(
+              chat: controller.chat,
+              message: Message(
+                text: suggestion,
+                dateCreated: DateTime.now(),
+                hasAttachments: false,
+                isFromMe: true,
+                handleId: 0,
+              ),
             ),
-          ));
+          );
         },
         child: Center(
           child: Padding(
             padding: const EdgeInsets.only(bottom: 1.5, left: 13.0, right: 13.0),
             child: RichText(
               text: TextSpan(
-                children: MessageHelper.buildEmojiText(
-                  suggestion,
-                  context.theme.extension<BubbleText>()!.bubbleText,
-                ),
+                children: MessageHelper.buildEmojiText(suggestion, context.theme.extension<BubbleText>()!.bubbleText),
               ),
             ),
           ),
@@ -220,10 +221,7 @@ class SmartRepliesRow extends StatelessWidget {
 
 /// Extracted widget for scroll down button
 class ScrollDownButton extends StatelessWidget {
-  const ScrollDownButton({
-    super.key,
-    required this.controller,
-  });
+  const ScrollDownButton({super.key, required this.controller});
 
   final ConversationViewController controller;
 
@@ -252,9 +250,7 @@ class ScrollDownButton extends StatelessWidget {
                       onPressed: controller.scrollToBottom,
                       child: Container(
                         constraints: const BoxConstraints(minHeight: 32, minWidth: 32),
-                        decoration: const BoxDecoration(
-                          shape: BoxShape.circle,
-                        ),
+                        decoration: const BoxDecoration(shape: BoxShape.circle),
                         padding: const EdgeInsets.only(top: 3, left: 1),
                         alignment: Alignment.center,
                         child: Icon(
@@ -268,10 +264,7 @@ class ScrollDownButton extends StatelessWidget {
                       heroTag: null,
                       onPressed: controller.scrollToBottom,
                       backgroundColor: context.theme.colorScheme.secondary,
-                      child: Icon(
-                        Icons.arrow_downward,
-                        color: context.theme.colorScheme.onSecondary,
-                      ),
+                      child: Icon(Icons.arrow_downward, color: context.theme.colorScheme.onSecondary),
                     ),
             ),
           ),
@@ -283,10 +276,7 @@ class ScrollDownButton extends StatelessWidget {
 
 /// Extracted widget for drag and drop overlay
 class DragDropOverlay extends StatelessWidget {
-  const DragDropOverlay({
-    super.key,
-    required this.dragging,
-  });
+  const DragDropOverlay({super.key, required this.dragging});
 
   final RxBool dragging;
 

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:audio_waveforms/audio_waveforms.dart';
 import 'package:bluebubbles/app/components/custom_text_editing_controllers.dart';
@@ -25,8 +26,8 @@ class MessageEditEntry {
 
 ConversationViewController cvc(Chat chat, {String? tag}) =>
     Get.isRegistered<ConversationViewController>(tag: tag ?? chat.guid)
-        ? Get.find<ConversationViewController>(tag: tag ?? chat.guid)
-        : Get.put(ConversationViewController(chat, tag_: tag), tag: tag ?? chat.guid);
+    ? Get.find<ConversationViewController>(tag: tag ?? chat.guid)
+    : Get.put(ConversationViewController(chat, tag_: tag), tag: tag ?? chat.guid);
 
 class ConversationViewController extends StatefulController with GetSingleTickerProviderStateMixin {
   final Chat chat;
@@ -87,6 +88,8 @@ class ConversationViewController extends StatefulController with GetSingleTicker
   final ScrollController emojiScrollController = ScrollController();
   final Rxn<DateTime> scheduledDate = Rxn<DateTime>(null);
   final Rxn<MessageReplyContext> _replyToMessage = Rxn<MessageReplyContext>(null);
+  VoidCallback? logicalDraftConsumedFunc;
+  Rxn<MessageReplyContext> get replyToMessageRx => _replyToMessage;
   MessageReplyContext? get replyToMessage => _replyToMessage.value;
   set replyToMessage(MessageReplyContext? m) {
     _replyToMessage.value = m;
@@ -95,16 +98,13 @@ class ConversationViewController extends StatefulController with GetSingleTicker
     }
   }
 
-  late final mentionables = chat.handles
-      .map((e) => Mentionable(
-            handle: e,
-          ))
-      .toList();
+  late final mentionables = chat.handles.map((e) => Mentionable(handle: e)).toList();
 
   bool keyboardOpen = false;
   double _keyboardOffset = 0;
   Timer? _scrollDownDebounce;
   Future<void> Function(SendData)? sendFunc;
+  Future<void>? _logicalSendInFlight;
 
   /// When set, [_SendAnimationState] will auto-fire this send as soon as it
   /// registers [sendFunc] (i.e. immediately after the widget is built).
@@ -204,11 +204,7 @@ class ConversationViewController extends StatefulController with GetSingleTicker
 
   Future<void> scrollToBottom() async {
     if (scrollController.positions.isNotEmpty && scrollController.positions.first.extentBefore > 0) {
-      await scrollController.animateTo(
-        0.0,
-        curve: Curves.easeOut,
-        duration: const Duration(milliseconds: 300),
-      );
+      await scrollController.animateTo(0.0, curve: Curves.easeOut, duration: const Duration(milliseconds: 300));
     }
 
     if (SettingsSvc.settings.openKeyboardOnSTB.value) {
@@ -216,8 +212,83 @@ class ConversationViewController extends StatefulController with GetSingleTicker
     }
   }
 
-  Future<void> send(SendData data) async {
-    await sendFunc?.call(data);
+  Future<void> send(SendData data) {
+    if (!ChatsSvc.isLogicalConversation(chat)) {
+      final handler = sendFunc;
+      return handler == null ? Future<void>.error(StateError('SEND_PIPELINE_NOT_READY')) : handler(data);
+    }
+    if (_logicalSendInFlight != null) {
+      return Future<void>.error(
+        const LogicalSendAdmissionException(
+          LogicalSendAdmissionState.duplicateAction,
+          'SEND_BLOCKED_CONCURRENT_LOGICAL_COMPOSER_ACTION',
+        ),
+      );
+    }
+    late final Future<void> operation;
+    operation = _sendLogical(data).whenComplete(() {
+      if (identical(_logicalSendInFlight, operation)) _logicalSendInFlight = null;
+    });
+    _logicalSendInFlight = operation;
+    return operation;
+  }
+
+  Future<void> _sendLogical(SendData data) async {
+    final attachments = <PlatformFile>[
+      for (final attachment in data.attachments)
+        PlatformFile(
+          path: attachment.path,
+          name: attachment.name,
+          size: attachment.size,
+          bytes: attachment.bytes == null ? null : Uint8List.fromList(attachment.bytes!),
+          balloonBundleId: attachment.balloonBundleId,
+        ),
+    ];
+    var draft = data.logicalDraft;
+    if (draft == null) {
+      if (data.replyGuid != null) {
+        throw const LogicalSendAdmissionException(
+          LogicalSendAdmissionState.replyTargetInvalid,
+          'SEND_BLOCKED_REPLY_TARGET_PROVENANCE_MISSING',
+        );
+      }
+      draft = await ChatsSvc.saveLogicalSendIntent(
+        chat,
+        text: data.text,
+        subject: data.subject,
+        attachments: attachments,
+        reply: null,
+        effectId: data.effectId,
+      );
+    }
+    if (draft == null || draft.attachments.any((attachment) => !attachment.isRestorable)) {
+      throw const LogicalSendAdmissionException(
+        LogicalSendAdmissionState.attachmentIntentInvalid,
+        'SEND_BLOCKED_ATTACHMENT_INTENT_UNAVAILABLE',
+      );
+    }
+    final handler = sendFunc;
+    if (handler == null) {
+      throw const LogicalSendAdmissionException(
+        LogicalSendAdmissionState.providerEvidenceUnavailable,
+        'SEND_BLOCKED_SEND_PIPELINE_NOT_READY',
+      );
+    }
+    await handler(
+      SendData(
+        attachments: attachments,
+        text: data.text,
+        subject: data.subject,
+        replyGuid: data.replyGuid,
+        replyPart: data.replyPart,
+        effectId: data.effectId,
+        logicalDraft: draft,
+        isAudioMessage: data.isAudioMessage,
+      ),
+    );
+    if (await ChatsSvc.clearLogicalDraftIfCurrent(draft)) {
+      logicalDraftConsumedFunc?.call();
+    }
   }
 
   bool isSelected(String guid) {
@@ -246,14 +317,12 @@ class ConversationViewController extends StatefulController with GetSingleTicker
   }
 
   Future<void> saveReplyToMessageState() async {
-    await PrefsInterface.saveReplyToMessageState(
-      chat.guid,
-      replyToMessage?.message.guid,
-      replyToMessage?.partIndex,
-    );
+    if (ChatsSvc.isLogicalConversation(chat)) return;
+    await PrefsInterface.saveReplyToMessageState(chat.guid, replyToMessage?.message.guid, replyToMessage?.partIndex);
   }
 
   Future<void> loadReplyToMessageState() async {
+    if (ChatsSvc.isLogicalConversation(chat)) return;
     final data = await PrefsInterface.loadReplyToMessageState(chat.guid);
     if (data != null) {
       final messageGuid = data['messageGuid'] as String;

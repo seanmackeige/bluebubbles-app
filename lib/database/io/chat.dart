@@ -522,7 +522,8 @@ class Chat {
                       : Message_.dateDeleted.isNull().and(Message_.dateCreated.notNull()),
                 )
                 ..link(Message_.chat, Chat_.id.oneOf(chatIds))
-                ..order(Message_.dateCreated, flags: Order.descending))
+                ..order(Message_.dateCreated, flags: Order.descending)
+                ..order(Message_.guid))
               .build();
       query
         ..limit = limit
@@ -567,6 +568,8 @@ class Chat {
     int limit = 25,
     bool includeDeleted = false,
     int? searchAround,
+    int? beforeDateCreated,
+    String? afterGuidAtBoundary,
     List<Chat>? sourceChats,
     Function? onSupplementalDataLoaded,
   }) async {
@@ -586,6 +589,8 @@ class Chat {
       limit: limit,
       includeDeleted: includeDeleted,
       searchAround: searchAround,
+      beforeDateCreated: beforeDateCreated,
+      afterGuidAtBoundary: afterGuidAtBoundary,
     );
 
     if (messages.isEmpty) {

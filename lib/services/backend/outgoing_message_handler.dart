@@ -1,6 +1,7 @@
 import 'package:bluebubbles/models/models.dart' show AttachmentUploadProgress;
 import 'dart:async';
 import 'dart:collection';
+import 'dart:convert';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/backend/interfaces/send_message_interface.dart';
@@ -10,6 +11,7 @@ import 'package:bluebubbles/utils/file_utils.dart';
 import 'package:path/path.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:collection/collection.dart';
+import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:get/get.dart' hide Response;
@@ -26,6 +28,17 @@ const _tag = 'OutgoingMessageHandler';
 /// [_maxPrepAttempts] times, backing off [_retryBackoffMs] ms times the attempt.
 const _maxPrepAttempts = 3;
 const _retryBackoffMs = 250;
+
+class LogicalSendAdmissionException implements Exception {
+  const LogicalSendAdmissionException(this.state, this.reason, {this.rearmedDraft});
+
+  final LogicalSendAdmissionState state;
+  final String reason;
+  final LogicalDraft? rearmedDraft;
+
+  @override
+  String toString() => reason;
+}
 
 // ignore: non_constant_identifier_names
 OutgoingMessageHandler get OutgoingMsgHandler => GetIt.I<OutgoingMessageHandler>();
@@ -169,6 +182,7 @@ class OutgoingMessageHandler {
   final Queue<_OutgoingEntry> _queue = Queue();
   bool _isProcessing = false;
   final LogicalExecutionAdmissionGate _logicalAdmissionGate = LogicalExecutionAdmissionGate();
+  Completer<void>? _logicalAdmissionMutex;
 
   String _presentationGuid(Chat chat) => ChatsSvc.presentationGuidFor(chat.guid);
 
@@ -178,67 +192,373 @@ class OutgoingMessageHandler {
   /// there is actually something pending for a given chat.
   final pendingChatGuids = <String>{}.obs;
 
-  /// Enqueues [item] for sending.  Preparation (DB write / file copy) is
-  /// performed synchronously before the item enters the queue, so the
-  /// outgoing bubble appears in the UI immediately.  The actual HTTP call
-  /// happens when the queue reaches this item.
+  /// Enqueues one item. Logical UI sends use [queueBatch] so every attachment
+  /// and text part is admitted from one provider snapshot.
+  Future<void> queue(OutgoingQueueItem item) => queueBatch(<OutgoingQueueItem>[item]);
+
+  /// The sole logical execution admission boundary.
   ///
-  /// Returns a [Future] that completes (or errors) when the item's
-  /// [OutgoingQueueItem.completer] resolves — i.e. when the HTTP response arrives
-  /// or an error is surfaced.
-  Future<void> queue(OutgoingQueueItem item) async {
-    if (LogicalConversationViewPolicy.isApprovedSourceRowId(item.chat.originalROWID)) {
+  /// For a certified logical conversation this method freezes user intent,
+  /// reads provider evidence once, verifies the draft's observed revisions,
+  /// qualifies every exact physical target, commits a durable replay receipt,
+  /// and only then permits existing DB/file preparation. Later asynchronous
+  /// stages carry that receipt and may not select another chat.
+  Future<void> queueBatch(List<OutgoingQueueItem> items) async {
+    if (items.isEmpty) return;
+    for (final item in items) {
       _ensureTempGuid(item);
-      final request = _logicalMutationRequest(item);
-      // Execution admission always re-reads current server/source evidence.
-      // The UI preflight is informative only and can never authorize a send.
-      final decision = await ChatsSvc.resolveLogicalMutation(item.chat, request, force: true);
+    }
+
+    final logical = items.any((item) => LogicalConversationViewPolicy.isApprovedSourceRowId(item.chat.originalROWID));
+    if (logical) {
+      if (items.any((item) => !LogicalConversationViewPolicy.isApprovedSourceRowId(item.chat.originalROWID))) {
+        throw const LogicalSendAdmissionException(
+          LogicalSendAdmissionState.targetBindingInvalid,
+          'SEND_BLOCKED_MIXED_LOGICAL_AND_PHYSICAL_BATCH',
+        );
+      }
+      if (items.any((item) => item.logicalActionId == null || item.logicalActionId!.isEmpty)) {
+        _failLogicalAdmission(items, 'SEND_BLOCKED_LOGICAL_ACTION_IDENTITY_MISSING');
+      }
+      await _withLogicalAdmissionLock(() => _admitLogicalBatch(items));
+      for (final item in items) {
+        item.logicalDispatchReservationCompleter = Completer<void>();
+      }
+    }
+
+    final prepared = <_OutgoingEntry>[];
+    try {
+      for (final item in items) {
+        final prep = await _prepItemWithRetry(item);
+        if (!prep.ok) {
+          throw StateError('OUTGOING_PREPARATION_FAILED');
+        }
+        final returned = prep.result;
+        if (returned is List<Message>) {
+          for (final message in returned) {
+            prepared.add(_OutgoingEntry(_copyWithMessage(item, message)));
+          }
+        } else {
+          prepared.add(_OutgoingEntry(item));
+        }
+      }
+    } catch (error, stack) {
+      if (logical) {
+        await _rollbackLogicalAdmissionBeforeDispatchBatch(items);
+      }
+      Error.throwWithStackTrace(
+        logical
+            ? const LogicalSendAdmissionException(
+                LogicalSendAdmissionState.attachmentIntentInvalid,
+                'SEND_BLOCKED_OUTGOING_PREPARATION_FAILED',
+              )
+            : error,
+        stack,
+      );
+    }
+
+    _queue.addAll(prepared);
+    pendingChatGuids.addAll(prepared.map((entry) => entry.item.chat.guid));
+    unawaited(_processNext());
+    if (logical) {
+      await Future.wait(
+        prepared.map((entry) => entry.item.logicalDispatchReservationCompleter!.future),
+        eagerError: true,
+      );
+    }
+  }
+
+  Future<T> _withLogicalAdmissionLock<T>(Future<T> Function() operation) async {
+    while (_logicalAdmissionMutex != null) {
+      await _logicalAdmissionMutex!.future;
+    }
+    final mutex = Completer<void>();
+    _logicalAdmissionMutex = mutex;
+    try {
+      return await operation();
+    } finally {
+      if (identical(_logicalAdmissionMutex, mutex)) _logicalAdmissionMutex = null;
+      if (!mutex.isCompleted) mutex.complete();
+    }
+  }
+
+  Future<void> _admitLogicalBatch(List<OutgoingQueueItem> items) async {
+    final presentationChat = items.first.chat;
+    final replyDraft = items.map((item) => item.logicalDraft?.reply).whereType<LogicalReplyIntent>().firstOrNull;
+    if (replyDraft != null && items.length != 1) {
+      _failLogicalAdmission(items, 'SEND_BLOCKED_REPLY_TARGET_INVALID_MULTI_OPERATION');
+    }
+    if (replyDraft != null && replyDraft.part < 0) {
+      _failLogicalAdmission(items, 'SEND_BLOCKED_REPLY_TARGET_INVALID_PART');
+    }
+    for (final item in items) {
+      if (item.logicalDraft?.reply == null) continue;
+      if (item.message.threadOriginatorGuid != replyDraft!.relationshipTargetGuid) {
+        _failLogicalAdmission(items, 'SEND_BLOCKED_REPLY_TARGET_BINDING_CHANGED');
+      }
+    }
+    for (final item in items) {
+      if (item is OutgoingAttachment) {
+        try {
+          item.logicalAttachmentContentFingerprint = await _attachmentTransportFingerprint(item, prepared: false);
+        } catch (_) {
+          _failLogicalAdmission(items, 'SEND_BLOCKED_ATTACHMENT_INTENT_UNAVAILABLE');
+        }
+      }
+    }
+    final providerContextAtObservationStart = _currentLogicalProviderContextFingerprint();
+    final result = await ChatsSvc.resolveLogicalMutationBatch(
+      presentationChat,
+      items.map(_logicalMutationRequest).toList(growable: false),
+      force: true,
+    );
+    final revision = result.revision;
+    final observationEpoch = result.observationEpoch;
+    if (revision == null || observationEpoch == null) {
+      _failLogicalAdmission(items, 'SEND_BLOCKED_PROVIDER_EVIDENCE_UNAVAILABLE');
+    }
+    if (_currentLogicalProviderContextFingerprint() != providerContextAtObservationStart) {
+      _failLogicalAdmission(items, 'SEND_BLOCKED_PROVIDER_CONTEXT_CHANGED_DURING_EVIDENCE');
+    }
+
+    final draft = items.map((item) => item.logicalDraft).whereType<LogicalDraft>().firstOrNull;
+    if (draft != null && !revision.matchesDraft(draft)) {
+      final certificateChanged = draft.observedCertificateRevision != revision.certificateRevision;
+      final rearmed = draft.rearm(revision, updatedAtEpochMilliseconds: DateTime.now().millisecondsSinceEpoch);
+      await ChatsSvc.persistRearmedLogicalDraft(rearmed);
+      _failLogicalAdmission(
+        items,
+        certificateChanged ? 'SEND_BLOCKED_MEMBERSHIP_CERTIFICATE_CHANGED' : 'SEND_BLOCKED_AUTHORITY_CHANGED',
+        rearmedDraft: rearmed,
+      );
+    }
+
+    // Freeze transport capability only after the forced provider observation.
+    // No await occurs between these values and the receipt fingerprint below.
+    for (final item in items) {
+      if (item.logicalDraft?.reply != null) {
+        final replyCapable = item is OutgoingAttachment
+            ? SettingsSvc.settings.enablePrivateAPI.value && SettingsSvc.settings.privateAPIAttachmentSend.value
+            : SettingsSvc.settings.enablePrivateAPI.value && SettingsSvc.settings.privateAPISend.value;
+        if (!replyCapable) {
+          _failLogicalAdmission(items, 'SEND_BLOCKED_REPLY_TARGET_INVALID_PROVIDER_CAPABILITY');
+        }
+      }
+      item.logicalTransportMethod = _logicalTransportMethod(item);
+      item.logicalDdScan = _logicalDdScan(item);
+    }
+
+    final targets = <Chat>[];
+    for (var index = 0; index < result.decisions.length; index++) {
+      final decision = result.decisions[index];
       if (!decision.isSingleTarget) {
-        _failLogicalAdmission(item, decision.reason);
-        return;
+        _failLogicalAdmission(items, 'SEND_BLOCKED_${decision.reason}');
       }
       final targetRowId = decision.physicalTargetRowIds.single;
-      final targetChats = ChatsSvc.logicalSourceChatsFor(
-        item.chat,
+      final matches = ChatsSvc.logicalSourceChatsFor(
+        presentationChat,
       ).where((candidate) => candidate.originalROWID == targetRowId).toList();
-      if (targetChats.length != 1) {
-        _failLogicalAdmission(item, 'QUALIFIED_TARGET_BINDING_NOT_UNIQUE');
-        return;
+      if (matches.length != 1) {
+        _failLogicalAdmission(items, 'SEND_BLOCKED_QUALIFIED_TARGET_BINDING_NOT_UNIQUE');
       }
-      final actionId = item.message.guid ?? '';
-      if (!_logicalAdmissionGate.admit(actionId, explicitRetry: item.isRetry)) {
-        _failLogicalAdmission(item, 'DUPLICATE_LOGICAL_ACTION_BLOCKED');
-        return;
-      }
-      item.chat = targetChats.single;
+      targets.add(matches.single);
     }
 
-    // Every item must have a stable temp GUID before prep/retry begins — see
-    // [_ensureTempGuid]. Centralized here so individual UI call sites can't
-    // forget it (several did, historically — that's what caused this to be
-    // centralized rather than left to convention).
-    _ensureTempGuid(item);
-
-    // Prep the item (writes temp messages / copies attachment files to disk),
-    // retrying a transient failure and surfacing a terminal one as a failed
-    // message so it is never silently dropped. See [_prepItemWithRetry].
-    final prep = await _prepItemWithRetry(item);
-    if (!prep.ok) return;
-    final returned = prep.result;
-
-    if (returned is List<Message>) {
-      // _persistOutgoingMessages already saved each message to the DB; create a queue
-      // entry for each one with the message that was actually saved.
-      for (final m in returned) {
-        _queue.add(_OutgoingEntry(_copyWithMessage(item, m)));
-      }
-    } else {
-      // Attachment: prepAttachment already saved it; keep the original item.
-      _queue.add(_OutgoingEntry(item));
+    final actionIds = <String>[
+      for (var index = 0; index < items.length; index++)
+        items[index].logicalActionId ?? '${items[index].message.guid!}:$index',
+    ];
+    final ledger = LogicalAdmissionLedger.fromEntries(PrefsSvc.messaging.loadLogicalAdmissionLedger());
+    if (ledger.isCorrupt) {
+      _failLogicalAdmission(items, 'SEND_BLOCKED_ADMISSION_LEDGER_UNAVAILABLE');
+    }
+    final admissionKeys = <String>[
+      for (var index = 0; index < items.length; index++)
+        '${items[index].isRetry ? 'retry' : 'initial'}:${actionIds[index]}',
+    ];
+    if (ledger.containsAny(admissionKeys)) {
+      _failLogicalAdmission(items, 'SEND_BLOCKED_DUPLICATE_LOGICAL_ACTION');
     }
 
-    pendingChatGuids.add(item.chat.guid);
-    unawaited(_processNext());
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final providerContextFingerprint = providerContextAtObservationStart;
+    final receipts = <LogicalSendAdmissionReceipt>[];
+    for (var index = 0; index < items.length; index++) {
+      final target = targets[index];
+      final payloadFingerprint = _logicalPayloadFingerprint(items[index]);
+      final material = utf8.encode(
+        '$logicalSendAdmissionSchema\u0000${admissionKeys[index]}\u0000${revision.authorityRevision}'
+        '\u0000${target.originalROWID}\u0000${target.guid}\u0000$payloadFingerprint'
+        '\u0000$providerContextFingerprint',
+      );
+      receipts.add(
+        LogicalSendAdmissionReceipt(
+          admissionId: sha256.convert(material).toString(),
+          actionId: actionIds[index],
+          logicalId: draft?.logicalId ?? LogicalConversationViewPolicy.comcastNodeUpdates.id,
+          draftContentRevision: draft?.contentRevision ?? 0,
+          certificateRevision: revision.certificateRevision,
+          authorityRevision: revision.authorityRevision,
+          authorityEpoch: revision.epoch,
+          targetSourceChatRowId: target.originalROWID!,
+          targetSourceChatGuid: target.guid,
+          transportTempGuid: items[index].message.guid!,
+          payloadFingerprint: payloadFingerprint,
+          providerContextFingerprint: providerContextFingerprint,
+          committedAtEpochMilliseconds: now,
+        ),
+      );
+    }
+
+    // Close the local admission TOCTOU window. Provider collection is a
+    // bounded stable snapshot; this second revision read ensures that an
+    // in-process invalidation observed while decisions/receipts were being
+    // assembled cannot be committed under the older authority.
+    final commitRevision = ChatsSvc.currentLogicalAuthorityRevision;
+    if (commitRevision == null ||
+        !ChatsSvc.isLogicalEvidenceObservationCurrent(observationEpoch) ||
+        _currentLogicalProviderContextFingerprint() != providerContextFingerprint ||
+        commitRevision.certificateRevision != revision.certificateRevision ||
+        commitRevision.authorityRevision != revision.authorityRevision ||
+        commitRevision.epoch != revision.epoch ||
+        (draft != null && !commitRevision.matchesDraft(draft))) {
+      _failLogicalAdmission(items, 'SEND_BLOCKED_AUTHORITY_CHANGED_DURING_ADMISSION');
+    }
+
+    if (!_logicalAdmissionGate.admitBatch(actionIds, explicitRetry: items.any((item) => item.isRetry))) {
+      _failLogicalAdmission(items, 'SEND_BLOCKED_DUPLICATE_LOGICAL_ACTION');
+    }
+    if (!ledger.commitBatch(receipts, admissionKeys)) {
+      _logicalAdmissionGate.rollbackBatch(actionIds);
+      _failLogicalAdmission(items, 'SEND_BLOCKED_ADMISSION_LEDGER_CAPACITY');
+    }
+    try {
+      await PrefsSvc.messaging.saveLogicalAdmissionLedger(ledger.entries);
+    } catch (_) {
+      _logicalAdmissionGate.rollbackBatch(actionIds);
+      _failLogicalAdmission(items, 'SEND_BLOCKED_ADMISSION_LEDGER_UNAVAILABLE');
+    }
+
+    final durableRevision = ChatsSvc.currentLogicalAuthorityRevision;
+    if (durableRevision == null ||
+        !ChatsSvc.isLogicalEvidenceObservationCurrent(observationEpoch) ||
+        _currentLogicalProviderContextFingerprint() != providerContextFingerprint ||
+        durableRevision.certificateRevision != revision.certificateRevision ||
+        durableRevision.authorityRevision != revision.authorityRevision ||
+        durableRevision.epoch != revision.epoch) {
+      if (!ledger.rollbackAdmittedBatch(receipts.map((receipt) => receipt.admissionId))) {
+        _failLogicalAdmission(items, 'SEND_BLOCKED_ADMISSION_LEDGER_UNAVAILABLE');
+      }
+      await PrefsSvc.messaging.saveLogicalAdmissionLedger(ledger.entries);
+      if (!_logicalAdmissionGate.rollbackBatch(actionIds)) {
+        _failLogicalAdmission(items, 'SEND_BLOCKED_ADMISSION_GATE_UNAVAILABLE');
+      }
+      _failLogicalAdmission(items, 'SEND_BLOCKED_AUTHORITY_CHANGED_DURING_DURABLE_COMMIT');
+    }
+
+    for (var index = 0; index < items.length; index++) {
+      items[index].logicalActionId = actionIds[index];
+      items[index].logicalAdmissionReceipt = receipts[index];
+      items[index].chat = targets[index];
+    }
+  }
+
+  String _logicalTransportMethod(OutgoingQueueItem item) {
+    if (item is OutgoingReaction) return 'tapback';
+    if (item is OutgoingMultipartMessage) return 'private-api-multipart';
+    if (item is OutgoingAttachment) return _resolveMethod(item.message, forAttachment: true);
+    return _resolveMethod(item.message);
+  }
+
+  bool? _logicalDdScan(OutgoingQueueItem item) {
+    if (item is OutgoingMessage) {
+      return !SettingsSvc.serverDetails.isMinSonoma && (item.message.text?.hasUrl ?? false);
+    }
+    if (item is OutgoingMultipartMessage) {
+      return !SettingsSvc.serverDetails.isMinSonoma &&
+          item.message.attributedBody.expand((body) => body.runs).any((run) {
+            final body = item.message.attributedBody.firstOrNull;
+            if (body == null) return false;
+            final start = run.range.first;
+            final end = start + run.range.last;
+            return start >= 0 && end <= body.string.length && body.string.substring(start, end).hasUrl;
+          });
+    }
+    return null;
+  }
+
+  String _currentLogicalProviderContextFingerprint() => logicalProviderContextFingerprint(
+    origin: HttpSvc.origin,
+    authKey: SettingsSvc.settings.guidAuthKey.value,
+    isMinBigSur: SettingsSvc.serverDetails.isMinBigSur,
+    isMinVentura: SettingsSvc.serverDetails.isMinVentura,
+    isMinSonoma: SettingsSvc.serverDetails.isMinSonoma,
+    enablePrivateAPI: SettingsSvc.settings.enablePrivateAPI.value,
+    privateAPISend: SettingsSvc.settings.privateAPISend.value,
+    privateAPIAttachmentSend: SettingsSvc.settings.privateAPIAttachmentSend.value,
+  );
+
+  String _logicalPayloadFingerprint(OutgoingQueueItem item) {
+    final message = item.message;
+    final payload = <String, dynamic>{
+      'schema': logicalSendAdmissionSchema,
+      'queueType': item.type.name,
+      'logicalActionId': item.logicalActionId,
+      'transportMethod': item.logicalTransportMethod,
+      'ddScan': item.logicalDdScan,
+      'transportTempGuid': message.guid,
+      'text': message.text,
+      'subject': message.subject,
+      'threadOriginatorGuid': message.threadOriginatorGuid,
+      'threadOriginatorPart': message.threadOriginatorPart,
+      'effectId': message.expressiveSendStyleId,
+      'associatedMessageGuid': message.associatedMessageGuid,
+      'associatedMessagePart': message.associatedMessagePart,
+      'associatedMessageType': message.associatedMessageType,
+      'balloonBundleId': message.balloonBundleId,
+      'attributedBody': message.attributedBody.map((body) => body.toMap()).toList(growable: false),
+      'draftContentFingerprint': item.logicalDraft?.contentFingerprint,
+    };
+    if (item is OutgoingReaction) {
+      payload.addAll(<String, dynamic>{
+        'reaction': item.reaction,
+        'selectedMessageGuid': item.selectedMessage.guid,
+        'selectedMessageText': item.selectedMessage.text,
+      });
+    } else if (item is OutgoingAttachment) {
+      payload.addAll(<String, dynamic>{
+        'attachmentGuid': item.attachment.guid,
+        'attachmentName': item.attachment.transferName,
+        'attachmentSize': item.attachment.totalBytes,
+        'attachmentMimeType': item.attachment.mimeType,
+        'attachmentUti': item.attachment.uti,
+        'attachmentContentFingerprint': item.logicalAttachmentContentFingerprint,
+        'isAudioMessage': item.isAudioMessage,
+        'routeTargetMessageGuid': item.logicalRouteTargetMessageGuid,
+      });
+    }
+    return sha256.convert(utf8.encode(jsonEncode(payload))).toString();
+  }
+
+  Future<String> _attachmentTransportFingerprint(OutgoingAttachment item, {required bool prepared}) async {
+    if (prepared) {
+      return (await sha256.bind(File(item.attachment.path).openRead()).first).toString();
+    }
+
+    final attachment = item.attachment;
+    final sourcePath = attachment.metadata?['source_path'] as String?;
+    if (attachment.bytes != null) {
+      final bytes = attachment.mimeType == 'image/gif' ? await fixSpeedyGifs(attachment.bytes!) : attachment.bytes!;
+      return sha256.convert(bytes).toString();
+    }
+    if (sourcePath == null) {
+      throw StateError('LOGICAL_ATTACHMENT_SOURCE_UNAVAILABLE');
+    }
+    if (attachment.mimeType == 'image/gif') {
+      final bytes = await File(sourcePath).readAsBytes();
+      return sha256.convert(await fixSpeedyGifs(bytes)).toString();
+    }
+    return (await sha256.bind(File(sourcePath).openRead()).first).toString();
   }
 
   LogicalMutationRequest _logicalMutationRequest(OutgoingQueueItem item) {
@@ -260,11 +580,19 @@ class OutgoingMessageHandler {
       mutationClass = LogicalMutationClass.unsupported;
     }
     final targetChat = targetMessage?.chat.target;
+    final replyIntent = item.logicalDraft?.reply;
     return LogicalMutationRequest(
       mutationClass: mutationClass,
       targetMessageGuid: targetMessage?.guid,
       targetSourceChatRowId: targetChat?.originalROWID,
       targetSourceChatGuid: targetChat?.guid,
+      replyIntentMessageGuid: replyIntent?.messageGuid,
+      replyIntentSourceChatRowId: replyIntent?.sourceChatRowId,
+      replyIntentSourceChatGuid: replyIntent?.sourceChatGuid,
+      requireFreshTargetPresence:
+          mutationClass == LogicalMutationClass.reply ||
+          mutationClass == LogicalMutationClass.reaction ||
+          (mutationClass == LogicalMutationClass.attachment && targetMessage != null),
       persistedExecutionSourceChatRowId: item is OutgoingAttachment
           ? item.logicalPersistedExecutionSourceChatRowId
           : null,
@@ -275,16 +603,27 @@ class OutgoingMessageHandler {
     );
   }
 
-  void _failLogicalAdmission(OutgoingQueueItem item, String reason) {
+  Never _failLogicalAdmission(List<OutgoingQueueItem> items, String reason, {LogicalDraft? rearmedDraft}) {
+    final revision = ChatsSvc.currentLogicalAuthorityRevision;
     ChatsSvc.logicalRouteRuntimeStatus.value = LogicalRouteRuntimeStatus(
       stage: LogicalRouteRuntimeStage.routeNotProven,
       reason: reason,
+      certificateRevision: revision?.certificateRevision,
+      authorityRevision: revision?.authorityRevision,
+      authorityEpoch: revision?.epoch,
     );
-    final error = StateError('ROUTE_NOT_PROVEN: $reason');
-    if (item.completer != null && !item.completer!.isCompleted) {
-      item.completer!.completeError(error);
+    final error = LogicalSendAdmissionException(
+      logicalSendAdmissionStateForReason(reason),
+      reason,
+      rearmedDraft: rearmedDraft,
+    );
+    for (final item in items) {
+      if (item.completer != null && !item.completer!.isCompleted) {
+        item.completer!.completeError(error);
+      }
     }
     Logger.warn('Blocked logical mutation: $reason', tag: _tag);
+    throw error;
   }
 
   /// Ensures [item.message] has a stable temp GUID before prep/retry begins.
@@ -323,7 +662,13 @@ class OutgoingMessageHandler {
 
     List<Message>? built;
     if (!isAttachment) {
-      built = _buildOutgoingMessages(item.chat, item.message, item.reaction, isRetry: item.isRetry);
+      built = _buildOutgoingMessages(
+        item.chat,
+        item.message,
+        item.reaction,
+        isRetry: item.isRetry,
+        isLogicalAdmission: item.logicalAdmissionReceipt != null,
+      );
       if (built.isEmpty) return (ok: true, result: <Message>[]);
     }
 
@@ -389,6 +734,13 @@ class OutgoingMessageHandler {
         message: message,
         selectedMessage: item.selectedMessage,
         reaction: item.reaction,
+        logicalActionId: item.logicalActionId,
+        logicalDraft: item.logicalDraft,
+        logicalAdmissionReceipt: item.logicalAdmissionReceipt,
+        logicalTransportMethod: item.logicalTransportMethod,
+        logicalDdScan: item.logicalDdScan,
+        logicalAttachmentContentFingerprint: item.logicalAttachmentContentFingerprint,
+        logicalDispatchReservationCompleter: item.logicalDispatchReservationCompleter,
         isRetry: item.isRetry,
         clearNotificationsIfFromMe: item.clearNotificationsIfFromMe,
         completer: item.completer,
@@ -398,6 +750,13 @@ class OutgoingMessageHandler {
       return OutgoingMultipartMessage(
         chat: item.chat,
         message: message,
+        logicalActionId: item.logicalActionId,
+        logicalDraft: item.logicalDraft,
+        logicalAdmissionReceipt: item.logicalAdmissionReceipt,
+        logicalTransportMethod: item.logicalTransportMethod,
+        logicalDdScan: item.logicalDdScan,
+        logicalAttachmentContentFingerprint: item.logicalAttachmentContentFingerprint,
+        logicalDispatchReservationCompleter: item.logicalDispatchReservationCompleter,
         isRetry: item.isRetry,
         clearNotificationsIfFromMe: item.clearNotificationsIfFromMe,
         completer: item.completer,
@@ -407,6 +766,13 @@ class OutgoingMessageHandler {
       return OutgoingMessage(
         chat: item.chat,
         message: message,
+        logicalActionId: item.logicalActionId,
+        logicalDraft: item.logicalDraft,
+        logicalAdmissionReceipt: item.logicalAdmissionReceipt,
+        logicalTransportMethod: item.logicalTransportMethod,
+        logicalDdScan: item.logicalDdScan,
+        logicalAttachmentContentFingerprint: item.logicalAttachmentContentFingerprint,
+        logicalDispatchReservationCompleter: item.logicalDispatchReservationCompleter,
         isRetry: item.isRetry,
         clearNotificationsIfFromMe: item.clearNotificationsIfFromMe,
         completer: item.completer,
@@ -417,6 +783,13 @@ class OutgoingMessageHandler {
         chat: item.chat,
         message: message,
         attachment: item.attachment,
+        logicalActionId: item.logicalActionId,
+        logicalDraft: item.logicalDraft,
+        logicalAdmissionReceipt: item.logicalAdmissionReceipt,
+        logicalTransportMethod: item.logicalTransportMethod,
+        logicalDdScan: item.logicalDdScan,
+        logicalAttachmentContentFingerprint: item.logicalAttachmentContentFingerprint,
+        logicalDispatchReservationCompleter: item.logicalDispatchReservationCompleter,
         logicalRouteTargetMessageGuid: item.logicalRouteTargetMessageGuid,
         logicalPersistedExecutionSourceChatRowId: item.logicalPersistedExecutionSourceChatRowId,
         logicalPersistedExecutionSourceChatGuid: item.logicalPersistedExecutionSourceChatGuid,
@@ -435,9 +808,26 @@ class OutgoingMessageHandler {
     while (_queue.isNotEmpty) {
       final entry = _queue.removeFirst();
       final item = entry.item;
+      var dispatchReserved = false;
 
       try {
+        await _validateCommittedLogicalBinding(item);
+        await _transitionLogicalOperation(
+          item,
+          from: LogicalOperationState.admitted,
+          to: LogicalOperationState.dispatchReserved,
+        );
+        // The preferences write above yields. Revalidate after local durable
+        // reservation, then perform one final synchronous check immediately
+        // before the isolate request is enqueued.
+        await _validateCommittedLogicalBinding(item);
+        _validateCommittedLogicalBindingSynchronous(item);
+        dispatchReserved = true;
+        final reservation = item.logicalDispatchReservationCompleter;
+        if (reservation != null && !reservation.isCompleted) reservation.complete();
+        var dispatchFailed = false;
         await _handleSend(() => _dispatchItem(item), item.chat).catchError((err) async {
+          dispatchFailed = true;
           if (SettingsSvc.settings.cancelQueuedMessages.value) {
             // Cancel all subsequent messages for the same chat.
             final toCancel = _queue.where((e) => e.item.chat.guid == item.chat.guid).map((e) => e.item).toList();
@@ -451,8 +841,35 @@ class OutgoingMessageHandler {
             }
           }
         });
+        await _transitionLogicalOperation(
+          item,
+          from: LogicalOperationState.dispatchReserved,
+          to: dispatchFailed ? LogicalOperationState.outcomeUnknown : LogicalOperationState.confirmed,
+        );
         item.completer?.complete();
       } catch (ex, st) {
+        if (!dispatchReserved && item.logicalAdmissionReceipt != null) {
+          try {
+            await _rollbackLogicalAdmissionBeforeDispatch(item);
+          } catch (rollbackError, rollbackStack) {
+            Logger.error(
+              'Failed to restore logical draft after pre-dispatch invalidation',
+              error: rollbackError,
+              trace: rollbackStack,
+              tag: _tag,
+            );
+          }
+        }
+        final reservation = item.logicalDispatchReservationCompleter;
+        if (!dispatchReserved && reservation != null && !reservation.isCompleted) {
+          reservation.completeError(
+            const LogicalSendAdmissionException(
+              LogicalSendAdmissionState.authorityChanged,
+              'SEND_BLOCKED_AUTHORITY_CHANGED_BEFORE_DISPATCH',
+            ),
+            st,
+          );
+        }
         Logger.error('Failed to handle outgoing queue item', error: ex, trace: st, tag: _tag);
         item.completer?.completeError(ex);
       }
@@ -576,17 +993,126 @@ class OutgoingMessageHandler {
     switch (item.type) {
       case QueueType.sendMessage:
         final typed = item as OutgoingMessage;
-        return sendMessage(typed.chat, typed.message, null, null);
+        return sendMessage(
+          typed.chat,
+          typed.message,
+          null,
+          null,
+          transportMethod: typed.logicalTransportMethod,
+          ddScan: typed.logicalDdScan,
+          expectedProviderContextFingerprint: typed.logicalAdmissionReceipt?.providerContextFingerprint,
+          allowTransientRetry: logicalTransportMayRetry(typed.logicalAdmissionReceipt),
+        );
       case QueueType.sendReaction:
         final typed = item as OutgoingReaction;
-        return sendMessage(typed.chat, typed.message, typed.selectedMessage, typed.reaction);
+        return sendMessage(
+          typed.chat,
+          typed.message,
+          typed.selectedMessage,
+          typed.reaction,
+          transportMethod: typed.logicalTransportMethod,
+          expectedProviderContextFingerprint: typed.logicalAdmissionReceipt?.providerContextFingerprint,
+          allowTransientRetry: logicalTransportMayRetry(typed.logicalAdmissionReceipt),
+        );
       case QueueType.sendMultipart:
         final typed = item as OutgoingMultipartMessage;
-        return sendMultipart(typed.chat, typed.message, null, null);
+        return sendMultipart(
+          typed.chat,
+          typed.message,
+          null,
+          null,
+          transportMethod: typed.logicalTransportMethod,
+          ddScan: typed.logicalDdScan,
+          expectedProviderContextFingerprint: typed.logicalAdmissionReceipt?.providerContextFingerprint,
+          allowTransientRetry: logicalTransportMayRetry(typed.logicalAdmissionReceipt),
+        );
       case QueueType.sendAttachment:
         final typed = item as OutgoingAttachment;
-        return sendAttachment(typed.chat, typed.message, typed.isAudioMessage, typed.attachment);
+        return sendAttachment(
+          typed.chat,
+          typed.message,
+          typed.isAudioMessage,
+          typed.attachment,
+          transportMethod: typed.logicalTransportMethod,
+          expectedProviderContextFingerprint: typed.logicalAdmissionReceipt?.providerContextFingerprint,
+          allowTransientRetry: logicalTransportMayRetry(typed.logicalAdmissionReceipt),
+        );
     }
+  }
+
+  Future<void> _validateCommittedLogicalBinding(OutgoingQueueItem item) async {
+    _validateCommittedLogicalBindingSynchronous(item);
+    if (item is OutgoingAttachment &&
+        await _attachmentTransportFingerprint(item, prepared: true) != item.logicalAttachmentContentFingerprint) {
+      throw StateError('LOGICAL_ADMISSION_ATTACHMENT_CONTENT_CONTRADICTION');
+    }
+  }
+
+  void _validateCommittedLogicalBindingSynchronous(OutgoingQueueItem item) {
+    final receipt = item.logicalAdmissionReceipt;
+    if (receipt == null) return;
+    final currentRevision = ChatsSvc.currentLogicalAuthorityRevision;
+    if (currentRevision == null ||
+        currentRevision.certificateRevision != receipt.certificateRevision ||
+        currentRevision.authorityRevision != receipt.authorityRevision ||
+        currentRevision.epoch != receipt.authorityEpoch ||
+        item.logicalActionId != receipt.actionId ||
+        item.message.guid != receipt.transportTempGuid ||
+        item.chat.originalROWID != receipt.targetSourceChatRowId ||
+        item.chat.guid != receipt.targetSourceChatGuid ||
+        _currentLogicalProviderContextFingerprint() != receipt.providerContextFingerprint ||
+        _logicalPayloadFingerprint(item) != receipt.payloadFingerprint) {
+      throw StateError('LOGICAL_ADMISSION_RECEIPT_BINDING_CONTRADICTION');
+    }
+  }
+
+  Future<void> _rollbackLogicalAdmissionBeforeDispatch(OutgoingQueueItem item) async {
+    await _rollbackLogicalAdmissionBeforeDispatchBatch(<OutgoingQueueItem>[item]);
+  }
+
+  Future<void> _rollbackLogicalAdmissionBeforeDispatchBatch(Iterable<OutgoingQueueItem> items) async {
+    final logicalItems = items.where((item) => item.logicalAdmissionReceipt != null).toList(growable: false);
+    if (logicalItems.isEmpty) return;
+    final currentRevision = ChatsSvc.currentLogicalAuthorityRevision;
+    final drafts = <String, LogicalDraft>{
+      for (final item in logicalItems)
+        if (item.logicalDraft != null) item.logicalDraft!.actionId: item.logicalDraft!,
+    };
+    for (final draft in drafts.values) {
+      await ChatsSvc.persistRearmedLogicalDraft(
+        currentRevision == null
+            ? draft
+            : draft.rearm(currentRevision, updatedAtEpochMilliseconds: DateTime.now().millisecondsSinceEpoch),
+      );
+    }
+    final receipts = logicalItems.map((item) => item.logicalAdmissionReceipt!).toList(growable: false);
+    final actionIds = receipts.map((receipt) => receipt.actionId).toList(growable: false);
+    await _withLogicalAdmissionLock(() async {
+      final ledger = LogicalAdmissionLedger.fromEntries(PrefsSvc.messaging.loadLogicalAdmissionLedger());
+      if (ledger.isCorrupt || !ledger.rollbackBeforeTransportBatch(receipts.map((receipt) => receipt.admissionId))) {
+        throw StateError('LOGICAL_ADMISSION_PRE_DISPATCH_ROLLBACK_CONTRADICTION');
+      }
+      await PrefsSvc.messaging.saveLogicalAdmissionLedger(ledger.entries);
+      if (!_logicalAdmissionGate.rollbackBatch(actionIds)) {
+        throw StateError('LOGICAL_ADMISSION_GATE_PRE_DISPATCH_ROLLBACK_CONTRADICTION');
+      }
+    });
+  }
+
+  Future<void> _transitionLogicalOperation(
+    OutgoingQueueItem item, {
+    required LogicalOperationState from,
+    required LogicalOperationState to,
+  }) async {
+    final receipt = item.logicalAdmissionReceipt;
+    if (receipt == null) return;
+    await _withLogicalAdmissionLock(() async {
+      final ledger = LogicalAdmissionLedger.fromEntries(PrefsSvc.messaging.loadLogicalAdmissionLedger());
+      if (ledger.isCorrupt || !ledger.transition(receipt.admissionId, from, to)) {
+        throw StateError('LOGICAL_OPERATION_STATE_CONTRADICTION:${receipt.admissionId}');
+      }
+      await PrefsSvc.messaging.saveLogicalAdmissionLedger(ledger.entries);
+    });
   }
 
   // ── Preparation ──────────────────────────────────────────────────────────
@@ -604,13 +1130,19 @@ class OutgoingMessageHandler {
   /// in place on the split path and hands out a fresh GUID for the secondary
   /// message, so re-running it would desync message identity from whatever a
   /// prior attempt already persisted (see [_persistOutgoingMessages]).
-  List<Message> _buildOutgoingMessages(Chat c, Message m, String? r, {required bool isRetry}) {
+  List<Message> _buildOutgoingMessages(
+    Chat c,
+    Message m,
+    String? r, {
+    required bool isRetry,
+    required bool isLogicalAdmission,
+  }) {
     // If it's a retry, the message should already be in the correct format
     // and already carries the GUID of the DB row the caller re-persists.
     if (isRetry) return [m];
     if ((m.text?.isEmpty ?? true) && (m.subject?.isEmpty ?? true) && r == null) return [];
 
-    if (!SettingsSvc.serverDetails.isMinBigSur && r == null) {
+    if (!isLogicalAdmission && !SettingsSvc.serverDetails.isMinBigSur && r == null) {
       // Split URL messages on OS X to prevent message matching glitches.
       String mainText = m.text!;
       String? secondaryText;
@@ -808,7 +1340,16 @@ class OutgoingMessageHandler {
   }
 
   /// Sends a text message (or a reaction/tapback) to [c].
-  Future<void> sendMessage(Chat c, Message m, Message? selected, String? r) {
+  Future<void> sendMessage(
+    Chat c,
+    Message m,
+    Message? selected,
+    String? r, {
+    String? transportMethod,
+    bool? ddScan,
+    String? expectedProviderContextFingerprint,
+    bool allowTransientRetry = true,
+  }) {
     ChatsSvc.updateChat(c);
 
     // Only update latest message if the failed message is the current latest message.
@@ -827,12 +1368,14 @@ class OutgoingMessageHandler {
               chatGuid: c.guid,
               tempGuid: tempGuid,
               message: m.text!,
-              method: _resolveMethod(m),
+              method: transportMethod ?? _resolveMethod(m),
               selectedMessageGuid: m.threadOriginatorGuid,
               effectId: m.expressiveSendStyleId,
               subject: m.subject,
               partIndex: int.tryParse(m.threadOriginatorPart?.split(':').firstOrNull ?? ''),
-              ddScan: !SettingsSvc.serverDetails.isMinSonoma && m.text!.hasUrl,
+              ddScan: ddScan ?? (!SettingsSvc.serverDetails.isMinSonoma && m.text!.hasUrl),
+              expectedProviderContextFingerprint: expectedProviderContextFingerprint,
+              allowTransientRetry: allowTransientRetry,
             )
           : SendMessageInterface.sendTapback(
               chatGuid: c.guid,
@@ -840,6 +1383,8 @@ class OutgoingMessageHandler {
               selectedMessageGuid: selected.guid!,
               reaction: r,
               partIndex: m.associatedMessagePart,
+              expectedProviderContextFingerprint: expectedProviderContextFingerprint,
+              allowTransientRetry: allowTransientRetry,
             ),
       onSuccess: (data) => _finalizeOutgoingSuccess(
         c,
@@ -889,7 +1434,16 @@ class OutgoingMessageHandler {
   }
 
   /// Sends a multipart (mention / mixed-content) message.
-  Future<void> sendMultipart(Chat c, Message m, Message? selected, String? r) {
+  Future<void> sendMultipart(
+    Chat c,
+    Message m,
+    Message? selected,
+    String? r, {
+    String? transportMethod,
+    bool? ddScan,
+    String? expectedProviderContextFingerprint,
+    bool allowTransientRetry = true,
+  }) {
     ChatsSvc.updateChat(c);
 
     // Only update latest message if the failed message is the current latest message.
@@ -920,7 +1474,9 @@ class OutgoingMessageHandler {
         selectedMessageGuid: m.threadOriginatorGuid,
         effectId: m.expressiveSendStyleId,
         partIndex: int.tryParse(m.threadOriginatorPart?.split(':').firstOrNull ?? ''),
-        ddScan: !SettingsSvc.serverDetails.isMinSonoma && parts.any((e) => e['text'].toString().hasUrl),
+        ddScan: ddScan ?? (!SettingsSvc.serverDetails.isMinSonoma && parts.any((e) => e['text'].toString().hasUrl)),
+        expectedProviderContextFingerprint: expectedProviderContextFingerprint,
+        allowTransientRetry: allowTransientRetry,
       ),
       onSuccess: (data) => _finalizeOutgoingSuccess(c, tempGuid, data),
       onError: (error, stack) => _finalizeOutgoingFailure(
@@ -935,7 +1491,15 @@ class OutgoingMessageHandler {
   }
 
   /// Sends an attachment message.
-  Future<void> sendAttachment(Chat c, Message m, bool isAudioMessage, Attachment? attachment) async {
+  Future<void> sendAttachment(
+    Chat c,
+    Message m,
+    bool isAudioMessage,
+    Attachment? attachment, {
+    String? transportMethod,
+    String? expectedProviderContextFingerprint,
+    bool allowTransientRetry = true,
+  }) async {
     if (attachment == null) {
       throw StateError('Missing attachment for sendAttachment on message ${m.guid}');
     }
@@ -970,11 +1534,13 @@ class OutgoingMessageHandler {
         filePath: attachment.path,
         fileName: attachment.transferName!,
         fileSize: attachment.totalBytes ?? 0,
-        method: _resolveMethod(m, forAttachment: true),
+        method: transportMethod ?? _resolveMethod(m, forAttachment: true),
         selectedMessageGuid: m.threadOriginatorGuid,
         effectId: m.expressiveSendStyleId,
         partIndex: int.tryParse(m.threadOriginatorPart?.split(':').firstOrNull ?? ''),
         isAudioMessage: isAudioMessage,
+        expectedProviderContextFingerprint: expectedProviderContextFingerprint,
+        allowTransientRetry: allowTransientRetry,
       ),
       onSuccess: (Map<String, dynamic> data) async {
         final newMessage = Message.fromMap(data['data']);

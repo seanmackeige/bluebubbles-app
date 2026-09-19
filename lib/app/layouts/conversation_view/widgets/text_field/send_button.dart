@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/cupertino.dart';
@@ -6,24 +8,22 @@ import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
 class SendButton extends StatefulWidget {
-  const SendButton({
-    super.key,
-    required this.onLongPress,
-    required this.sendMessage,
-  });
+  const SendButton({super.key, required this.onLongPress, required this.sendMessage});
 
   final Function() onLongPress;
-  final Function() sendMessage;
+  final Future<void> Function() sendMessage;
 
   @override
   SendButtonState createState() => SendButtonState();
 }
 
 class SendButtonState extends State<SendButton> with SingleTickerProviderStateMixin, ThemeHelpers {
+  bool _sendInFlight = false;
   late final controller = AnimationController(
-      vsync: this,
-      duration: Duration(seconds: SettingsSvc.settings.sendDelay.value),
-      animationBehavior: AnimationBehavior.preserve);
+    vsync: this,
+    duration: Duration(seconds: SettingsSvc.settings.sendDelay.value),
+    animationBehavior: AnimationBehavior.preserve,
+  );
 
   // Colors cached here and refreshed in didChangeDependencies so they update
   // when an inherited Theme changes (e.g. per-chat adaptive theme loading).
@@ -36,13 +36,23 @@ class SendButtonState extends State<SendButton> with SingleTickerProviderStateMi
 
   Color get baseColor => iOS ? _iosBaseColor : _materialBaseColor;
 
+  Future<void> _sendOnce() async {
+    if (_sendInFlight) return;
+    _sendInFlight = true;
+    try {
+      await widget.sendMessage();
+    } finally {
+      _sendInFlight = false;
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     controller.addListener(() {
       if (controller.isCompleted) {
         controller.reset();
-        widget.sendMessage.call();
+        unawaited(_sendOnce());
       }
     });
   }
@@ -54,8 +64,9 @@ class SendButtonState extends State<SendButton> with SingleTickerProviderStateMi
     _materialBaseColor = context.theme.colorScheme.surfaceContainerHighest;
     _errorColor = context.theme.colorScheme.error;
     _iosOnPrimary = context.theme.colorScheme.onPrimary;
-    _materialIconColor =
-        ThemeSvc.isAnyMaterialYouSelected ? context.theme.colorScheme.onPrimary : context.theme.colorScheme.secondary;
+    _materialIconColor = ThemeSvc.isAnyMaterialYouSelected
+        ? context.theme.colorScheme.onPrimary
+        : context.theme.colorScheme.secondary;
     _onError = context.theme.colorScheme.onError;
   }
 
@@ -98,7 +109,7 @@ class SendButtonState extends State<SendButton> with SingleTickerProviderStateMi
             controller.forward();
           } else {
             HapticFeedback.lightImpact();
-            widget.sendMessage.call();
+            unawaited(_sendOnce());
           }
         },
         onLongPress: () {

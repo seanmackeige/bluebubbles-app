@@ -14,10 +14,11 @@ class SyncActions {
   /// atomic write transaction.
   ///
   /// [data] keys:
-  ///   - `chatData`               Map<String,dynamic>?  — top-level chat (optional)
-  ///   - `messagesData`           List<Map<String,dynamic>> — raw server message maps
+  ///   - `chatData`               `Map<String, dynamic>?` — top-level chat (optional)
+  ///   - `messagesData`           `List<Map<String, dynamic>>` — raw server message maps
   ///
-  /// Returns a map with `messageIds` (List<int>) and `chatIds` (List<int>) of updated chats.
+  /// Returns a map with `messageIds` (`List<int>`) and `chatIds` (`List<int>`)
+  /// of updated chats.
   static Future<Map<String, dynamic>> bulkSyncData(dynamic data) async {
     if (kIsWeb) return {'messageIds': <int>[], 'chatIds': <int>[]};
 
@@ -91,8 +92,13 @@ class SyncActions {
       final chatsMap = _syncChatsInTx(chatDataByGuid, handlesMap, chatBox);
 
       // Step 2 – Sync messages → (savedMessages, messagesByGuid)
-      final (savedMessages, messagesByGuid) =
-          _syncMessagesInTx(messagesData, chatData, chatsMap, handlesByRowId, messageBox);
+      final (savedMessages, messagesByGuid) = _syncMessagesInTx(
+        messagesData,
+        chatData,
+        chatsMap,
+        handlesByRowId,
+        messageBox,
+      );
 
       // Step 3 – Sync attachments (via Attachment.message.target — no applyToDb needed)
       _syncAttachmentsInTx(messagesData, messagesByGuid, attachmentBox, messageBox);
@@ -100,10 +106,7 @@ class SyncActions {
       // Step 4 – Update each chat's latestMessage
       final updatedChatIds = _updateLatestMessages(chatsMap, chatBox);
 
-      return {
-        'messageIds': savedMessages.map((m) => m.id!).toList(),
-        'chatIds': updatedChatIds,
-      };
+      return {'messageIds': savedMessages.map((m) => m.id!).toList(), 'chatIds': updatedChatIds};
     });
   }
 
@@ -120,9 +123,7 @@ class SyncActions {
   /// Upsert handles.  Returns a map keyed by `uniqueAddressAndService`.
   /// Converts raw maps → Handle objects, formats addresses (async), then
   /// upserts in its own write transaction.
-  static Future<Map<String, Handle>> _syncHandles(
-    List<Map<String, dynamic>> rawHandleMaps,
-  ) async {
+  static Future<Map<String, Handle>> _syncHandles(List<Map<String, dynamic>> rawHandleMaps) async {
     if (rawHandleMaps.isEmpty) return {};
 
     final inputHandles = rawHandleMaps.map((h) => Handle.fromMap(h)).toList();
@@ -137,19 +138,14 @@ class SyncActions {
       final existingHandles = existingQuery.find();
       existingQuery.close();
 
-      final existingMap = <String, Handle>{
-        for (final h in existingHandles) h.uniqueAddressAndService: h,
-      };
+      final existingMap = <String, Handle>{for (final h in existingHandles) h.uniqueAddressAndService: h};
 
       final newHandles = inputHandles.where((h) => !existingMap.containsKey(h.uniqueAddressAndService)).toList();
       if (newHandles.isNotEmpty) {
         handleBox.putMany(newHandles);
       }
 
-      return {
-        ...existingMap,
-        for (final h in newHandles) h.uniqueAddressAndService: h,
-      };
+      return {...existingMap, for (final h in newHandles) h.uniqueAddressAndService: h};
     });
   }
 
@@ -168,9 +164,7 @@ class SyncActions {
     final existingChats = existingQuery.find();
     existingQuery.close();
 
-    final existingMap = <String, Chat>{
-      for (final c in existingChats) c.guid: c,
-    };
+    final existingMap = <String, Chat>{for (final c in existingChats) c.guid: c};
 
     final chatsToSave = <Chat>[];
     final chatHandlesMap = <String, List<Handle>>{};
@@ -190,8 +184,9 @@ class SyncActions {
 
       // Collect handles to link from the raw participants list.
       final rawChat = chatDataByGuid[inputChat.guid]!;
-      final participantMaps =
-          ((rawChat['participants'] as List?) ?? const []).whereType<Map>().map((p) => p.cast<String, dynamic>());
+      final participantMaps = ((rawChat['participants'] as List?) ?? const []).whereType<Map>().map(
+        (p) => p.cast<String, dynamic>(),
+      );
       final handlesToLink = <Handle>[];
       for (final pm in participantMaps) {
         final h = handlesMap[_handleKey(pm)];
@@ -239,9 +234,7 @@ class SyncActions {
     final existingMessages = existingQuery.find();
     existingQuery.close();
 
-    final existingMap = <String, Message>{
-      for (final m in existingMessages) m.guid!: m,
-    };
+    final existingMap = <String, Message>{for (final m in existingMessages) m.guid!: m};
 
     // When a single top-level chat is provided all messages belong to it.
     final singleChat = topLevelChatData != null ? chatsMap[topLevelChatData['guid'] as String?] : null;
@@ -265,7 +258,12 @@ class SyncActions {
           }
         }
       }
-      if (chat != null) msgToSave.chat.target = chat;
+      if (chat != null) {
+        if (existing != null && existing.chat.targetId != 0 && chat.id != null && existing.chat.targetId != chat.id) {
+          throw StateError('MESSAGE_SOURCE_PROVENANCE_CONFLICT:${inputMsg.guid}');
+        }
+        msgToSave.chat.target = chat;
+      }
 
       // Wire to handle (by server originalROWID).
       if (!msgToSave.handleRelation.hasValue && msgToSave.handleId != null && msgToSave.handleId! > 0) {
@@ -352,9 +350,7 @@ class SyncActions {
     final existingAttachments = existingQuery.find();
     existingQuery.close();
 
-    final existingMap = <String, Attachment>{
-      for (final a in existingAttachments) a.guid!: a,
-    };
+    final existingMap = <String, Attachment>{for (final a in existingAttachments) a.guid!: a};
 
     final attachmentsToSave = <Attachment>[];
     final messagesNeedingFlagUpdate = <Message>{};
@@ -362,12 +358,15 @@ class SyncActions {
       final toSave = existingMap[inputA.guid] ?? inputA;
       final ownerGuid = ownerGuidByAttachmentGuid[inputA.guid];
       if (ownerGuid != null) {
-        final msg = messagesByGuid[ownerGuid];
-        if (msg?.id != null) {
-          toSave.message.target = msg;
-          if (!msg!.hasAttachments) {
-            msg.hasAttachments = true;
-            messagesNeedingFlagUpdate.add(msg);
+        final owner = messagesByGuid[ownerGuid];
+        if (owner != null && owner.id != null) {
+          if (toSave.message.targetId != 0 && toSave.message.targetId != owner.id) {
+            throw StateError('ATTACHMENT_OWNER_PROVENANCE_CONFLICT:${inputA.guid}');
+          }
+          toSave.message.target = owner;
+          if (!owner.hasAttachments) {
+            owner.hasAttachments = true;
+            messagesNeedingFlagUpdate.add(owner);
           }
         }
       }
@@ -383,18 +382,16 @@ class SyncActions {
 
   /// Query the DB for each chat's true latest message and persist it.
   /// Returns the IDs of updated chats.
-  static List<int> _updateLatestMessages(
-    Map<String, Chat> chatsMap,
-    Box<Chat> chatBox,
-  ) {
+  static List<int> _updateLatestMessages(Map<String, Chat> chatsMap, Box<Chat> chatBox) {
     final chatsToUpdate = <Chat>[];
 
     for (final chat in chatsMap.values) {
       if (chat.id == null) continue;
-      final q = (Database.messages.query(Message_.dateDeleted.isNull())
-            ..link(Message_.chat, Chat_.id.equals(chat.id!))
-            ..order(Message_.dateCreated, flags: Order.descending))
-          .build();
+      final q =
+          (Database.messages.query(Message_.dateDeleted.isNull())
+                ..link(Message_.chat, Chat_.id.equals(chat.id!))
+                ..order(Message_.dateCreated, flags: Order.descending))
+              .build();
       q.limit = 1;
       final latest = q.findFirst();
       q.close();
@@ -422,8 +419,11 @@ class SyncActions {
       int syncStart = SettingsSvc.settings.lastIncrementalSync.value;
       int startRowId = SettingsSvc.settings.lastIncrementalSyncRowId.value;
 
-      final incrementalSyncManager =
-          IncrementalSyncManager(startTimestamp: syncStart, startRowId: startRowId, saveMarker: true);
+      final incrementalSyncManager = IncrementalSyncManager(
+        startTimestamp: syncStart,
+        startRowId: startRowId,
+        saveMarker: true,
+      );
 
       await incrementalSyncManager.start();
       return incrementalSyncManager.latestMessageIdPerChat.values.toList();

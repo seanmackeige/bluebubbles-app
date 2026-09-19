@@ -8,6 +8,10 @@ abstract interface class BaseApi {
   String get apiRoot;
   Map<String, String> get headers;
   Map<String, dynamic> buildQueryParams([Map<String, dynamic> params = const {}]);
-  Future<Response> runApiGuarded(Future<Response> Function() func, {bool checkOrigin = true});
+  Future<Response> runApiGuarded(
+    Future<Response> Function() func, {
+    bool checkOrigin = true,
+    bool retryTransientMutation = true,
+  });
   Future<Response> returnSuccessOrError(Response r);
 }

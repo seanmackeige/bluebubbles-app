@@ -404,6 +404,7 @@ class Chat {
     int limit = 25,
     bool includeDeleted = false,
     bool getDetails = false,
+    List<Chat>? sourceChats,
   }) {
     return [];
   }
@@ -414,6 +415,10 @@ class Chat {
     int limit = 25,
     bool includeDeleted = false,
     int? searchAround,
+    int? beforeDateCreated,
+    String? afterGuidAtBoundary,
+    List<Chat>? sourceChats,
+    Function? onSupplementalDataLoaded,
   }) async {
     return [];
   }

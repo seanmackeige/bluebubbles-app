@@ -77,7 +77,11 @@ class HttpService implements BaseApi {
   }
 
   @override
-  Future<Response> runApiGuarded(Future<Response> Function() func, {bool checkOrigin = true}) async {
+  Future<Response> runApiGuarded(
+    Future<Response> Function() func, {
+    bool checkOrigin = true,
+    bool retryTransientMutation = true,
+  }) async {
     if (HttpSvc.origin.isEmpty && checkOrigin) {
       return Future.error("No server URL!");
     }
@@ -85,7 +89,7 @@ class HttpService implements BaseApi {
       return await func();
     } catch (e, s) {
       // try again if 502 error and Cloudflare
-      if (e is Response && e.statusCode == 502 && apiRoot.contains("trycloudflare")) {
+      if (retryTransientMutation && e is Response && e.statusCode == 502 && apiRoot.contains("trycloudflare")) {
         try {
           return await func();
         } catch (e, s) {
@@ -119,12 +123,14 @@ class HttpService implements BaseApi {
   }
 
   Future<void> init() async {
-    dio = Dio(BaseOptions(
-      connectTimeout: Duration(milliseconds: SettingsSvc.settings.apiTimeout.value),
-      receiveTimeout: Duration(milliseconds: SettingsSvc.settings.apiTimeout.value),
-      sendTimeout: Duration(milliseconds: SettingsSvc.settings.apiTimeout.value),
-      headers: headers,
-    ));
+    dio = Dio(
+      BaseOptions(
+        connectTimeout: Duration(milliseconds: SettingsSvc.settings.apiTimeout.value),
+        receiveTimeout: Duration(milliseconds: SettingsSvc.settings.apiTimeout.value),
+        sendTimeout: Duration(milliseconds: SettingsSvc.settings.apiTimeout.value),
+        headers: headers,
+      ),
+    );
     // Use IOHttpClientAdapter with certificate validation so that:
     // 1. Self-signed server certs are accepted via shouldAcceptCertificate.
     // 2. Device-level user-installed certificates (Android) are trusted by
@@ -170,7 +176,10 @@ class HttpService implements BaseApi {
       final response = await dio.get(
         url,
         options: Options(
-            responseType: ResponseType.bytes, receiveTimeout: dio.options.receiveTimeout! * 12, headers: headers),
+          responseType: ResponseType.bytes,
+          receiveTimeout: dio.options.receiveTimeout! * 12,
+          headers: headers,
+        ),
         cancelToken: cancelToken,
         onReceiveProgress: progress,
       );
@@ -181,21 +190,23 @@ class HttpService implements BaseApi {
   Future<void> downloadAppleEmojiFont() async {
     if (downloadingFont.value) return;
 
-    final response = await downloadFromUrl(
-        "https://github.com/BlueBubblesApp/bluebubbles-fonts/releases/latest/download/AppleColorEmoji.ttf",
-        progress: (current, total) {
-      if (current <= total) {
-        downloadingFont.value = true;
-        fontDownloadProgress.value = current / total;
-        fontDownloadTotalSize.value = total;
-      }
-    }).catchError((error) {
-      downloadingFont.value = false;
-      fontDownloadProgress.value = null;
-      fontDownloadTotalSize.value = null;
+    final response =
+        await downloadFromUrl(
+          "https://github.com/BlueBubblesApp/bluebubbles-fonts/releases/latest/download/AppleColorEmoji.ttf",
+          progress: (current, total) {
+            if (current <= total) {
+              downloadingFont.value = true;
+              fontDownloadProgress.value = current / total;
+              fontDownloadTotalSize.value = total;
+            }
+          },
+        ).catchError((error) {
+          downloadingFont.value = false;
+          fontDownloadProgress.value = null;
+          fontDownloadTotalSize.value = null;
 
-      return Response(requestOptions: RequestOptions(path: ''));
-    });
+          return Response(requestOptions: RequestOptions(path: ''));
+        });
 
     if (response.statusCode == 200) {
       try {
@@ -206,9 +217,7 @@ class HttpService implements BaseApi {
         FilesystemSvc.fontExistsOnDisk.value = true;
         final fontLoader = FontLoader("Apple Color Emoji");
         final cachedFontBytes = ByteData.view(data.buffer);
-        fontLoader.addFont(
-          Future<ByteData>.value(cachedFontBytes),
-        );
+        fontLoader.addFont(Future<ByteData>.value(cachedFontBytes));
         await fontLoader.load();
         showSnackbar("Notice", "Font loaded");
       } catch (e, stack) {
@@ -383,16 +392,28 @@ class ApiInterceptor extends Interceptor {
 
     if (err.response != null && err.response!.data is Map) return handler.resolve(err.response!);
     if (err.response != null) {
-      return handler.resolve(Response(data: {
-        'status': err.response!.statusCode,
-        'error': {'type': 'Error', 'error': err.response!.data.toString()}
-      }, requestOptions: err.requestOptions, statusCode: err.response!.statusCode));
+      return handler.resolve(
+        Response(
+          data: {
+            'status': err.response!.statusCode,
+            'error': {'type': 'Error', 'error': err.response!.data.toString()},
+          },
+          requestOptions: err.requestOptions,
+          statusCode: err.response!.statusCode,
+        ),
+      );
     }
     if (err.type.name.contains("Timeout")) {
-      return handler.resolve(Response(data: {
-        'status': 500,
-        'error': {'type': 'timeout', 'error': 'Failed to receive response from server.'}
-      }, requestOptions: err.requestOptions, statusCode: 500));
+      return handler.resolve(
+        Response(
+          data: {
+            'status': 500,
+            'error': {'type': 'timeout', 'error': 'Failed to receive response from server.'},
+          },
+          requestOptions: err.requestOptions,
+          statusCode: 500,
+        ),
+      );
     }
     return super.onError(err, handler);
   }

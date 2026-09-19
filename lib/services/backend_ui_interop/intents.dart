@@ -33,15 +33,10 @@ class OpenSettingsAction extends Action<OpenSettingsIntent> {
           },
         ),
       );
+      if (!context.mounted) return null;
       if (currentChat != null) {
         if (SettingsSvc.settings.tabletMode.value) {
-          NavigationSvc.pushAndRemoveUntil(
-            context,
-            ConversationView(
-              chat: currentChat,
-            ),
-            (route) => route.isFirst,
-          );
+          NavigationSvc.pushAndRemoveUntil(context, ConversationView(chat: currentChat), (route) => route.isFirst);
         } else {
           cvc(currentChat).close();
         }
@@ -63,11 +58,7 @@ class OpenNewChatCreatorAction extends Action<OpenNewChatCreatorIntent> {
   @override
   Object? invoke(covariant OpenNewChatCreatorIntent intent) {
     if (SettingsSvc.settings.finishedSetup.value) {
-      NavigationSvc.pushAndRemoveUntil(
-        context,
-        const NewChatCreator(),
-        (route) => route.isFirst,
-      );
+      NavigationSvc.pushAndRemoveUntil(context, const NewChatCreator(), (route) => route.isFirst);
     }
     return null;
   }
@@ -85,10 +76,7 @@ class OpenSearchAction extends Action<OpenSearchIntent> {
   @override
   Object? invoke(covariant OpenSearchIntent intent) async {
     if (SettingsSvc.settings.finishedSetup.value) {
-      NavigationSvc.pushLeft(
-        context,
-        const SearchView(),
-      );
+      NavigationSvc.pushLeft(context, const SearchView());
     }
     return null;
   }
@@ -259,13 +247,7 @@ class OpenNextChatAction extends Action<OpenNextChatIntent> {
     if (chat != null) {
       final _chat = ChatsSvc.getNextChat(chat.guid);
       if (_chat != null) {
-        NavigationSvc.pushAndRemoveUntil(
-          context,
-          ConversationView(
-            chat: _chat,
-          ),
-          (route) => route.isFirst,
-        );
+        NavigationSvc.pushAndRemoveUntil(context, ConversationView(chat: _chat), (route) => route.isFirst);
       }
     }
     return null;
@@ -287,13 +269,7 @@ class OpenPreviousChatAction extends Action<OpenPreviousChatIntent> {
     if (chat != null) {
       final _chat = ChatsSvc.getPreviousChat(chat.guid);
       if (_chat != null) {
-        NavigationSvc.pushAndRemoveUntil(
-          context,
-          ConversationView(
-            chat: _chat,
-          ),
-          (route) => route.isFirst,
-        );
+        NavigationSvc.pushAndRemoveUntil(context, ConversationView(chat: _chat), (route) => route.isFirst);
       }
     }
     return null;
@@ -314,10 +290,7 @@ class OpenChatDetailsAction extends Action<OpenChatDetailsIntent> {
   Object? invoke(covariant OpenChatDetailsIntent intent) {
     final chat = ChatsSvc.getChatState(chatGuid)?.chat;
     if (chat == null) return null;
-    NavigationSvc.push(
-      context,
-      ConversationDetails(chat: chat),
-    );
+    NavigationSvc.push(context, ConversationDetails(chat: chat));
     return null;
   }
 }
@@ -368,6 +341,7 @@ void _sendReactionHelper(Chat c, Message selected, String t) {
       ),
       selectedMessage: selected,
       reaction: t,
+      logicalActionId: logicalActionIdentity('intent-reaction', <Object?>[selected.guid, t, 0]),
     ),
   );
 }

@@ -290,44 +290,51 @@ class _LogicalComposerGate extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Obx(() {
-      final status = ChatsSvc.logicalRouteRuntimeStatus.value;
-      if (status.isQualified) {
-        return GestureDetector(
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Obx(() {
+          final status = ChatsSvc.logicalRouteRuntimeStatus.value;
+          if (status.isQualified) return const SizedBox.shrink();
+          final checking =
+              status.stage == LogicalRouteRuntimeStage.checking || status.stage == LogicalRouteRuntimeStage.unchecked;
+          return SafeArea(
+            top: false,
+            bottom: false,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  if (checking)
+                    const SizedBox.square(dimension: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                  else
+                    const Icon(Icons.lock_outline, size: 18),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      checking ? 'Refreshing send authority…' : 'Send paused until the current route is verified',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                  if (!checking)
+                    IconButton(
+                      tooltip: 'Check route again',
+                      onPressed: () => unawaited(ChatsSvc.prepareLogicalRoute(controller.chat, force: true)),
+                      icon: const Icon(Icons.refresh),
+                    ),
+                ],
+              ),
+            ),
+          );
+        }),
+        GestureDetector(
           onPanUpdate: onPanUpdate,
           child: ConversationTextField(parentController: controller),
-        );
-      }
-      final checking =
-          status.stage == LogicalRouteRuntimeStage.checking || status.stage == LogicalRouteRuntimeStage.unchecked;
-      return SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              if (checking)
-                const SizedBox.square(dimension: 16, child: CircularProgressIndicator(strokeWidth: 2))
-              else
-                const Icon(Icons.lock_outline, size: 18),
-              const SizedBox(width: 8),
-              Flexible(
-                child: Text(
-                  checking ? 'Checking logical conversation route…' : 'ROUTE_NOT_PROVEN',
-                  textAlign: TextAlign.center,
-                ),
-              ),
-              if (!checking)
-                IconButton(
-                  tooltip: 'Check route again',
-                  onPressed: () => unawaited(ChatsSvc.prepareLogicalRoute(controller.chat, force: true)),
-                  icon: const Icon(Icons.refresh),
-                ),
-            ],
-          ),
         ),
-      );
-    });
+      ],
+    );
   }
 }

@@ -266,6 +266,10 @@ class MethodChannelHandlers {
       OutgoingMessage(
         completer: completer,
         chat: chat,
+        logicalActionId: logicalActionIdentity('android-notification-reply', <Object?>[
+          data['messageGuid'],
+          data['text'],
+        ]),
         message: Message(
           text: data['text'],
           dateCreated: DateTime.now(),

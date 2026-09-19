@@ -2,6 +2,7 @@ import 'package:bluebubbles/app/state/message_state.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
+import 'package:bluebubbles/services/ui/chat/logical_conversation_route.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -51,16 +52,20 @@ class MessageErrorDialog extends StatelessWidget {
       content: Text(errorText, style: context.theme.textTheme.bodyLarge),
       actions: <Widget>[
         TextButton(
-          child: Text("Retry",
-              style: context.theme.textTheme.bodyLarge!.copyWith(color: Get.context!.theme.colorScheme.primary)),
+          child: Text(
+            "Retry",
+            style: context.theme.textTheme.bodyLarge!.copyWith(color: Get.context!.theme.colorScheme.primary),
+          ),
           onPressed: () async {
             Navigator.of(context).pop();
             onRetry();
           },
         ),
         TextButton(
-          child: Text("Remove",
-              style: context.theme.textTheme.bodyLarge!.copyWith(color: Get.context!.theme.colorScheme.primary)),
+          child: Text(
+            "Remove",
+            style: context.theme.textTheme.bodyLarge!.copyWith(color: Get.context!.theme.colorScheme.primary),
+          ),
           onPressed: () async {
             Navigator.of(context).pop();
             onRemove();
@@ -68,24 +73,33 @@ class MessageErrorDialog extends StatelessWidget {
           },
         ),
         TextButton(
-          child: Text("Cancel",
-              style: context.theme.textTheme.bodyLarge!.copyWith(color: Get.context!.theme.colorScheme.primary)),
+          child: Text(
+            "Cancel",
+            style: context.theme.textTheme.bodyLarge!.copyWith(color: Get.context!.theme.colorScheme.primary),
+          ),
           onPressed: () async {
             Navigator.of(context).pop();
             await NotificationsSvc.clearFailedToSend(chatId);
           },
-        )
+        ),
       ],
     );
   }
 }
 
 /// Shared retry logic for reactions
-Future<void> retryReaction({
-  required Message reaction,
-  required Chat chat,
-  required Message selected,
-}) async {
+Future<void> retryReaction({required Message reaction, required Chat chat, required Message selected}) async {
+  final ledger = LogicalAdmissionLedger.fromEntries(PrefsSvc.messaging.loadLogicalAdmissionLedger());
+  final previouslyAdmitted = ledger.containsTransportTempGuid(reaction.guid ?? '');
+  if (previouslyAdmitted || ChatsSvc.isApprovedLogicalSource(chat)) {
+    ChatsSvc.logicalRouteRuntimeStatus.value = LogicalRouteRuntimeStatus(
+      stage: LogicalRouteRuntimeStage.routeNotProven,
+      reason: previouslyAdmitted
+          ? 'LOGICAL_RETRY_ALREADY_ADMITTED_OR_OUTCOME_UNKNOWN'
+          : 'LOGICAL_RETRY_LEGACY_OR_UNTRACKED_OUTCOME',
+    );
+    return;
+  }
   // Remove the original message and notification
   await MessagesSvc(chat.guid).deleteMessage(reaction);
   await NotificationsSvc.clearFailedToSend(chat.id!);
@@ -97,7 +111,7 @@ Future<void> retryReaction({
   }
 
   // Re-send
-  OutgoingMsgHandler.queue(
+  await OutgoingMsgHandler.queue(
     OutgoingReaction(
       chat: chat,
       message: Message(
@@ -116,10 +130,7 @@ Future<void> retryReaction({
 }
 
 /// Shared remove logic for reactions
-Future<void> removeReaction({
-  required Message reaction,
-  required Chat chat,
-}) async {
+Future<void> removeReaction({required Message reaction, required Chat chat}) async {
   // Delete the message from DB and service
   await MessagesSvc(chat.guid).deleteMessage(reaction);
 

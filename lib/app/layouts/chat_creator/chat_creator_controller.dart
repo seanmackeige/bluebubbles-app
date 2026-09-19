@@ -21,11 +21,7 @@ import 'package:get/get.dart' hide Response;
 import 'package:slugify/slugify.dart';
 
 class ChatCreatorController extends StatefulController {
-  ChatCreatorController({
-    this.initialText = "",
-    this.initialAttachments = const [],
-    this.initialSelected = const [],
-  });
+  ChatCreatorController({this.initialText = "", this.initialAttachments = const [], this.initialSelected = const []});
 
   final String? initialText;
   final List<PlatformFile> initialAttachments;
@@ -139,14 +135,16 @@ class ChatCreatorController extends StatefulController {
 
     final q = query.toLowerCase();
     final contacts = _allContacts
-        .where((e) =>
-            _contactHasAddressForService(e) &&
-            contactNotFullySelected(e) &&
-            (e.computedDisplayName.toLowerCase().contains(q) ||
-                (e.nickname?.toLowerCase().contains(q) ?? false) ||
-                e.phoneNumbers.firstWhereOrNull((p) => cleansePhoneNumber(p.number.toLowerCase()).contains(q)) !=
-                    null ||
-                e.emailAddresses.firstWhereOrNull((e) => e.address.toLowerCase().contains(q)) != null))
+        .where(
+          (e) =>
+              _contactHasAddressForService(e) &&
+              contactNotFullySelected(e) &&
+              (e.computedDisplayName.toLowerCase().contains(q) ||
+                  (e.nickname?.toLowerCase().contains(q) ?? false) ||
+                  e.phoneNumbers.firstWhereOrNull((p) => cleansePhoneNumber(p.number.toLowerCase()).contains(q)) !=
+                      null ||
+                  e.emailAddresses.firstWhereOrNull((e) => e.address.toLowerCase().contains(q)) != null),
+        )
         .toList();
 
     final chats = _allChats.where((e) {
@@ -241,11 +239,15 @@ class ChatCreatorController extends StatefulController {
       contact.serviceType.value = available == true
           ? ChatServiceType.iMessage
           : available == false
-              ? ChatServiceType.sms
-              : null;
+          ? ChatServiceType.sms
+          : null;
     } catch (e, s) {
-      Logger.warn("Failed to check iMessage availability for contact",
-          error: e, trace: s, tag: 'ChatCreatorController');
+      Logger.warn(
+        "Failed to check iMessage availability for contact",
+        error: e,
+        trace: s,
+        tag: 'ChatCreatorController',
+      );
     }
   }
 
@@ -457,10 +459,9 @@ class ChatCreatorController extends StatefulController {
         ...filteredContacts.first.emailAddresses.map((e) => e.address),
       ];
       if (possibleAddresses.length == 1) {
-        addSelected(SelectedContact(
-          displayName: filteredContacts.first.computedDisplayName,
-          address: possibleAddresses.first,
-        ));
+        addSelected(
+          SelectedContact(displayName: filteredContacts.first.computedDisplayName, address: possibleAddresses.first),
+        );
       }
     }
   }
@@ -508,8 +509,9 @@ class ChatCreatorController extends StatefulController {
       _createCompleter = Completer();
       isSending.value = true;
 
-      final participants =
-          selectedContacts.map((c) => c.address.isEmail ? c.address : cleansePhoneNumber(c.address)).toList();
+      final participants = selectedContacts
+          .map((c) => c.address.isEmail ? c.address : cleansePhoneNumber(c.address))
+          .toList();
       final method = selectedService.value.method;
 
       showDialog(
@@ -517,16 +519,8 @@ class ChatCreatorController extends StatefulController {
         barrierDismissible: false,
         builder: (ctx) => AlertDialog(
           backgroundColor: ctx.theme.colorScheme.surfaceContainerHighest,
-          title: Text(
-            'Finding or creating chat...',
-            style: ctx.theme.textTheme.titleLarge,
-          ),
-          content: const SizedBox(
-            height: 70,
-            child: Center(
-              child: CircularProgressIndicator(),
-            ),
-          ),
+          title: Text('Finding or creating chat...', style: ctx.theme.textTheme.titleLarge),
+          content: const SizedBox(height: 70, child: Center(child: CircularProgressIndicator())),
         ),
       );
 
@@ -570,8 +564,7 @@ class ChatCreatorController extends StatefulController {
               syncedMessages = (await SyncInterface.bulkSyncData(
                 chatData: resolvedChat.toMap(),
                 messagesData: rawMessages,
-              ))
-                  .messages;
+              )).messages;
             }
           } catch (_) {
             // Non-fatal: the socket echo will still arrive and display the message
@@ -657,6 +650,14 @@ class ChatCreatorController extends StatefulController {
     // initialized its handlers. Only set when there is actual content to send,
     // and when the message was not already sent as part of new chat creation.
     if (hasContent && !messageSentWithChat) {
+      final logicalDraft = await ChatsSvc.saveLogicalSendIntent(
+        chat,
+        text: capturedText,
+        subject: '',
+        attachments: capturedAttachments,
+        reply: null,
+        effectId: effectId,
+      );
       activeCVC.pendingSend = SendData(
         attachments: capturedAttachments,
         text: capturedText,
@@ -664,6 +665,7 @@ class ChatCreatorController extends StatefulController {
         replyGuid: activeCVC.replyToMessage?.message.threadOriginatorGuid ?? activeCVC.replyToMessage?.message.guid,
         replyPart: activeCVC.replyToMessage?.partIndex,
         effectId: effectId,
+        logicalDraft: logicalDraft,
       );
       activeCVC.replyToMessage = null;
     }
@@ -697,11 +699,7 @@ class ChatCreatorController extends StatefulController {
       closeActiveChat: false,
       customRoute: PageRouteBuilder(
         pageBuilder: (_, __, ___) => TitleBarWrapper(
-          child: ConversationView(
-            chat: chat,
-            customService: messagesService,
-            fromChatCreator: true,
-          ),
+          child: ConversationView(chat: chat, customService: messagesService, fromChatCreator: true),
         ),
         transitionDuration: Duration.zero,
       ),

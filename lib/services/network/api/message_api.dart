@@ -25,7 +25,11 @@ class MessageApi {
     if (before != null) params['before'] = before.millisecondsSinceEpoch;
     return _svc.runApiGuarded(() async {
       final response = await _svc.dio.get(
-        "${_svc.apiRoot}/message/count${updated ? "/updated" : onlyMe ? "/me" : ""}",
+        "${_svc.apiRoot}/message/count${updated
+            ? "/updated"
+            : onlyMe
+            ? "/me"
+            : ""}",
         queryParameters: _svc.buildQueryParams(params),
         cancelToken: cancelToken,
       );
@@ -125,6 +129,7 @@ class MessageApi {
     String? selectedMessageGuid,
     int? partIndex,
     bool? ddScan,
+    bool allowTransientRetry = true,
     CancelToken? cancelToken,
   }) async {
     return _svc.runApiGuarded(() async {
@@ -135,16 +140,15 @@ class MessageApi {
         "method": method,
       };
 
-      data.addAllIf(SettingsSvc.settings.enablePrivateAPI.value && SettingsSvc.settings.privateAPISend.value, {
+      final privatePayload = method == 'private-api';
+      data.addAllIf(privatePayload, {
         "effectId": effectId,
         "subject": subject,
         "selectedMessageGuid": selectedMessageGuid,
         "partIndex": partIndex,
       });
 
-      if (SettingsSvc.settings.enablePrivateAPI.value &&
-          SettingsSvc.settings.privateAPISend.value &&
-          SettingsSvc.serverDetails.isMinVentura) {
+      if (privatePayload && SettingsSvc.serverDetails.isMinVentura) {
         data["ddScan"] = ddScan;
       }
 
@@ -155,7 +159,7 @@ class MessageApi {
         cancelToken: cancelToken,
       );
       return _svc.returnSuccessOrError(response);
-    });
+    }, retryTransientMutation: allowTransientRetry);
   }
 
   /// Send an attachment. [chatGuid] specifies the chat, [tempGuid] specifies a
@@ -172,6 +176,8 @@ class MessageApi {
     String? selectedMessageGuid,
     int? partIndex,
     bool? isAudioMessage,
+    bool allowTransientRetry = true,
+    void Function()? validateBeforeTransport,
     CancelToken? cancelToken,
   }) async {
     return _svc.runApiGuarded(() async {
@@ -186,7 +192,7 @@ class MessageApi {
         "method": method,
       });
 
-      if (SettingsSvc.settings.enablePrivateAPI.value && SettingsSvc.settings.privateAPIAttachmentSend.value) {
+      if (method == 'private-api') {
         Map<String, dynamic> papiData = {
           "effectId": effectId,
           "subject": subject,
@@ -199,6 +205,10 @@ class MessageApi {
         formData.fields.addAll(papiData.entries.map((entry) => MapEntry(entry.key, entry.value.toString())));
       }
 
+      // File materialization above yields. Revalidate the admitted provider
+      // context after that yield and immediately before the transport captures
+      // its URL, auth query, and headers.
+      validateBeforeTransport?.call();
       final response = await _svc.dio.post(
         "${_svc.apiRoot}/message/attachment",
         queryParameters: _svc.buildQueryParams(),
@@ -212,7 +222,7 @@ class MessageApi {
         ),
       );
       return _svc.returnSuccessOrError(response);
-    });
+    }, retryTransientMutation: allowTransientRetry);
   }
 
   /// Send a multipart message. [chatGuid] specifies the chat, [tempGuid] specifies a
@@ -227,6 +237,7 @@ class MessageApi {
     String? selectedMessageGuid,
     int? partIndex,
     bool? ddScan,
+    bool allowTransientRetry = true,
     CancelToken? cancelToken,
   }) async {
     return _svc.runApiGuarded(() async {
@@ -251,7 +262,7 @@ class MessageApi {
         cancelToken: cancelToken,
       );
       return _svc.returnSuccessOrError(response);
-    });
+    }, retryTransientMutation: allowTransientRetry);
   }
 
   /// Send a reaction. [chatGuid] specifies the chat, [selectedMessageText]
@@ -263,6 +274,7 @@ class MessageApi {
     String selectedMessageGuid,
     String reaction, {
     int? partIndex,
+    bool allowTransientRetry = true,
     CancelToken? cancelToken,
   }) async {
     return _svc.runApiGuarded(() async {
@@ -279,7 +291,7 @@ class MessageApi {
         cancelToken: cancelToken,
       );
       return _svc.returnSuccessOrError(response);
-    });
+    }, retryTransientMutation: allowTransientRetry);
   }
 
   /// Unsend a message part

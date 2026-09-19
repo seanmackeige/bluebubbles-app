@@ -53,10 +53,11 @@ class _MessagePopupHolderState extends State<MessagePopupHolder> with ThemeHelpe
     widget.cvController.subjectFocusNode.unfocus();
     if (size == null || childPos == null) return;
     childPos = Offset(
-        childPos.dx -
-            MediaQueryData.fromView(View.of(context)).padding.left -
-            (iOS ? 0 : NavigationSvc.widthChatListLeft(context)),
-        childPos.dy);
+      childPos.dx -
+          MediaQueryData.fromView(View.of(context)).padding.left -
+          (iOS ? 0 : NavigationSvc.widthChatListLeft(context)),
+      childPos.dy,
+    );
     final serverDetails = SettingsSvc.serverDetails;
     final version = serverDetails.serverVersionCode;
     final minSierra = serverDetails.isMinSierra;
@@ -147,7 +148,10 @@ class _MessagePopupHolderState extends State<MessagePopupHolder> with ThemeHelpe
                     controller: widget.controller,
                     cvController: widget.cvController,
                     serverDetails: MessagePopupServerDetails(
-                        minSierra: minSierra, minBigSur: minBigSur, supportsOriginalDownload: version > 100),
+                      minSierra: minSierra,
+                      minBigSur: minBigSur,
+                      supportsOriginalDownload: version > 100,
+                    ),
                     sendTapback: sendTapback,
                     widthContext: () => mounted ? context : null,
                     child: effectiveChild,
@@ -172,8 +176,10 @@ class _MessagePopupHolderState extends State<MessagePopupHolder> with ThemeHelpe
       } else {
         // This delay is necessary because there is a second instance of the focus node in the popup which gets focused otherwise
         // The autofocus doesn't seem to work on desktop
-        Future.delayed(const Duration(milliseconds: 500),
-            () => widget.cvController.editing.last.controller.focusNode?.requestFocus());
+        Future.delayed(
+          const Duration(milliseconds: 500),
+          () => widget.cvController.editing.last.controller.focusNode?.requestFocus(),
+        );
       }
     }
   }
@@ -193,8 +199,10 @@ class _MessagePopupHolderState extends State<MessagePopupHolder> with ThemeHelpe
       handleId: 0,
     );
 
-    Logger.debug("[sendTapback] Creating temp reaction: type=$reaction, parent=${message.guid}",
-        tag: "MessageReactivity");
+    Logger.debug(
+      "[sendTapback] Creating temp reaction: type=$reaction, parent=${message.guid}",
+      tag: "MessageReactivity",
+    );
 
     OutgoingMsgHandler.queue(
       OutgoingReaction(
@@ -202,6 +210,7 @@ class _MessagePopupHolderState extends State<MessagePopupHolder> with ThemeHelpe
         message: tempMessage,
         selectedMessage: message,
         reaction: reaction,
+        logicalActionId: logicalActionIdentity('message-popup-reaction', <Object?>[message.guid, reaction, part]),
       ),
     );
   }
@@ -225,18 +234,18 @@ class _MessagePopupHolderState extends State<MessagePopupHolder> with ThemeHelpe
         onDoubleTap: widget.isEditing
             ? null
             : SettingsSvc.settings.doubleTapForDetails.value || isTempMessage
-                ? () => openPopup()
-                : SettingsSvc.settings.enableQuickTapback.value && widget.cvController.chat.isIMessage
-                    ? () => sendTapback(null, _effectivePartIndex)
-                    : null,
+            ? () => openPopup()
+            : SettingsSvc.settings.enableQuickTapback.value && widget.cvController.chat.isIMessage
+            ? () => sendTapback(null, _effectivePartIndex)
+            : null,
         onLongPress: widget.isEditing
             ? null
             : SettingsSvc.settings.doubleTapForDetails.value &&
-                    SettingsSvc.settings.enableQuickTapback.value &&
-                    widget.cvController.chat.isIMessage &&
-                    !isTempMessage
-                ? () => sendTapback(null, _effectivePartIndex)
-                : () => openPopup(),
+                  SettingsSvc.settings.enableQuickTapback.value &&
+                  widget.cvController.chat.isIMessage &&
+                  !isTempMessage
+            ? () => sendTapback(null, _effectivePartIndex)
+            : () => openPopup(),
         onSecondaryTapUp: widget.isEditing
             ? null
             : (details) async {
@@ -253,10 +262,7 @@ class _MessagePopupHolderState extends State<MessagePopupHolder> with ThemeHelpe
 }
 
 class PopupScope extends InheritedWidget {
-  const PopupScope({
-    super.key,
-    required super.child,
-  });
+  const PopupScope({super.key, required super.child});
 
   static PopupScope? maybeOf(BuildContext context) {
     return context.dependOnInheritedWidgetOfExactType<PopupScope>();

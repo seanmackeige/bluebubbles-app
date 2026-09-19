@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:bluebubbles/database/models.dart';
+import 'package:bluebubbles/services/ui/chat/logical_draft.dart';
 
 enum QueueType { sendMessage, sendReaction, sendAttachment, sendMultipart }
 
@@ -14,8 +15,27 @@ abstract class QueueItem {
 abstract class OutgoingQueueItem extends QueueItem {
   Chat chat;
   Message message;
+  String? logicalActionId;
+  LogicalDraft? logicalDraft;
+  LogicalSendAdmissionReceipt? logicalAdmissionReceipt;
+  String? logicalTransportMethod;
+  bool? logicalDdScan;
+  String? logicalAttachmentContentFingerprint;
+  Completer<void>? logicalDispatchReservationCompleter;
 
-  OutgoingQueueItem({required super.type, super.completer, required this.chat, required this.message});
+  OutgoingQueueItem({
+    required super.type,
+    super.completer,
+    required this.chat,
+    required this.message,
+    this.logicalActionId,
+    this.logicalDraft,
+    this.logicalAdmissionReceipt,
+    this.logicalTransportMethod,
+    this.logicalDdScan,
+    this.logicalAttachmentContentFingerprint,
+    this.logicalDispatchReservationCompleter,
+  });
 
   /// Whether this item is a user-initiated retry of a previously-failed send.
   /// Retries reuse the message's existing GUID/DB row rather than generating
@@ -40,6 +60,13 @@ class OutgoingMessage extends OutgoingQueueItem {
     super.completer,
     required super.chat,
     required super.message,
+    super.logicalActionId,
+    super.logicalDraft,
+    super.logicalAdmissionReceipt,
+    super.logicalTransportMethod,
+    super.logicalDdScan,
+    super.logicalAttachmentContentFingerprint,
+    super.logicalDispatchReservationCompleter,
     this.isRetry = false,
     this.clearNotificationsIfFromMe = true,
   }) : super(type: QueueType.sendMessage);
@@ -60,6 +87,13 @@ class OutgoingReaction extends OutgoingQueueItem {
     required super.message,
     required this.selectedMessage,
     required this.reaction,
+    super.logicalActionId,
+    super.logicalDraft,
+    super.logicalAdmissionReceipt,
+    super.logicalTransportMethod,
+    super.logicalDdScan,
+    super.logicalAttachmentContentFingerprint,
+    super.logicalDispatchReservationCompleter,
     this.isRetry = false,
     this.clearNotificationsIfFromMe = true,
   }) : super(type: QueueType.sendReaction);
@@ -79,6 +113,13 @@ class OutgoingAttachment extends OutgoingQueueItem {
     required super.chat,
     required super.message,
     required this.attachment,
+    super.logicalActionId,
+    super.logicalDraft,
+    super.logicalAdmissionReceipt,
+    super.logicalTransportMethod,
+    super.logicalDdScan,
+    super.logicalAttachmentContentFingerprint,
+    super.logicalDispatchReservationCompleter,
     this.logicalRouteTargetMessageGuid,
     this.logicalPersistedExecutionSourceChatRowId,
     this.logicalPersistedExecutionSourceChatGuid,
@@ -97,6 +138,13 @@ class OutgoingMultipartMessage extends OutgoingQueueItem {
     super.completer,
     required super.chat,
     required super.message,
+    super.logicalActionId,
+    super.logicalDraft,
+    super.logicalAdmissionReceipt,
+    super.logicalTransportMethod,
+    super.logicalDdScan,
+    super.logicalAttachmentContentFingerprint,
+    super.logicalDispatchReservationCompleter,
     this.isRetry = false,
     this.clearNotificationsIfFromMe = true,
   }) : super(type: QueueType.sendMultipart);

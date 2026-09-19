@@ -15,6 +15,7 @@ import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/tex
 import 'package:bluebubbles/app/wrappers/stateful_boilerplate.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
+import 'package:bluebubbles/models/models.dart' show MessageReplyContext;
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/services/ui/chat/send_data.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
@@ -23,7 +24,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:path/path.dart' hide context;
+import 'package:path/path.dart' show basename;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:universal_io/io.dart';
 
@@ -45,6 +46,14 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
   final recorderController = kIsWeb ? null : RecorderController();
   final localController = ConversationTextFieldLocalController();
   final _emojiScrollController = ScrollController();
+  Worker? _logicalAttachmentDraftWorker;
+  Worker? _logicalReplyDraftWorker;
+  bool _logicalDraftConsumed = false;
+  bool _restoringLogicalDraft = false;
+  int _logicalIntentEpoch = 0;
+  int _logicalUiGeneration = 0;
+  Future<void>? _sendInFlight;
+  LogicalReplyIntent? _retainedLogicalReplyIntent;
 
   Chat get chat => controller.chat;
 
@@ -59,13 +68,104 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
 
   final proxyController = TextEditingController();
 
+  PlatformFile _freezeAttachment(PlatformFile source) => PlatformFile(
+    path: source.path,
+    name: source.name,
+    size: source.size,
+    bytes: source.bytes == null ? null : Uint8List.fromList(source.bytes!),
+    balloonBundleId: source.balloonBundleId,
+  );
+
+  LogicalReplyIntent? _logicalReplyIntent() {
+    final context = controller.replyToMessage;
+    final selected = context?.message;
+    final source = selected?.chat.target;
+    if (context == null || selected?.guid == null || source?.originalROWID == null) {
+      return _retainedLogicalReplyIntent;
+    }
+    return LogicalReplyIntent(
+      messageGuid: selected!.guid!,
+      relationshipTargetGuid: selected.threadOriginatorGuid ?? selected.guid!,
+      sourceChatRowId: source!.originalROWID!,
+      sourceChatGuid: source.guid,
+      part: context.partIndex,
+    );
+  }
+
+  Future<LogicalDraft?> _saveLogicalDraft({
+    String? effectId,
+    bool useFrozenIntent = false,
+    String? frozenText,
+    String? frozenSubject,
+    List<PlatformFile>? frozenAttachments,
+    LogicalReplyIntent? frozenReply,
+  }) async {
+    if (!ChatsSvc.isLogicalConversation(chat)) return null;
+    if (_logicalDraftConsumed) return null;
+    final expectedDraftGeneration = ChatsSvc.logicalDraftGenerationFor(chat);
+    final selectedAttachments = useFrozenIntent ? frozenAttachments! : controller.pickedAttachments.toList();
+    return ChatsSvc.saveLogicalSendIntent(
+      chat,
+      text: useFrozenIntent ? frozenText! : controller.textController.text,
+      subject: useFrozenIntent ? frozenSubject! : controller.subjectTextController.text,
+      attachments: selectedAttachments,
+      reply: useFrozenIntent ? frozenReply : _logicalReplyIntent(),
+      effectId: effectId,
+      expectedDraftGeneration: expectedDraftGeneration,
+    );
+  }
+
+  void _markLogicalDraftConsumed() {
+    _logicalDraftConsumed = true;
+    _logicalIntentEpoch += 1;
+    _logicalUiGeneration += 1;
+    _retainedLogicalReplyIntent = null;
+    localController.debounceDraftSave?.cancel();
+  }
+
   @override
   void initState() {
     super.initState();
     forceDelete = false;
+    controller.logicalDraftConsumedFunc = _markLogicalDraftConsumed;
 
     // Load the initial chat drafts
-    getDrafts();
+    unawaited(getDrafts());
+
+    if (ChatsSvc.isLogicalConversation(chat) && !_logicalDraftConsumed) {
+      _logicalAttachmentDraftWorker = ever(controller.pickedAttachments, (_) {
+        if (_restoringLogicalDraft) return;
+        if (_logicalDraftConsumed && controller.pickedAttachments.isEmpty) return;
+        _logicalIntentEpoch += 1;
+        _logicalDraftConsumed = false;
+        localController.debounceDraftSave?.cancel();
+        localController.debounceDraftSave = Timer(const Duration(milliseconds: 300), () {
+          unawaited(_saveLogicalDraft());
+        });
+      });
+      _logicalReplyDraftWorker = ever(controller.replyToMessageRx, (context) {
+        if (_restoringLogicalDraft) return;
+        if (_logicalDraftConsumed && context == null) return;
+        _logicalIntentEpoch += 1;
+        _logicalDraftConsumed = false;
+        if (context == null) {
+          _retainedLogicalReplyIntent = null;
+        } else {
+          final selected = context.message;
+          final source = selected.chat.target;
+          if (selected.guid != null && source?.originalROWID != null) {
+            _retainedLogicalReplyIntent = LogicalReplyIntent(
+              messageGuid: selected.guid!,
+              relationshipTargetGuid: selected.threadOriginatorGuid ?? selected.guid!,
+              sourceChatRowId: source!.originalROWID!,
+              sourceChatGuid: source.guid,
+              part: context.partIndex,
+            );
+          }
+        }
+        unawaited(_saveLogicalDraft());
+      });
+    }
 
     controller.textController.processMentions();
 
@@ -104,7 +204,41 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
     }
   }
 
-  void getDrafts() async {
+  Future<void> getDrafts() async {
+    if (ChatsSvc.isLogicalConversation(chat)) {
+      final generation = _logicalUiGeneration;
+      bool isCurrent() => mounted && !_logicalDraftConsumed && generation == _logicalUiGeneration;
+      _restoringLogicalDraft = true;
+      try {
+        final draft = ChatsSvc.loadLogicalDraft(chat);
+        if (draft == null || !isCurrent()) return;
+        if (draft.text.isNotEmpty) controller.textController.text = draft.text;
+        if (draft.subject.isNotEmpty) controller.subjectTextController.text = draft.subject;
+        await getAttachmentDrafts(
+          attachments: draft.attachments
+              .where((item) => item.isRestorable)
+              .map((item) => item.path)
+              .whereType<String>()
+              .toList(),
+          isCurrent: isCurrent,
+        );
+        if (!isCurrent()) return;
+        final reply = draft.reply;
+        if (reply != null) {
+          _retainedLogicalReplyIntent = reply;
+          final message = Message.findOne(guid: reply.messageGuid);
+          final source = message?.chat.target;
+          if (message != null &&
+              source?.originalROWID == reply.sourceChatRowId &&
+              source?.guid == reply.sourceChatGuid) {
+            controller.replyToMessage = MessageReplyContext(message, reply.part);
+          }
+        }
+      } finally {
+        _restoringLogicalDraft = false;
+      }
+      return;
+    }
     getTextDraft();
     await getAttachmentDrafts();
   }
@@ -122,7 +256,7 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
     }
   }
 
-  Future<void> getAttachmentDrafts({List<String> attachments = const []}) async {
+  Future<void> getAttachmentDrafts({List<String> attachments = const [], bool Function()? isCurrent}) async {
     // Read from ChatState — it is the source of truth and is always up-to-date.
     // Fall back to chat.textFieldAttachments for the first load after a cold start
     // (before ChatState has been updated by any setChatTextFieldAttachments call).
@@ -130,19 +264,20 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
         ? attachments
         : (ChatsSvc.getChatState(chatGuid)?.textFieldAttachments.toList() ?? chat.textFieldAttachments);
     final currentPicked = controller.pickedAttachments.map((element) => element.path).toList();
-    if (incomingAttachments.any((element) => !currentPicked.contains(element))) {
-      controller.pickedAttachments.clear();
-    }
-
+    final restored = <PlatformFile>[];
     for (String s in incomingAttachments) {
       final file = File(s);
       if (!currentPicked.contains(s) && await file.exists()) {
         final bytes = await file.readAsBytes();
-        controller.pickedAttachments.add(
-          PlatformFile(name: basename(file.path), bytes: bytes, size: bytes.length, path: s),
-        );
+        if (isCurrent != null && !isCurrent()) return;
+        restored.add(PlatformFile(name: basename(file.path), bytes: bytes, size: bytes.length, path: s));
       }
     }
+    if (isCurrent != null && !isCurrent()) return;
+    if (incomingAttachments.any((element) => !currentPicked.contains(element))) {
+      controller.pickedAttachments.clear();
+    }
+    controller.pickedAttachments.addAll(restored);
   }
 
   void focusListener(bool subject) async {
@@ -154,8 +289,24 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
   }
 
   void textListener(bool subject) {
+    if (ChatsSvc.isLogicalConversation(chat) && !_logicalDraftConsumed) {
+      _logicalIntentEpoch += 1;
+    }
+    if (_logicalDraftConsumed) {
+      final hasNewIntent =
+          controller.textController.text.isNotEmpty ||
+          controller.subjectTextController.text.isNotEmpty ||
+          controller.pickedAttachments.isNotEmpty;
+      if (!hasNewIntent) return;
+      _logicalDraftConsumed = false;
+    }
     // OPTIMIZATION: Debounce draft saving to avoid database writes on every keystroke
-    if (!subject) {
+    if (ChatsSvc.isLogicalConversation(chat) && !_logicalDraftConsumed) {
+      localController.debounceDraftSave?.cancel();
+      localController.debounceDraftSave = Timer(const Duration(milliseconds: 500), () {
+        unawaited(_saveLogicalDraft());
+      });
+    } else if (!subject) {
       localController.debounceDraftSave?.cancel();
       localController.debounceDraftSave = Timer(const Duration(milliseconds: 500), () {
         unawaited(ChatsSvc.setChatTextFieldText(chat, controller.textController.text));
@@ -271,7 +422,8 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
     localController.debounceTyping?.cancel();
     localController.oldText.value = newText;
     // don't send a bunch of duplicate events for every typing change
-    if (SettingsSvc.settings.enablePrivateAPI.value &&
+    if (!ChatsSvc.isLogicalConversation(chat) &&
+        SettingsSvc.settings.enablePrivateAPI.value &&
         (chat.autoSendTypingIndicators ?? SettingsSvc.settings.privateSendTypingIndicators.value)) {
       if (localController.debounceTyping == null) {
         unawaited(TypingIndicatorSvc.startTyping(chatGuid));
@@ -313,11 +465,27 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
 
   @override
   void dispose() {
+    controller.logicalDraftConsumedFunc = null;
     final draftText = controller.textController.text.trim().isNotEmpty ? controller.textController.text : '';
     final draftAttachments = controller.pickedAttachments.where((e) => e.path != null).map((e) => e.path!).toList();
-    // Update ChatState synchronously and fire DB save in the background.
-    unawaited(ChatsSvc.setChatTextFieldText(chat, draftText));
-    unawaited(ChatsSvc.setChatTextFieldAttachments(chat, draftAttachments));
+    if (ChatsSvc.isLogicalConversation(chat) && !_logicalDraftConsumed) {
+      final logicalReply = _logicalReplyIntent();
+      final subject = controller.subjectTextController.text;
+      unawaited(
+        ChatsSvc.saveLogicalSendIntent(
+          chat,
+          text: draftText,
+          subject: subject,
+          attachments: controller.pickedAttachments.toList(),
+          reply: logicalReply,
+          expectedDraftGeneration: ChatsSvc.logicalDraftGenerationFor(chat),
+        ),
+      );
+    } else {
+      // Update ChatState synchronously and fire DB save in the background.
+      unawaited(ChatsSvc.setChatTextFieldText(chat, draftText));
+      unawaited(ChatsSvc.setChatTextFieldAttachments(chat, draftAttachments));
+    }
 
     controller.focusNode.dispose();
     controller.subjectFocusNode.dispose();
@@ -325,18 +493,42 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
     controller.subjectTextController.dispose();
     recorderController?.dispose();
     _emojiScrollController.dispose();
+    _logicalAttachmentDraftWorker?.dispose();
+    _logicalReplyDraftWorker?.dispose();
     controller.showAttachmentPicker.value = false;
     localController.cancelAllTimers();
     Get.delete<ConversationTextFieldLocalController>();
-    if (chat.autoSendTypingIndicators ?? SettingsSvc.settings.privateSendTypingIndicators.value) {
+    if (!ChatsSvc.isLogicalConversation(chat) &&
+        (chat.autoSendTypingIndicators ?? SettingsSvc.settings.privateSendTypingIndicators.value)) {
       unawaited(TypingIndicatorSvc.stopTyping(chatGuid));
     }
 
     super.dispose();
   }
 
-  Future<void> sendMessage({String? effect}) async {
+  Future<void> sendMessage({String? effect}) {
+    final existing = _sendInFlight;
+    if (existing != null) return existing;
+    late final Future<void> operation;
+    operation = _sendMessageOnce(effect: effect).whenComplete(() {
+      if (identical(_sendInFlight, operation)) _sendInFlight = null;
+    });
+    _sendInFlight = operation;
+    return operation;
+  }
+
+  Future<void> _sendMessageOnce({String? effect}) async {
     final text = controller.textController.text;
+    final subject = controller.subjectTextController.text;
+    final replyIntent = _logicalReplyIntent();
+    final replyGuid =
+        replyIntent?.relationshipTargetGuid ??
+        controller.replyToMessage?.message.threadOriginatorGuid ??
+        controller.replyToMessage?.message.guid;
+    final replyPart = replyIntent?.part ?? controller.replyToMessage?.partIndex;
+    final attachments = controller.pickedAttachments.map(_freezeAttachment).toList(growable: false);
+    final intentEpoch = _logicalIntentEpoch;
+    localController.debounceDraftSave?.cancel();
     if (controller.scheduledDate.value != null) {
       if (ChatsSvc.isLogicalConversation(chat)) {
         return showSnackbar('ROUTE_NOT_PROVEN', 'Scheduled logical mutations are not certified');
@@ -375,9 +567,7 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
         showSnackbar("Error", "Something went wrong!");
       }
     } else {
-      if (text.isEmpty &&
-          controller.subjectTextController.text.isEmpty &&
-          !SettingsSvc.settings.privateAPIAttachmentSend.value) {
+      if (text.isEmpty && subject.isEmpty && !SettingsSvc.settings.privateAPIAttachmentSend.value) {
         if (controller.replyToMessage != null) {
           return showSnackbar("Error", "Turn on Private API Attachment Send to send replies with media!");
         } else if (effect != null) {
@@ -406,16 +596,48 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
             break;
         }
       }
-      await controller.send(
-        SendData(
-          attachments: controller.pickedAttachments,
-          text: text,
-          subject: controller.subjectTextController.text,
-          replyGuid: controller.replyToMessage?.message.threadOriginatorGuid ?? controller.replyToMessage?.message.guid,
-          replyPart: controller.replyToMessage?.partIndex,
-          effectId: effect,
-        ),
+      final logicalDraft = await _saveLogicalDraft(
+        effectId: effect,
+        useFrozenIntent: true,
+        frozenText: text,
+        frozenSubject: subject,
+        frozenAttachments: attachments,
+        frozenReply: replyIntent,
       );
+      if (ChatsSvc.isLogicalConversation(chat) && logicalDraft == null) {
+        showSnackbar('Send paused', 'The logical draft changed while send intent was being frozen. Please try again.');
+        return;
+      }
+      if (logicalDraft?.attachments.any((attachment) => !attachment.isRestorable) == true) {
+        showSnackbar('Send blocked', 'SEND_BLOCKED_ATTACHMENT_INTENT_UNAVAILABLE');
+        return;
+      }
+      try {
+        await controller.send(
+          SendData(
+            attachments: attachments,
+            text: text,
+            subject: subject,
+            replyGuid: replyGuid,
+            replyPart: replyPart,
+            effectId: effect,
+            logicalDraft: logicalDraft,
+          ),
+        );
+      } on LogicalSendAdmissionException catch (error) {
+        if (mounted) showSnackbar('Send paused', logicalSendAdmissionUserMessage(error.state));
+        return;
+      }
+      if (logicalDraft != null && !_logicalDraftConsumed) {
+        if (_logicalIntentEpoch != intentEpoch) {
+          await _saveLogicalDraft();
+          return;
+        }
+        final cleared = await ChatsSvc.clearLogicalDraftIfCurrent(logicalDraft);
+        if (!cleared) return;
+        _logicalDraftConsumed = true;
+        localController.debounceDraftSave?.cancel();
+      }
     }
     controller.pickedAttachments.clear();
     controller.textController.clear();
@@ -423,9 +645,11 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
     controller.replyToMessage = null;
     controller.scheduledDate.value = null;
     localController.debounceTyping = null;
-    // Clear the draft now that the message has been sent.
-    unawaited(ChatsSvc.setChatTextFieldText(chat, ''));
-    unawaited(ChatsSvc.setChatTextFieldAttachments(chat, []));
+    if (!ChatsSvc.isLogicalConversation(chat)) {
+      // Clear the ordinary physical-chat draft after queue custody.
+      unawaited(ChatsSvc.setChatTextFieldText(chat, ''));
+      unawaited(ChatsSvc.setChatTextFieldAttachments(chat, []));
+    }
   }
 
   Future<void> openFullCamera({String type = 'camera'}) async {

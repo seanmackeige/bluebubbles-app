@@ -31,11 +31,12 @@ class SyncService {
 
   void initFullSync() {
     _manager = FullSyncManager(
-        messageCount: numberOfMessagesPerPage.toInt(),
-        skipEmptyChats: skipEmptyChats,
-        saveLogs: saveToDownloads,
-        syncGroupChatIcons: syncGroupChatIcons,
-        syncTimeFilter: syncTimeFilter);
+      messageCount: numberOfMessagesPerPage.toInt(),
+      skipEmptyChats: skipEmptyChats,
+      saveLogs: saveToDownloads,
+      syncGroupChatIcons: syncGroupChatIcons,
+      syncTimeFilter: syncTimeFilter,
+    );
   }
 
   Future<void> startFullSync() async {
@@ -84,8 +85,15 @@ class SyncService {
         if (message.id != null) processedMessageIds.add(message.id!);
         final chatGuid = message.chat.target?.guid;
         if (chatGuid == null || message.guid == null) continue;
-        if (Get.isRegistered<MessagesService>(tag: chatGuid)) {
-          unawaited(Get.find<MessagesService>(tag: chatGuid).addNewMessage(message));
+        ChatsSvc.noteLogicalSourceEvent(chatGuid);
+        final presentationGuid = ChatsSvc.presentationGuidFor(chatGuid);
+        if (Get.isRegistered<MessagesService>(tag: presentationGuid)) {
+          final service = Get.find<MessagesService>(tag: presentationGuid);
+          if (service.struct.getMessage(message.guid!) == null) {
+            unawaited(service.addNewMessage(message));
+          } else {
+            service.updateMessage(message);
+          }
         }
       }
 
@@ -139,25 +147,36 @@ class SyncService {
 
         // Dispatch newly synced messages to any currently active chat view.
         // Skip messages already dispatched by a per-page event.
-        // MessagesService.addNewMessage() is a no-op if the message is already present,
-        // so this is safe even without the skip, but avoiding the call reduces churn.
+        // Reconcile existing GUIDs through updateMessage so reconnect-delivered
+        // read/edit/attachment changes reposition and refresh the open view.
         for (final message in syncedMessages) {
           if (message.id != null && processedMessageIds.contains(message.id)) continue;
           final chatGuid = message.chat.target?.guid;
           if (chatGuid == null || message.guid == null) continue;
-          if (Get.isRegistered<MessagesService>(tag: chatGuid)) {
-            unawaited(Get.find<MessagesService>(tag: chatGuid).addNewMessage(message));
+          ChatsSvc.noteLogicalSourceEvent(chatGuid);
+          final presentationGuid = ChatsSvc.presentationGuidFor(chatGuid);
+          if (Get.isRegistered<MessagesService>(tag: presentationGuid)) {
+            final service = Get.find<MessagesService>(tag: presentationGuid);
+            if (service.struct.getMessage(message.guid!) == null) {
+              unawaited(service.addNewMessage(message));
+            } else {
+              service.updateMessage(message);
+            }
           }
         }
       }
 
       chatStopwatch.stop();
       Logger.info(
-          'Incremental chat sync completed! Synced ${syncedMessages.length} messages across '
-          '${syncedMessages.map((m) => m.chat.target?.guid).toSet().length} chats '
-          'in ${chatStopwatch.elapsedMilliseconds}ms',
-          tag: 'Incremental Chat Sync');
+        'Incremental chat sync completed! Synced ${syncedMessages.length} messages across '
+        '${syncedMessages.map((m) => m.chat.target?.guid).toSet().length} chats '
+        'in ${chatStopwatch.elapsedMilliseconds}ms',
+        tag: 'Incremental Chat Sync',
+      );
     } catch (e, stack) {
+      if (e.toString().contains('SOURCE_PROVENANCE_CONFLICT')) {
+        ChatsSvc.invalidateLogicalAuthority('SOURCE_PROVENANCE_CONFLICT');
+      }
       Logger.error('Incremental chat sync failed!', error: e, trace: stack, tag: 'Incremental Chat Sync');
       errors += 1;
     } finally {
@@ -190,8 +209,9 @@ class SyncService {
       final refreshedHandleIds = await ContactsSvcV2.syncContactsToHandles();
       contactStopwatch.stop();
       Logger.info(
-          'Finished contact refresh, refreshed ${refreshedHandleIds.length} handles in ${contactStopwatch.elapsedMilliseconds}ms',
-          tag: 'Incremental Contact Sync');
+        'Finished contact refresh, refreshed ${refreshedHandleIds.length} handles in ${contactStopwatch.elapsedMilliseconds}ms',
+        tag: 'Incremental Contact Sync',
+      );
 
       if (refreshedHandleIds.isNotEmpty) {
         ContactsSvcV2.notifyHandlesUpdated(refreshedHandleIds);
@@ -219,8 +239,10 @@ class SyncService {
 
         await ContactV2Interface.uploadContacts(_contacts);
         contactUploadStopwatch.stop();
-        Logger.debug("Contact upload complete in ${contactUploadStopwatch.elapsedMilliseconds}ms",
-            tag: "Contact Upload");
+        Logger.debug(
+          "Contact upload complete in ${contactUploadStopwatch.elapsedMilliseconds}ms",
+          tag: "Contact Upload",
+        );
       }
 
       return true;

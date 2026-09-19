@@ -107,8 +107,9 @@ class Message {
   final chat = ToOne<Chat>();
 
   String? get dbAttributedBody => jsonEncode(attributedBody.map((e) => e.toMap()).toList());
-  set dbAttributedBody(String? json) => attributedBody =
-      json == null ? <AttributedBody>[] : (jsonDecode(json) as List).map((e) => AttributedBody.fromMap(e)).toList();
+  set dbAttributedBody(String? json) => attributedBody = json == null
+      ? <AttributedBody>[]
+      : (jsonDecode(json) as List).map((e) => AttributedBody.fromMap(e)).toList();
 
   String? get dbMessageSummaryInfo => jsonEncode(messageSummaryInfo.map((e) => e.toJson()).toList());
   set dbMessageSummaryInfo(String? json) => messageSummaryInfo = json == null
@@ -205,8 +206,9 @@ class Message {
         json['attributedBody'] = [json['attributedBody']!.cast<String, Object>()];
       }
       try {
-        attributedBody =
-            (json['attributedBody'] as List).map((a) => AttributedBody.fromMap(a!.cast<String, Object>())).toList();
+        attributedBody = (json['attributedBody'] as List)
+            .map((a) => AttributedBody.fromMap(a!.cast<String, Object>()))
+            .toList();
       } catch (e, stack) {
         Logger.error('Failed to parse attributed body!', error: e, trace: stack);
       }
@@ -262,7 +264,8 @@ class Message {
       groupActionType: json["groupActionType"] ?? 0,
       balloonBundleId: json["balloonBundleId"],
       associatedMessageGuid: json["associatedMessageGuid"]?.toString().replaceAll("bp:", "").split("/").last,
-      associatedMessagePart: json["associatedMessagePart"] ??
+      associatedMessagePart:
+          json["associatedMessagePart"] ??
           int.tryParse(json["associatedMessageGuid"].toString().replaceAll("p:", "").split("/").first),
       associatedMessageType: json["associatedMessageType"],
       expressiveSendStyleId: json["expressiveSendStyleId"],
@@ -373,10 +376,7 @@ class Message {
   static Future<Message> replaceMessage(String? oldGuid, Message newMessage) async {
     if (kIsWeb) throw Exception("Web does not support replacing messages!");
 
-    return await MessageInterface.replaceMessage(
-      oldGuid: oldGuid,
-      newMessageData: newMessage.toMap(),
-    );
+    return await MessageInterface.replaceMessage(oldGuid: oldGuid, newMessageData: newMessage.toMap());
   }
 
   Message updateMetadata(Metadata? metadata) {
@@ -455,10 +455,7 @@ class Message {
   static Future<Message?> findOneAsync({String? guid, String? associatedMessageGuid}) async {
     if (kIsWeb) return null;
 
-    final result = await MessageInterface.findOneAsync(
-      guid: guid,
-      associatedMessageGuid: associatedMessageGuid,
-    );
+    final result = await MessageInterface.findOneAsync(guid: guid, associatedMessageGuid: associatedMessageGuid);
 
     return result;
   }
@@ -475,9 +472,7 @@ class Message {
 
     // Note: For now, we pass null for conditionJson since serializing ObjectBox Condition
     // is complex. This will return all messages. Future enhancement can add condition serialization.
-    return await MessageInterface.findAsync(
-      conditionJson: null,
-    );
+    return await MessageInterface.findAsync(conditionJson: null);
   }
 
   /// Delete a message and remove all instances of that message in the DB
@@ -544,8 +539,8 @@ class Message {
     final extension = balloonBundleId!.contains("com.apple.Digital")
         ? ".mov"
         : balloonBundleId!.contains("com.apple.Handwriting")
-            ? ".png"
-            : null;
+        ? ".png"
+        : null;
     return "${FilesystemSvc.messagesPath}/$guid/embedded-media/$balloonBundleId$extension";
   }
 
@@ -753,19 +748,24 @@ class Message {
 
   /// Calculate the size of the message bubble by calculating text size or
   /// attachment size
-  Size getBubbleSize(BuildContext context,
-      {double? maxWidthOverride, double? minHeightOverride, String? textOverride}) {
+  Size getBubbleSize(
+    BuildContext context, {
+    double? maxWidthOverride,
+    double? minHeightOverride,
+    String? textOverride,
+  }) {
     // cache this value because the calculation can be expensive
     if (MessagesService.cachedBubbleSizes[guid!] != null) return MessagesService.cachedBubbleSizes[guid!]!;
     // if attachment, then grab width / height
     if (fullText.isEmpty && dbAttachments.isNotEmpty) {
       return Size(
-          dbAttachments
-              .map((e) => e.width)
-              .fold(0, (p, e) => max(p, (e ?? NavigationSvc.width(context) / 2).toDouble()) + 28),
-          dbAttachments
-              .map((e) => e.height)
-              .fold(0, (p, e) => max(p, (e ?? NavigationSvc.width(context) / 2).toDouble())));
+        dbAttachments
+            .map((e) => e.width)
+            .fold(0, (p, e) => max(p, (e ?? NavigationSvc.width(context) / 2).toDouble()) + 28),
+        dbAttachments
+            .map((e) => e.height)
+            .fold(0, (p, e) => max(p, (e ?? NavigationSvc.width(context) / 2).toDouble())),
+      );
     }
     // initialize constraints for text rendering
     final fontSizeFactor = isBigEmoji ? bigEmojiScaleFactor : 1.0;
@@ -805,6 +805,13 @@ class Message {
   static Message merge(Message existing, Message newMessage) {
     existing.id ??= newMessage.id;
     existing.guid ??= newMessage.guid;
+
+    // Association fields define whether this row is a top-level message or a
+    // relationship event. They are authoritative, nullable state and must be
+    // replaced even when a reaction is removed or re-parented.
+    existing.associatedMessageGuid = newMessage.associatedMessageGuid;
+    existing.associatedMessagePart = newMessage.associatedMessagePart;
+    existing.associatedMessageType = newMessage.associatedMessageType;
 
     // Update date created
     if ((existing.dateCreated == null && newMessage.dateCreated != null) ||

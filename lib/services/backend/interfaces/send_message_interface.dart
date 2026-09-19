@@ -20,6 +20,8 @@ class SendMessageInterface {
     String? selectedMessageGuid,
     int? partIndex,
     bool? ddScan,
+    String? expectedProviderContextFingerprint,
+    bool allowTransientRetry = true,
   }) async {
     final data = {
       'chatGuid': chatGuid,
@@ -31,6 +33,8 @@ class SendMessageInterface {
       'selectedMessageGuid': selectedMessageGuid,
       'partIndex': partIndex,
       'ddScan': ddScan,
+      'expectedProviderContextFingerprint': expectedProviderContextFingerprint,
+      'allowTransientRetry': allowTransientRetry,
     };
     if (isIsolate) {
       return await SendMessageActions.sendTextMessage(data);
@@ -45,6 +49,8 @@ class SendMessageInterface {
     required String selectedMessageGuid,
     required String reaction,
     int? partIndex,
+    String? expectedProviderContextFingerprint,
+    bool allowTransientRetry = true,
   }) async {
     final data = {
       'chatGuid': chatGuid,
@@ -52,6 +58,8 @@ class SendMessageInterface {
       'selectedMessageGuid': selectedMessageGuid,
       'reaction': reaction,
       'partIndex': partIndex,
+      'expectedProviderContextFingerprint': expectedProviderContextFingerprint,
+      'allowTransientRetry': allowTransientRetry,
     };
     if (isIsolate) {
       return await SendMessageActions.sendTapback(data);
@@ -70,6 +78,8 @@ class SendMessageInterface {
     String? selectedMessageGuid,
     int? partIndex,
     bool? ddScan,
+    String? expectedProviderContextFingerprint,
+    bool allowTransientRetry = true,
   }) async {
     final data = {
       'chatGuid': chatGuid,
@@ -80,12 +90,16 @@ class SendMessageInterface {
       'selectedMessageGuid': selectedMessageGuid,
       'partIndex': partIndex,
       'ddScan': ddScan,
+      'expectedProviderContextFingerprint': expectedProviderContextFingerprint,
+      'allowTransientRetry': allowTransientRetry,
     };
     if (isIsolate) {
       return await SendMessageActions.sendMultipartMessage(data);
     }
-    return await GetIt.I<GlobalIsolate>()
-        .send<Map<String, dynamic>>(IsolateRequestType.sendMultipartMessage, input: data);
+    return await GetIt.I<GlobalIsolate>().send<Map<String, dynamic>>(
+      IsolateRequestType.sendMultipartMessage,
+      input: data,
+    );
   }
 
   /// Sends an attachment and returns the decoded server response body.
@@ -104,6 +118,8 @@ class SendMessageInterface {
     String? selectedMessageGuid,
     int? partIndex,
     bool? isAudioMessage,
+    String? expectedProviderContextFingerprint,
+    bool allowTransientRetry = true,
   }) async {
     final data = {
       'chatGuid': chatGuid,
@@ -117,11 +133,15 @@ class SendMessageInterface {
       'selectedMessageGuid': selectedMessageGuid,
       'partIndex': partIndex,
       'isAudioMessage': isAudioMessage ?? false,
+      'expectedProviderContextFingerprint': expectedProviderContextFingerprint,
+      'allowTransientRetry': allowTransientRetry,
     };
     if (isIsolate) {
       return await SendMessageActions.sendAttachmentMessage(data);
     }
-    return await GetIt.I<GlobalIsolate>()
-        .send<Map<String, dynamic>>(IsolateRequestType.sendAttachmentMessage, input: data);
+    return await GetIt.I<GlobalIsolate>().send<Map<String, dynamic>>(
+      IsolateRequestType.sendAttachmentMessage,
+      input: data,
+    );
   }
 }

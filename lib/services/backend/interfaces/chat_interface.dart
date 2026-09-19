@@ -221,6 +221,8 @@ class ChatInterface {
     int limit = 25,
     bool includeDeleted = false,
     int? searchAround,
+    int? beforeDateCreated,
+    String? afterGuidAtBoundary,
     bool hydrateAttachments = true,
   }) async {
     final data = {
@@ -232,6 +234,8 @@ class ChatInterface {
       'limit': limit,
       'includeDeleted': includeDeleted,
       'searchAround': searchAround,
+      'beforeDateCreated': beforeDateCreated,
+      'afterGuidAtBoundary': afterGuidAtBoundary,
     };
 
     late List<int> messageIds;

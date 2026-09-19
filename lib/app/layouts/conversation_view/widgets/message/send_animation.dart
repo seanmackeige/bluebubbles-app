@@ -12,6 +12,7 @@ import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/app/state/message_state.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/services/ui/chat/send_data.dart';
+import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:mime_type/mime_type.dart';
@@ -110,7 +111,25 @@ class _SendAnimationState extends CustomState<SendAnimation, SendData, Conversat
           // causing the sent message to never appear in the list.
           await Future.delayed(const Duration(milliseconds: 250));
           if (!mounted) return;
-          await send(pendingData);
+          try {
+            // Route ChatCreator custody through the same controller-level
+            // logical mutex and draft-consumption boundary as every other
+            // composer entry point.
+            await controller.send(pendingData);
+          } on LogicalSendAdmissionException catch (error) {
+            controller.pickedAttachments.value = List<PlatformFile>.from(pendingData.attachments);
+            controller.textController.text = pendingData.text;
+            controller.subjectTextController.text = pendingData.subject;
+            if (mounted) showSnackbar('Send paused', logicalSendAdmissionUserMessage(error.state));
+            return;
+          } catch (error, stack) {
+            controller.pickedAttachments.value = List<PlatformFile>.from(pendingData.attachments);
+            controller.textController.text = pendingData.text;
+            controller.subjectTextController.text = pendingData.subject;
+            Logger.warn('Pending send remains preserved', error: error, trace: stack);
+            if (mounted) showSnackbar('Send paused', 'Message preserved; please try again.');
+            return;
+          }
 
           // Clear the text field and attachments now that the send has been queued,
           // mirroring what ConversationTextField.sendMessage() does for normal sends.
@@ -126,6 +145,8 @@ class _SendAnimationState extends CustomState<SendAnimation, SendData, Conversat
   Future<void> send(SendData data) async {
     // do not add anything above this line, the attachments must be extracted first
     final attachments = List<PlatformFile>.from(data.attachments);
+    final outgoingItems = <OutgoingQueueItem>[];
+    Message? animatedMessage;
     // text is mutable — reassigned during mention processing below
     String text = data.text;
     // Hide the smart reply row immediately, before the send animation's target
@@ -188,11 +209,13 @@ class _SendAnimationState extends CustomState<SendAnimation, SendData, Conversat
       );
       message.generateTempGuid();
       attachment.guid = message.guid;
-      await OutgoingMsgHandler.queue(
+      outgoingItems.add(
         OutgoingAttachment(
           chat: controller.chat,
           message: message,
           attachment: attachment,
+          logicalActionId: data.logicalDraft == null ? null : '${data.logicalDraft!.actionId}:attachment:$i',
+          logicalDraft: data.logicalDraft,
           logicalRouteTargetMessageGuid: data.replyGuid,
           isAudioMessage: data.isAudioMessage,
         ),
@@ -254,15 +277,32 @@ class _SendAnimationState extends CustomState<SendAnimation, SendData, Conversat
             ),
         ],
       );
-      OutgoingMsgHandler.queue(
+      outgoingItems.add(
         (_message.attributedBody.isNotEmpty)
-            ? OutgoingMultipartMessage(chat: controller.chat, message: _message)
-            : OutgoingMessage(chat: controller.chat, message: _message),
+            ? OutgoingMultipartMessage(
+                chat: controller.chat,
+                message: _message,
+                logicalActionId: data.logicalDraft == null ? null : '${data.logicalDraft!.actionId}:text',
+                logicalDraft: data.logicalDraft,
+              )
+            : OutgoingMessage(
+                chat: controller.chat,
+                message: _message,
+                logicalActionId: data.logicalDraft == null ? null : '${data.logicalDraft!.actionId}:text',
+                logicalDraft: data.logicalDraft,
+              ),
       );
+      animatedMessage = _message;
+    }
+
+    if (outgoingItems.isNotEmpty) {
+      await OutgoingMsgHandler.queueBatch(outgoingItems);
+    }
+    if (animatedMessage != null && mounted) {
       setState(() {
         tween = Tween<double>(begin: 0.9, end: 0);
         control = Control.play;
-        message = _message;
+        message = animatedMessage;
       });
     }
     super.updateWidget(data);

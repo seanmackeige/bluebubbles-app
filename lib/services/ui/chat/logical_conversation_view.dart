@@ -1,4 +1,160 @@
+import 'dart:convert';
+
+import 'package:crypto/crypto.dart';
+
 const logicalConversationReadCertificateSchema = 'LOGICAL_CONVERSATION_READ_CERTIFICATE_V2_N_MEMBER';
+const incrementalLogicalProjectionSchema = 'INCREMENTAL_LOGICAL_PROJECTION_V1';
+
+enum LogicalProjectionEventClass {
+  normalMessage,
+  historicalMemberMessage,
+  reaction,
+  crossChatReaction,
+  reply,
+  attachment,
+  readState,
+  groupMetadata,
+  newPhysicalCandidate,
+  newlyAdmittedMember,
+  executionGeneration,
+  delayedEvent,
+  duplicateEvent,
+  outOfOrderEvent,
+}
+
+enum LogicalProjectionDeltaKind { inserted, updated, unchanged, removed, fullRebuildRequired }
+
+class LogicalProjectionDelta {
+  const LogicalProjectionDelta(this.kind, {this.oldIndex, this.newIndex, this.reason});
+
+  final LogicalProjectionDeltaKind kind;
+  final int? oldIndex;
+  final int? newIndex;
+  final String? reason;
+}
+
+class LogicalProjectionCacheIdentity {
+  const LogicalProjectionCacheIdentity({
+    required this.logicalId,
+    required this.certificateRevision,
+    required this.memberBindingDigest,
+    required this.authorityRevision,
+    required this.sourceWatermarks,
+    required this.eventWatermark,
+  });
+
+  final String logicalId;
+  final String certificateRevision;
+  final String memberBindingDigest;
+  final String authorityRevision;
+  final Map<String, String> sourceWatermarks;
+  final int eventWatermark;
+
+  bool isCompatibleWith(LogicalProjectionCacheIdentity other) {
+    return logicalId == other.logicalId &&
+        certificateRevision == other.certificateRevision &&
+        memberBindingDigest == other.memberBindingDigest;
+  }
+}
+
+/// Reconstructible ordered event index. Source models remain authoritative;
+/// this type only owns a disposable presentation window.
+class IncrementalLogicalProjection<T> {
+  IncrementalLogicalProjection({
+    required this.identityOf,
+    required this.provenanceOf,
+    required this.compare,
+    this.equivalent,
+  });
+
+  final String Function(T event) identityOf;
+  final String Function(T event) provenanceOf;
+  final int Function(T left, T right) compare;
+  final bool Function(T left, T right)? equivalent;
+
+  final Map<String, T> _byId = <String, T>{};
+  final List<T> _ordered = <T>[];
+
+  List<T> get values => List<T>.unmodifiable(_ordered);
+
+  void rebuild(Iterable<T> sourceTruth) {
+    _byId.clear();
+    _ordered.clear();
+    for (final event in sourceTruth) {
+      final id = identityOf(event);
+      final existing = _byId[id];
+      if (existing != null && provenanceOf(existing) != provenanceOf(event)) {
+        throw StateError('LOGICAL_EVENT_PROVENANCE_CONFLICT:$id');
+      }
+      _byId[id] = event;
+    }
+    _ordered.addAll(_byId.values);
+    _ordered.sort(_compareCanonical);
+  }
+
+  LogicalProjectionDelta upsert(
+    T event, {
+    LogicalProjectionEventClass eventClass = LogicalProjectionEventClass.normalMessage,
+  }) {
+    if (eventClass == LogicalProjectionEventClass.newlyAdmittedMember ||
+        eventClass == LogicalProjectionEventClass.executionGeneration) {
+      return LogicalProjectionDelta(LogicalProjectionDeltaKind.fullRebuildRequired, reason: eventClass.name);
+    }
+    final id = identityOf(event);
+    final existing = _byId[id];
+    if (existing != null && provenanceOf(existing) != provenanceOf(event)) {
+      throw StateError('LOGICAL_EVENT_PROVENANCE_CONFLICT:$id');
+    }
+    if (existing != null && (equivalent?.call(existing, event) ?? identical(existing, event))) {
+      return LogicalProjectionDelta(
+        LogicalProjectionDeltaKind.unchanged,
+        oldIndex: _ordered.indexWhere((item) => identityOf(item) == id),
+      );
+    }
+
+    int? oldIndex;
+    if (existing != null) {
+      oldIndex = _ordered.indexWhere((item) => identityOf(item) == id);
+      if (oldIndex >= 0) _ordered.removeAt(oldIndex);
+    }
+    _byId[id] = event;
+    final newIndex = insertionIndex(_ordered, event, _compareCanonical);
+    _ordered.insert(newIndex, event);
+    return LogicalProjectionDelta(
+      existing == null ? LogicalProjectionDeltaKind.inserted : LogicalProjectionDeltaKind.updated,
+      oldIndex: oldIndex,
+      newIndex: newIndex,
+    );
+  }
+
+  LogicalProjectionDelta remove(String id) {
+    if (_byId.remove(id) == null) {
+      return const LogicalProjectionDelta(LogicalProjectionDeltaKind.unchanged);
+    }
+    final oldIndex = _ordered.indexWhere((item) => identityOf(item) == id);
+    if (oldIndex >= 0) _ordered.removeAt(oldIndex);
+    return LogicalProjectionDelta(LogicalProjectionDeltaKind.removed, oldIndex: oldIndex);
+  }
+
+  int _compareCanonical(T left, T right) {
+    final byValue = compare(left, right);
+    return byValue != 0 ? byValue : identityOf(left).compareTo(identityOf(right));
+  }
+
+  static int insertionIndex<T>(List<T> ordered, T value, int Function(T left, T right) compare) {
+    var low = 0;
+    var high = ordered.length;
+    while (low < high) {
+      final middle = low + ((high - low) >> 1);
+      if (compare(ordered[middle], value) <= 0) {
+        low = middle + 1;
+      } else {
+        high = middle;
+      }
+    }
+    return low;
+  }
+}
 
 /// Evidence classes retained with each physical member's independent read
 /// admission. Display name and transitive equivalence are deliberately absent.
@@ -84,6 +240,26 @@ class LogicalConversationReadCertificate {
   final int presentationSourceChatRowId;
 
   Set<int> get sourceChatRowIds => members.map((member) => member.sourceChatRowId).toSet();
+
+  /// Stable identity of the exact admitted member set and its supporting
+  /// receipts. This is an execution precondition, not a cache version.
+  String get revision {
+    final ordered = members.toList()..sort((left, right) => left.sourceChatRowId.compareTo(right.sourceChatRowId));
+    final payload = <String, dynamic>{
+      'schema': schema,
+      'id': id,
+      'presentationSourceChatRowId': presentationSourceChatRowId,
+      'members': [
+        for (final member in ordered)
+          <String, dynamic>{
+            'sourceChatRowId': member.sourceChatRowId,
+            'sourceChatGuidHmacSha256': member.sourceChatGuidHmacSha256,
+            'admissionReceiptCommit': member.admissionReceiptCommit,
+          },
+      ],
+    };
+    return sha256.convert(utf8.encode(jsonEncode(payload))).toString();
+  }
 
   bool containsSourceRowId(int? rowId) => rowId != null && sourceChatRowIds.contains(rowId);
 

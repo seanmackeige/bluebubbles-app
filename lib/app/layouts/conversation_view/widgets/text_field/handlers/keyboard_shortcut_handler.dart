@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:bluebubbles/app/components/custom_text_editing_controllers.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
@@ -17,6 +19,7 @@ class KeyboardShortcutHandler {
   final TextEditingController subjectTextController;
   final TextEditingController messageTextController;
   final bool isChatCreator;
+  bool _sendInFlight = false;
 
   KeyboardShortcutHandler({
     required this.controller,
@@ -25,6 +28,12 @@ class KeyboardShortcutHandler {
     required this.messageTextController,
     required this.isChatCreator,
   });
+
+  void _sendOnce() {
+    if (_sendInFlight) return;
+    _sendInFlight = true;
+    unawaited(sendMessage().whenComplete(() => _sendInFlight = false));
+  }
 
   /// Handle general keyboard shortcuts (non-autocomplete).
   /// Returns a [KeyEventResult] indicating whether the event was handled.
@@ -36,7 +45,7 @@ class KeyboardShortcutHandler {
       if ((kIsDesktop || kIsWeb) &&
           ev.logicalKey == LogicalKeyboardKey.enter &&
           !HardwareKeyboard.instance.isShiftPressed) {
-        sendMessage();
+        _sendOnce();
         return KeyEventResult.handled;
       }
       return KeyEventResult.ignored;
@@ -59,11 +68,13 @@ class KeyboardShortcutHandler {
             final part = parts.where((p) => p.text?.isNotEmpty ?? false).lastOrNull;
             if (part != null) {
               final FocusNode? node = kIsDesktop || kIsWeb ? FocusNode() : null;
-              controller.editing.add(MessageEditEntry(
-                message: message,
-                part: part,
-                controller: SpellCheckTextEditingController(text: part.text!, focusNode: node),
-              ));
+              controller.editing.add(
+                MessageEditEntry(
+                  message: message,
+                  part: part,
+                  controller: SpellCheckTextEditingController(text: part.text!, focusNode: node),
+                ),
+              );
               node?.requestFocus();
               return KeyEventResult.handled;
             }
@@ -88,7 +99,7 @@ class KeyboardShortcutHandler {
     if ((kIsDesktop || kIsWeb) &&
         ev.logicalKey == LogicalKeyboardKey.enter &&
         !HardwareKeyboard.instance.isShiftPressed) {
-      sendMessage();
+      _sendOnce();
       controller.focusNode.requestFocus();
       return KeyEventResult.handled;
     }
@@ -97,7 +108,7 @@ class KeyboardShortcutHandler {
     if (kIsDesktop || kIsWeb) return KeyEventResult.ignored;
     if (ev.physicalKey == PhysicalKeyboardKey.enter && SettingsSvc.settings.sendWithReturn.value) {
       if (!isNullOrEmpty(messageTextController.text) || !isNullOrEmpty(controller.subjectTextController.text)) {
-        sendMessage();
+        _sendOnce();
         controller.focusNode.previousFocus();
         return KeyEventResult.handled;
       } else {

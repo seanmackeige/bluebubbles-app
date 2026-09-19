@@ -574,7 +574,16 @@ class NotificationsService {
         hasDdResults: true,
       );
       reply.generateTempGuid();
-      OutgoingMsgHandler.queue(OutgoingMessage(chat: chat, message: reply));
+      OutgoingMsgHandler.queue(
+        OutgoingMessage(
+          chat: chat,
+          message: reply,
+          logicalActionId: logicalActionIdentity('desktop-notification-reply', <Object?>[
+            data.messageGuid,
+            interaction.reply,
+          ]),
+        ),
+      );
       return;
     }
 
@@ -602,7 +611,17 @@ class NotificationsService {
         handleId: 0,
       );
       OutgoingMsgHandler.queue(
-        OutgoingReaction(chat: chat, message: reactionMessage, selectedMessage: selectedMessage, reaction: reaction),
+        OutgoingReaction(
+          chat: chat,
+          message: reactionMessage,
+          selectedMessage: selectedMessage,
+          reaction: reaction,
+          logicalActionId: logicalActionIdentity('desktop-notification-reaction', <Object?>[
+            selectedMessage.guid,
+            reaction,
+            0,
+          ]),
+        ),
       );
       return;
     }

@@ -220,6 +220,9 @@ tasks.configureEach { task ->
 def seanRequiredLogicalRouteSchema = 'LOGICAL_CONVERSATION_OUTBOUND_ROUTE_V3_GENERATION_PROVENANCE'
 def seanForbiddenLogicalRouteSchema = 'LOGICAL_CONVERSATION_OUTBOUND_ROUTE_V1_GOLDEN_2155_2156'
 def seanRequiredLogicalReadCertificateSchema = 'LOGICAL_CONVERSATION_READ_CERTIFICATE_V2_N_MEMBER'
+def seanRequiredLogicalDraftSchema = 'LOGICAL_DRAFT_V1'
+def seanRequiredLogicalAdmissionSchema = 'LOGICAL_SEND_ADMISSION_V1'
+def seanRequiredIncrementalProjectionSchema = 'INCREMENTAL_LOGICAL_PROJECTION_V1'
 def seanForbiddenLogicalPairId = 'LGC_V1_8ef6ba9306f2e2c3c2a28990d01a583e5c270c5ec61a313992c9d40322367c7f'
 
 def verifySeanLogicalRouteAot = { File apk ->
@@ -245,6 +248,9 @@ def verifySeanLogicalRouteAot = { File apk ->
             boolean hasRequiredRoute = asciiPayload.contains(seanRequiredLogicalRouteSchema)
             boolean hasForbiddenRoute = asciiPayload.contains(seanForbiddenLogicalRouteSchema)
             boolean hasRequiredReadCertificate = asciiPayload.contains(seanRequiredLogicalReadCertificateSchema)
+            boolean hasRequiredLogicalDraft = asciiPayload.contains(seanRequiredLogicalDraftSchema)
+            boolean hasRequiredLogicalAdmission = asciiPayload.contains(seanRequiredLogicalAdmissionSchema)
+            boolean hasRequiredIncrementalProjection = asciiPayload.contains(seanRequiredIncrementalProjectionSchema)
             boolean hasForbiddenPairId = asciiPayload.contains(seanForbiddenLogicalPairId)
             if (!hasRequiredRoute && hasForbiddenRoute) {
                 throw new GradleException("SEAN_RELEASE_AOT_STALE_ROUTE_SCHEMA_V1: ${entry.name}")
@@ -261,6 +267,15 @@ def verifySeanLogicalRouteAot = { File apk ->
             if (!hasRequiredReadCertificate) {
                 throw new GradleException("SEAN_RELEASE_AOT_READ_CERTIFICATE_SCHEMA_MISSING: ${entry.name}")
             }
+            if (!hasRequiredLogicalDraft) {
+                throw new GradleException("SEAN_RELEASE_AOT_LOGICAL_DRAFT_SCHEMA_MISSING: ${entry.name}")
+            }
+            if (!hasRequiredLogicalAdmission) {
+                throw new GradleException("SEAN_RELEASE_AOT_LOGICAL_ADMISSION_SCHEMA_MISSING: ${entry.name}")
+            }
+            if (!hasRequiredIncrementalProjection) {
+                throw new GradleException("SEAN_RELEASE_AOT_INCREMENTAL_PROJECTION_SCHEMA_MISSING: ${entry.name}")
+            }
             if (hasForbiddenPairId) {
                 throw new GradleException("SEAN_RELEASE_AOT_FORBIDDEN_PAIR_CERTIFICATE_PRESENT: ${entry.name}")
             }
@@ -272,10 +287,10 @@ def verifySeanLogicalRouteAot = { File apk ->
 
 def verifySeanProdReleaseAot = tasks.register('verifySeanProdReleaseAot') {
     group = 'verification'
-    description = 'Rejects a Sean prod APK whose packaged Dart AOT route or read-certificate schema is stale.'
+    description = 'Rejects a Sean prod APK whose packaged Dart AOT logical messaging schemas are stale.'
     doLast {
         verifySeanLogicalRouteAot(file("${buildDir}/outputs/apk/prod/release/app-prod-release.apk"))
-        logger.lifecycle('SEAN_RELEASE_AOT_ROUTE_AND_READ_CERTIFICATE_SCHEMA_PASS')
+        logger.lifecycle('SEAN_RELEASE_AOT_BUILD_96_LOGICAL_SCHEMAS_PASS')
     }
 }
 

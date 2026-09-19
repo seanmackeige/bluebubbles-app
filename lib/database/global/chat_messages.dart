@@ -6,6 +6,7 @@ class ChatMessages {
   final Map<String, Attachment> _attachments = {};
   final Map<String, Map<String, Message>> _threads = {};
   final Map<String, Map<String, Message>> _edits = {};
+  final Map<String, Map<String, Message>> _pendingReactions = {};
 
   bool get isEmpty => _messages.isEmpty;
   bool get isNotEmpty => _messages.isNotEmpty;
@@ -13,11 +14,12 @@ class ChatMessages {
   List<Message> get reactions => _reactions.values.toList();
   List<Attachment> get attachments => _attachments.values.toList();
   List<Message> threads(String originatorGuid, int originatorPart, {bool returnOriginator = true}) =>
-      _threads[originatorGuid]
-          ?.values
-          .where((e) =>
-              (e.normalizedThreadPart == originatorPart && e.guid != originatorGuid) ||
-              (returnOriginator ? e.guid == originatorGuid : false))
+      _threads[originatorGuid]?.values
+          .where(
+            (e) =>
+                (e.normalizedThreadPart == originatorPart && e.guid != originatorGuid) ||
+                (returnOriginator ? e.guid == originatorGuid : false),
+          )
           .toList() ??
       [];
 
@@ -79,6 +81,28 @@ class ChatMessages {
     return _attachments[guid];
   }
 
+  void retainPendingReaction(Message reaction) {
+    final target = reaction.associatedMessageGuid;
+    final guid = reaction.guid;
+    if (target == null || guid == null) return;
+    _pendingReactions[target] ??= <String, Message>{};
+    _pendingReactions[target]![guid] = reaction;
+  }
+
+  void removePendingReaction(String reactionGuid) {
+    final emptyTargets = <String>[];
+    for (final entry in _pendingReactions.entries) {
+      entry.value.remove(reactionGuid);
+      if (entry.value.isEmpty) emptyTargets.add(entry.key);
+    }
+    for (final target in emptyTargets) {
+      _pendingReactions.remove(target);
+    }
+  }
+
+  List<Message> takePendingReactions(String targetGuid) =>
+      _pendingReactions.remove(targetGuid)?.values.toList(growable: false) ?? const <Message>[];
+
   // It isn't guaranteed that the thread originator will be in the regular
   // messages list, in case it is much older than the currently loaded messages.
   // Prefer to use this method to find originator.
@@ -108,5 +132,6 @@ class ChatMessages {
     _attachments.clear();
     _threads.clear();
     _edits.clear();
+    _pendingReactions.clear();
   }
 }

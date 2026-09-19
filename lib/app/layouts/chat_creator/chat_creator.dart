@@ -62,8 +62,10 @@ class ChatCreator extends StatefulWidget {
 class ChatCreatorState extends State<ChatCreator> with ThemeHelpers {
   final TextEditingController addressController = TextEditingController();
   final messageNode = FocusNode();
-  late final MentionTextEditingController textController =
-      MentionTextEditingController(text: widget.initialText, focusNode: messageNode);
+  late final MentionTextEditingController textController = MentionTextEditingController(
+    text: widget.initialText,
+    focusNode: messageNode,
+  );
   final FocusNode addressNode = FocusNode();
   final ScrollController addressScrollController = ScrollController();
 
@@ -250,20 +252,16 @@ class ChatCreatorState extends State<ChatCreator> with ThemeHelpers {
   void addressOnSubmitted() {
     final text = addressController.text;
     if (text.isEmail || text.isPhoneNumber) {
-      addSelected(SelectedContact(
-        displayName: text,
-        address: text,
-      ));
+      addSelected(SelectedContact(displayName: text, address: text));
     } else if (filteredContacts.length == 1) {
       final possibleAddresses = [
         ...filteredContacts.first.phoneNumbers.map((p) => p.number),
         ...filteredContacts.first.emailAddresses.map((e) => e.address),
       ];
       if (possibleAddresses.length == 1) {
-        addSelected(SelectedContact(
-          displayName: filteredContacts.first.computedDisplayName,
-          address: possibleAddresses.first,
-        ));
+        addSelected(
+          SelectedContact(displayName: filteredContacts.first.computedDisplayName, address: possibleAddresses.first),
+        );
       }
     }
   }
@@ -279,8 +277,10 @@ class ChatCreatorState extends State<ChatCreator> with ThemeHelpers {
         actions: [
           if (!canCreateGroupChats)
             IconButton(
-              icon: Icon(iOS ? CupertinoIcons.exclamationmark_circle : Icons.error_outline,
-                  color: context.theme.colorScheme.error),
+              icon: Icon(
+                iOS ? CupertinoIcons.exclamationmark_circle : Icons.error_outline,
+                color: context.theme.colorScheme.error,
+              ),
               onPressed: () {
                 ChatCreatorDialogs.showGroupChatCreationDialog(Get.context!);
               },
@@ -311,24 +311,27 @@ class ChatCreatorState extends State<ChatCreator> with ThemeHelpers {
                             curve: Curves.easeIn,
                             alignment: Alignment.centerLeft,
                             child: ConstrainedBox(
-                              constraints:
-                                  BoxConstraints(maxHeight: context.theme.textTheme.bodyMedium!.fontSize! + 20),
-                              child: Obx(() => ListView.builder(
-                                    itemCount: selectedContacts.length,
-                                    shrinkWrap: true,
-                                    scrollDirection: Axis.horizontal,
-                                    physics: const NeverScrollableScrollPhysics(),
-                                    findChildIndexCallback: (key) =>
-                                        findChildIndexByKey(selectedContacts, key, (item) => item.address),
-                                    itemBuilder: (context, index) {
-                                      final e = selectedContacts[index];
-                                      return SelectedContactChip(
-                                        key: ValueKey(e.address),
-                                        contact: e,
-                                        onRemove: () => removeSelected(e),
-                                      );
-                                    },
-                                  )),
+                              constraints: BoxConstraints(
+                                maxHeight: context.theme.textTheme.bodyMedium!.fontSize! + 20,
+                              ),
+                              child: Obx(
+                                () => ListView.builder(
+                                  itemCount: selectedContacts.length,
+                                  shrinkWrap: true,
+                                  scrollDirection: Axis.horizontal,
+                                  physics: const NeverScrollableScrollPhysics(),
+                                  findChildIndexCallback: (key) =>
+                                      findChildIndexByKey(selectedContacts, key, (item) => item.address),
+                                  itemBuilder: (context, index) {
+                                    final e = selectedContacts[index];
+                                    return SelectedContactChip(
+                                      key: ValueKey(e.address),
+                                      contact: e,
+                                      onRemove: () => removeSelected(e),
+                                    );
+                                  },
+                                ),
+                              ),
                             ),
                           ),
                           ConstrainedBox(
@@ -367,8 +370,9 @@ class ChatCreatorState extends State<ChatCreator> with ThemeHelpers {
                                   border: InputBorder.none,
                                   fillColor: Colors.transparent,
                                   hintText: "Enter a name...",
-                                  hintStyle: context.theme.textTheme.bodyMedium!
-                                      .copyWith(color: context.theme.colorScheme.outline),
+                                  hintStyle: context.theme.textTheme.bodyMedium!.copyWith(
+                                    color: context.theme.colorScheme.outline,
+                                  ),
                                 ),
                                 onSubmitted: (String value) {
                                   addressOnSubmitted();
@@ -383,280 +387,296 @@ class ChatCreatorState extends State<ChatCreator> with ThemeHelpers {
                 ],
               ),
             ),
-            Obx(() => MessageTypeToggle(
-                  selectedService: selectedService.value,
-                  onToggle: (index) async {
-                    selectedContacts.clear();
-                    addressController.text = "";
-                    if (index == 0) {
-                      selectedService.value = ChatServiceType.iMessage;
-                      filteredChats.value = List<Chat>.from(existingChats.where((e) => e.isIMessage));
-                    } else {
-                      selectedService.value = ChatServiceType.sms;
-                      filteredChats.value = List<Chat>.from(existingChats.where((e) => !e.isIMessage));
-                    }
-                    await ChatsSvc.setAllInactive();
-                    fakeController.value = null;
-                  },
-                )),
-            Expanded(
-              child: Obx(() => Theme(
-                    data: context.theme.copyWith(
-                      // in case some components still use legacy theming
-                      primaryColor: context.theme.colorScheme.bubble(context, selectedService.value.isIMessageService),
-                      colorScheme: context.theme.colorScheme.copyWith(
-                        primary: context.theme.colorScheme.bubble(context, selectedService.value.isIMessageService),
-                        onPrimary: context.theme.colorScheme.onBubble(context, selectedService.value.isIMessageService),
-                        surface: ThemeSvc.isMaterialYouActive(context)
-                            ? null
-                            : (context.theme.extensions[BubbleColors] as BubbleColors?)?.receivedBubbleColor,
-                        onSurface: ThemeSvc.isMaterialYouActive(context)
-                            ? null
-                            : (context.theme.extensions[BubbleColors] as BubbleColors?)?.onReceivedBubbleColor,
-                      ),
-                    ),
-                    child: Obx(() {
-                      // Access the lists to ensure Obx tracks changes
-                      final chats = filteredChats.toList();
-                      final contacts = filteredContacts.toList();
-                      return AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 150),
-                        child: fakeController.value == null
-                            ? ChatListSection(
-                                filteredChats: chats,
-                                filteredContacts: contacts,
-                                selectedContacts: selectedContacts,
-                                onChatTap: addSelectedList,
-                                onContactTap: addSelected,
-                              )
-                            : ChatStateScope(
-                                chatState: ChatsSvc.getOrCreateChatState(fakeController.value!.chat),
-                                child: Container(
-                                  color: Colors.transparent,
-                                  child: MessagesView(
-                                    customService: messagesService,
-                                    controller: fakeController.value!,
-                                  ),
-                                ),
-                              ),
-                      );
-                    }),
-                  )),
-            ),
-            Padding(
-              padding: EdgeInsets.only(
-                left: 5.0,
-                top: 10.0,
-                bottom: 5.0 + MediaQuery.of(context).viewPadding.bottom,
+            Obx(
+              () => MessageTypeToggle(
+                selectedService: selectedService.value,
+                onToggle: (index) async {
+                  selectedContacts.clear();
+                  addressController.text = "";
+                  if (index == 0) {
+                    selectedService.value = ChatServiceType.iMessage;
+                    filteredChats.value = List<Chat>.from(existingChats.where((e) => e.isIMessage));
+                  } else {
+                    selectedService.value = ChatServiceType.sms;
+                    filteredChats.value = List<Chat>.from(existingChats.where((e) => !e.isIMessage));
+                  }
+                  await ChatsSvc.setAllInactive();
+                  fakeController.value = null;
+                },
               ),
+            ),
+            Expanded(
               child: Obx(
                 () => Theme(
-                    data: context.theme.copyWith(
-                      // in case some components still use legacy theming
-                      primaryColor: context.theme.colorScheme.bubble(context, selectedService.value.isIMessageService),
-                      colorScheme: context.theme.colorScheme.copyWith(
-                        primary: context.theme.colorScheme.bubble(context, selectedService.value.isIMessageService),
-                        onPrimary: context.theme.colorScheme.onBubble(context, selectedService.value.isIMessageService),
-                        surface: ThemeSvc.isMaterialYouActive(context)
-                            ? null
-                            : (context.theme.extensions[BubbleColors] as BubbleColors?)?.receivedBubbleColor,
-                        onSurface: ThemeSvc.isMaterialYouActive(context)
-                            ? null
-                            : (context.theme.extensions[BubbleColors] as BubbleColors?)?.onReceivedBubbleColor,
-                      ),
+                  data: context.theme.copyWith(
+                    // in case some components still use legacy theming
+                    primaryColor: context.theme.colorScheme.bubble(context, selectedService.value.isIMessageService),
+                    colorScheme: context.theme.colorScheme.copyWith(
+                      primary: context.theme.colorScheme.bubble(context, selectedService.value.isIMessageService),
+                      onPrimary: context.theme.colorScheme.onBubble(context, selectedService.value.isIMessageService),
+                      surface: ThemeSvc.isMaterialYouActive(context)
+                          ? null
+                          : (context.theme.extensions[BubbleColors] as BubbleColors?)?.receivedBubbleColor,
+                      onSurface: ThemeSvc.isMaterialYouActive(context)
+                          ? null
+                          : (context.theme.extensions[BubbleColors] as BubbleColors?)?.onReceivedBubbleColor,
                     ),
-                    child: Focus(
-                      onKeyEvent: (node, event) {
-                        if (event is KeyDownEvent &&
-                            HardwareKeyboard.instance.isShiftPressed &&
-                            event.logicalKey == LogicalKeyboardKey.tab) {
-                          addressNode.requestFocus();
-                          return KeyEventResult.handled;
-                        }
-                        return KeyEventResult.ignored;
-                      },
-                      child: Obx(() => TextFieldComponent(
-                          focusNode: messageNode,
-                          textController: textController,
-                          controller: fakeController.value,
-                          recorderController: null,
-                          initialAttachments: widget.initialAttachments,
-                          hideMediaPicker: fakeController.value == null,
-                          sendMessage: ({String? effect}) async {
-                            addressOnSubmitted();
-                            Chat? chat =
-                                fakeController.value?.chat ?? await findExistingChat(checkDeleted: true, update: false);
+                  ),
+                  child: Obx(() {
+                    // Access the lists to ensure Obx tracks changes
+                    final chats = filteredChats.toList();
+                    final contacts = filteredContacts.toList();
+                    return AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 150),
+                      child: fakeController.value == null
+                          ? ChatListSection(
+                              filteredChats: chats,
+                              filteredContacts: contacts,
+                              selectedContacts: selectedContacts,
+                              onChatTap: addSelectedList,
+                              onContactTap: addSelected,
+                            )
+                          : ChatStateScope(
+                              chatState: ChatsSvc.getOrCreateChatState(fakeController.value!.chat),
+                              child: Container(
+                                color: Colors.transparent,
+                                child: MessagesView(customService: messagesService, controller: fakeController.value!),
+                              ),
+                            ),
+                    );
+                  }),
+                ),
+              ),
+            ),
+            Padding(
+              padding: EdgeInsets.only(left: 5.0, top: 10.0, bottom: 5.0 + MediaQuery.of(context).viewPadding.bottom),
+              child: Obx(
+                () => Theme(
+                  data: context.theme.copyWith(
+                    // in case some components still use legacy theming
+                    primaryColor: context.theme.colorScheme.bubble(context, selectedService.value.isIMessageService),
+                    colorScheme: context.theme.colorScheme.copyWith(
+                      primary: context.theme.colorScheme.bubble(context, selectedService.value.isIMessageService),
+                      onPrimary: context.theme.colorScheme.onBubble(context, selectedService.value.isIMessageService),
+                      surface: ThemeSvc.isMaterialYouActive(context)
+                          ? null
+                          : (context.theme.extensions[BubbleColors] as BubbleColors?)?.receivedBubbleColor,
+                      onSurface: ThemeSvc.isMaterialYouActive(context)
+                          ? null
+                          : (context.theme.extensions[BubbleColors] as BubbleColors?)?.onReceivedBubbleColor,
+                    ),
+                  ),
+                  child: Focus(
+                    onKeyEvent: (node, event) {
+                      if (event is KeyDownEvent &&
+                          HardwareKeyboard.instance.isShiftPressed &&
+                          event.logicalKey == LogicalKeyboardKey.tab) {
+                        addressNode.requestFocus();
+                        return KeyEventResult.handled;
+                      }
+                      return KeyEventResult.ignored;
+                    },
+                    child: Obx(
+                      () => TextFieldComponent(
+                        focusNode: messageNode,
+                        textController: textController,
+                        controller: fakeController.value,
+                        recorderController: null,
+                        initialAttachments: widget.initialAttachments,
+                        hideMediaPicker: fakeController.value == null,
+                        sendMessage: ({String? effect}) async {
+                          addressOnSubmitted();
+                          Chat? chat =
+                              fakeController.value?.chat ?? await findExistingChat(checkDeleted: true, update: false);
 
-                            // If no local chat and we have a single contact, try fetching from the
-                            // server using the guessed GUID pattern before falling back to creation.
-                            if (chat == null && selectedContacts.length == 1) {
-                              final address = selectedContacts.first.address;
-                              final service = selectedService.value.method;
-                              chat = await ChatsSvc.fetchChat('$service;-;$address');
+                          // If no local chat and we have a single contact, try fetching from the
+                          // server using the guessed GUID pattern before falling back to creation.
+                          if (chat == null && selectedContacts.length == 1) {
+                            final address = selectedContacts.first.address;
+                            final service = selectedService.value.method;
+                            chat = await ChatsSvc.fetchChat('$service;-;$address');
+                          }
+
+                          if (chat != null) {
+                            final existingChat = chat;
+                            // Ensure fakeController is set up for this chat
+                            if (fakeController.value == null) {
+                              await ChatsSvc.setActiveChat(existingChat, clearNotifications: false);
+                              ChatsSvc.activeChat!.controller = cvc(existingChat);
+                              fakeController.value = ChatsSvc.activeChat!.controller;
+                            }
+                            if (messagesService == null || messagesService!.tag != existingChat.guid) {
+                              messagesService =
+                                  maybeFindMessagesSvc(existingChat.guid) ?? MessagesService(existingChat.guid);
                             }
 
-                            if (chat != null) {
-                              final existingChat = chat;
-                              // Ensure fakeController is set up for this chat
-                              if (fakeController.value == null) {
-                                await ChatsSvc.setActiveChat(existingChat, clearNotifications: false);
-                                ChatsSvc.activeChat!.controller = cvc(existingChat);
-                                fakeController.value = ChatsSvc.activeChat!.controller;
-                              }
-                              if (messagesService == null || messagesService!.tag != existingChat.guid) {
-                                messagesService =
-                                    maybeFindMessagesSvc(existingChat.guid) ?? MessagesService(existingChat.guid);
-                              }
+                            final ctrl = fakeController.value!;
+                            ctrl.textController.text = textController.text;
+                            ctrl.pickedAttachments.value = List<PlatformFile>.from(widget.initialAttachments);
+                            ctrl.replyToMessage = null;
 
-                              final ctrl = fakeController.value!;
-                              ctrl.textController.text = textController.text;
-                              ctrl.pickedAttachments.value = List<PlatformFile>.from(widget.initialAttachments);
-                              ctrl.replyToMessage = null;
+                            final pendingAttachments = List<PlatformFile>.from(widget.initialAttachments);
+                            final logicalDraft = await ChatsSvc.saveLogicalSendIntent(
+                              existingChat,
+                              text: ctrl.textController.text,
+                              subject: '',
+                              attachments: pendingAttachments,
+                              reply: null,
+                              effectId: effect,
+                            );
+                            ctrl.pickedAttachments.value = pendingAttachments;
 
-                              // Pre-queue the send so _SendAnimationState fires it as soon as
-                              // it wires up sendFunc — after the ConversationView frame builds.
-                              ctrl.pendingSend = SendData(
-                                attachments: widget.initialAttachments,
-                                text: ctrl.textController.text,
-                                subject: "",
-                                replyGuid: ctrl.replyToMessage?.message.threadOriginatorGuid ??
-                                    ctrl.replyToMessage?.message.guid,
-                                replyPart: ctrl.replyToMessage?.partIndex,
-                                effectId: effect,
-                              );
+                            // Pre-queue the send so _SendAnimationState fires it as soon as
+                            // it wires up sendFunc — after the ConversationView frame builds.
+                            ctrl.pendingSend = SendData(
+                              attachments: pendingAttachments,
+                              text: ctrl.textController.text,
+                              subject: "",
+                              replyGuid:
+                                  ctrl.replyToMessage?.message.threadOriginatorGuid ??
+                                  ctrl.replyToMessage?.message.guid,
+                              replyPart: ctrl.replyToMessage?.partIndex,
+                              effectId: effect,
+                              logicalDraft: logicalDraft,
+                            );
 
-                              NavigationSvc.pushAndRemoveUntil(
-                                Get.context!,
-                                ConversationView(
-                                  chat: existingChat,
-                                  customService: messagesService,
-                                  fromChatCreator: true,
-                                ),
-                                (route) => route.isFirst,
-                                // don't force close the active chat in tablet mode
-                                closeActiveChat: false,
-                                // only used in non-tablet mode context
-                                customRoute: PageRouteBuilder(
-                                  pageBuilder: (_, __, ___) => TitleBarWrapper(
-                                      child: ConversationView(
+                            NavigationSvc.pushAndRemoveUntil(
+                              Get.context!,
+                              ConversationView(
+                                chat: existingChat,
+                                customService: messagesService,
+                                fromChatCreator: true,
+                              ),
+                              (route) => route.isFirst,
+                              // don't force close the active chat in tablet mode
+                              closeActiveChat: false,
+                              // only used in non-tablet mode context
+                              customRoute: PageRouteBuilder(
+                                pageBuilder: (_, __, ___) => TitleBarWrapper(
+                                  child: ConversationView(
                                     chat: existingChat,
                                     customService: messagesService,
                                     fromChatCreator: true,
-                                  )),
-                                  transitionDuration: Duration.zero,
-                                ),
-                              );
-                            } else {
-                              if (!(createCompleter?.isCompleted ?? true)) return;
-
-                              // Attachments cannot be sent when creating a brand-new chat because
-                              // the server's createChat API only accepts a text body. Show an error
-                              // and let the user pick an existing contact instead.
-                              if (widget.initialAttachments.isNotEmpty) {
-                                ChatCreatorDialogs.showCannotForwardAttachmentDialog(context);
-                                return;
-                              }
-
-                              // hard delete a chat that exists on BB but not on the server to make way for the proper server data
-                              if (chat != null) {
-                                ChatsSvc.removeChat(chat);
-                                ChatsSvc.deleteChat(chat);
-                              }
-                              createCompleter = Completer();
-                              final participants = selectedContacts
-                                  .map((e) => e.address.isEmail ? e.address : cleansePhoneNumber(e.address))
-                                  .toList();
-                              final method = selectedService.value.method;
-                              BuildContext? createDialogCtx;
-                              showDialog(
-                                  context: context,
-                                  builder: (BuildContext dialogContext) {
-                                    createDialogCtx = dialogContext;
-                                    return ChatCreatorDialogs.buildCreatingChatDialog(dialogContext, method);
-                                  });
-                              HttpSvc.chat.create(participants, textController.text, method).then((response) async {
-                                // Load the chat data and save it to the DB
-                                Chat newChat = Chat.fromMap(response.data["data"]);
-                                newChat = await newChat.saveAsync();
-
-                                // Fetch the newly saved chat data from the DB
-                                // Throw an error if it wasn't saved correctly.
-                                final saved = await ChatsSvc.fetchChat(newChat.guid);
-                                if (saved == null) {
-                                  return showSnackbar("Error", "Failed to save chat!");
-                                }
-
-                                // Update the chat in the chat list.
-                                // If it wasn't existing, add it.
-                                newChat = saved;
-                                bool updated = ChatsSvc.updateChat(newChat);
-                                if (!updated) {
-                                  await ChatsSvc.addChat(newChat);
-                                }
-
-                                // Fetch the last message for the chat and save it.
-                                final messageRes = await HttpSvc.chat.getMessages(newChat.guid, limit: 1);
-                                if (messageRes.data["data"].length > 0) {
-                                  final rawMessages =
-                                      (messageRes.data["data"] as List<dynamic>).cast<Map<String, dynamic>>();
-                                  await SyncInterface.bulkSyncData(
-                                    chatData: newChat.toMap(),
-                                    messagesData: rawMessages,
-                                  );
-                                }
-
-                                // Force close the message service for the chat so it can be reloaded.
-                                // If this isn't done, new messages will not show.
-                                maybeFindMessagesSvc(newChat.guid)?.close(force: true);
-                                cvc(newChat).close();
-
-                                // Let awaiters know we completed
-                                createCompleter?.complete();
-
-                                if (createDialogCtx != null) Navigator.of(createDialogCtx!).pop();
-                                if (!mounted) return;
-                                NavigationSvc.pushAndRemoveUntil(
-                                  Get.context!,
-                                  ConversationView(chat: newChat),
-                                  (route) => route.isFirst,
-                                  customRoute: PageRouteBuilder(
-                                    pageBuilder: (_, __, ___) => TitleBarWrapper(
-                                      child: ConversationView(
-                                        chat: newChat,
-                                        fromChatCreator: true,
-                                      ),
-                                    ),
-                                    transitionDuration: Duration.zero,
                                   ),
-                                );
-                              }).catchError((error) {
-                                if (createDialogCtx != null) Navigator.of(createDialogCtx!).pop();
-                                if (!mounted) {
-                                  if (!createCompleter!.isCompleted) createCompleter?.completeError(error);
-                                  return;
-                                }
-                                showBBDialog(
-                                  barrierDismissible: false,
-                                  context: context,
-                                  title: 'Failed to create chat!',
-                                  body: error is Response
-                                      ? 'Reason: (${error.data["error"]["type"]}) -> ${error.data["error"]["message"]}'
-                                      : error.toString(),
-                                  actions: [
-                                    BBDialogAction(
-                                      text: 'OK',
-                                      isDefault: true,
-                                      onPressed: () => Navigator.of(context, rootNavigator: true).pop(),
-                                    ),
-                                  ],
-                                );
-                                if (!createCompleter!.isCompleted) {
-                                  createCompleter?.completeError(error);
-                                }
-                              });
+                                ),
+                                transitionDuration: Duration.zero,
+                              ),
+                            );
+                          } else {
+                            if (!(createCompleter?.isCompleted ?? true)) return;
+
+                            // Attachments cannot be sent when creating a brand-new chat because
+                            // the server's createChat API only accepts a text body. Show an error
+                            // and let the user pick an existing contact instead.
+                            if (widget.initialAttachments.isNotEmpty) {
+                              ChatCreatorDialogs.showCannotForwardAttachmentDialog(context);
+                              return;
                             }
-                          })),
-                    )),
+
+                            // hard delete a chat that exists on BB but not on the server to make way for the proper server data
+                            if (chat != null) {
+                              ChatsSvc.removeChat(chat);
+                              ChatsSvc.deleteChat(chat);
+                            }
+                            createCompleter = Completer();
+                            final participants = selectedContacts
+                                .map((e) => e.address.isEmail ? e.address : cleansePhoneNumber(e.address))
+                                .toList();
+                            final method = selectedService.value.method;
+                            BuildContext? createDialogCtx;
+                            showDialog(
+                              context: context,
+                              builder: (BuildContext dialogContext) {
+                                createDialogCtx = dialogContext;
+                                return ChatCreatorDialogs.buildCreatingChatDialog(dialogContext, method);
+                              },
+                            );
+                            HttpSvc.chat
+                                .create(participants, textController.text, method)
+                                .then((response) async {
+                                  // Load the chat data and save it to the DB
+                                  Chat newChat = Chat.fromMap(response.data["data"]);
+                                  newChat = await newChat.saveAsync();
+
+                                  // Fetch the newly saved chat data from the DB
+                                  // Throw an error if it wasn't saved correctly.
+                                  final saved = await ChatsSvc.fetchChat(newChat.guid);
+                                  if (saved == null) {
+                                    return showSnackbar("Error", "Failed to save chat!");
+                                  }
+
+                                  // Update the chat in the chat list.
+                                  // If it wasn't existing, add it.
+                                  newChat = saved;
+                                  bool updated = ChatsSvc.updateChat(newChat);
+                                  if (!updated) {
+                                    await ChatsSvc.addChat(newChat);
+                                  }
+
+                                  // Fetch the last message for the chat and save it.
+                                  final messageRes = await HttpSvc.chat.getMessages(newChat.guid, limit: 1);
+                                  if (messageRes.data["data"].length > 0) {
+                                    final rawMessages = (messageRes.data["data"] as List<dynamic>)
+                                        .cast<Map<String, dynamic>>();
+                                    await SyncInterface.bulkSyncData(
+                                      chatData: newChat.toMap(),
+                                      messagesData: rawMessages,
+                                    );
+                                  }
+
+                                  // Force close the message service for the chat so it can be reloaded.
+                                  // If this isn't done, new messages will not show.
+                                  maybeFindMessagesSvc(newChat.guid)?.close(force: true);
+                                  cvc(newChat).close();
+
+                                  // Let awaiters know we completed
+                                  createCompleter?.complete();
+
+                                  if (createDialogCtx != null) Navigator.of(createDialogCtx!).pop();
+                                  if (!mounted) return;
+                                  NavigationSvc.pushAndRemoveUntil(
+                                    Get.context!,
+                                    ConversationView(chat: newChat),
+                                    (route) => route.isFirst,
+                                    customRoute: PageRouteBuilder(
+                                      pageBuilder: (_, __, ___) => TitleBarWrapper(
+                                        child: ConversationView(chat: newChat, fromChatCreator: true),
+                                      ),
+                                      transitionDuration: Duration.zero,
+                                    ),
+                                  );
+                                })
+                                .catchError((error) {
+                                  if (createDialogCtx != null) Navigator.of(createDialogCtx!).pop();
+                                  if (!mounted) {
+                                    if (!createCompleter!.isCompleted) createCompleter?.completeError(error);
+                                    return;
+                                  }
+                                  showBBDialog(
+                                    barrierDismissible: false,
+                                    context: context,
+                                    title: 'Failed to create chat!',
+                                    body: error is Response
+                                        ? 'Reason: (${error.data["error"]["type"]}) -> ${error.data["error"]["message"]}'
+                                        : error.toString(),
+                                    actions: [
+                                      BBDialogAction(
+                                        text: 'OK',
+                                        isDefault: true,
+                                        onPressed: () => Navigator.of(context, rootNavigator: true).pop(),
+                                      ),
+                                    ],
+                                  );
+                                  if (!createCompleter!.isCompleted) {
+                                    createCompleter?.completeError(error);
+                                  }
+                                });
+                          }
+                        },
+                      ),
+                    ),
+                  ),
+                ),
               ),
             ),
           ],

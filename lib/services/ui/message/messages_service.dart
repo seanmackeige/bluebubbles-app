@@ -41,6 +41,11 @@ String? lastReloadedChat() =>
 class MessagesService extends GetxController {
   static final Map<String, Size> cachedBubbleSizes = {};
   bool _logicalRetryInFlight = false;
+  int? _logicalPaginationBoundaryDateCreated;
+  String? _logicalPaginationBoundaryGuid;
+  int? _logicalFallbackBoundaryDateCreated;
+  String? _logicalFallbackBoundaryGuid;
+  int _logicalHydrationDepth = 0;
   late Chat chat;
   StreamSubscription? _webMessageSub;
   final ChatMessages struct = ChatMessages();
@@ -722,6 +727,11 @@ class MessagesService extends GetxController {
     }
 
     struct.flush();
+    _logicalPaginationBoundaryDateCreated = null;
+    _logicalPaginationBoundaryGuid = null;
+    _logicalFallbackBoundaryDateCreated = null;
+    _logicalFallbackBoundaryGuid = null;
+    _logicalHydrationDepth = 0;
     messagesLoaded = false;
     messageUpdateTrigger.clear();
     for (final state in messageStates.values) {
@@ -784,10 +794,22 @@ class MessagesService extends GetxController {
         // Notify UI of update (no longer need to call controller methods)
         triggerMessageUpdate(message.associatedMessageGuid!);
       } else {
+        struct.retainPendingReaction(message);
         Logger.warn(
           "Parent message not found for reaction ${message.guid} (parent: ${message.associatedMessageGuid})",
           tag: "MessageReactivity",
         );
+      }
+    } else if (message.guid != null) {
+      final pending = struct.takePendingReactions(message.guid!);
+      if (pending.isNotEmpty) {
+        for (final reaction in pending) {
+          if (!message.associatedMessages.any((existing) => existing.guid == reaction.guid)) {
+            message.associatedMessages.add(reaction);
+          }
+          messageStates[message.guid!]?.addAssociatedMessageInternal(reaction);
+        }
+        triggerMessageUpdate(message.guid!);
       }
     }
 
@@ -837,6 +859,8 @@ class MessagesService extends GetxController {
     // buildMessageParts guard would never fire. See the guard below.
     final previousDateEdited = toUpdate.dateEdited;
     final previousDateDeleted = toUpdate.dateDeleted;
+    final previousAssociatedMessageGuid = toUpdate.associatedMessageGuid;
+    final previousReactionGuid = toUpdate.guid;
 
     // Preserve authoritative fields before merging — Message.merge is written for
     // existing(older).merge(newMessage(newer)), but here we call it inverted:
@@ -850,12 +874,18 @@ class MessagesService extends GetxController {
     final incomingAttributedBody = updated.attributedBody;
     final incomingSummaryInfo = updated.messageSummaryInfo;
     final incomingPayloadData = updated.payloadData;
+    final incomingAssociatedMessageGuid = updated.associatedMessageGuid;
+    final incomingAssociatedMessagePart = updated.associatedMessagePart;
+    final incomingAssociatedMessageType = updated.associatedMessageType;
     updated = updated.mergeWith(toUpdate);
     updated.error = incomingError;
     updated.errorMessage = incomingErrorMessage;
     if (incomingAttributedBody.isNotEmpty) updated.attributedBody = incomingAttributedBody;
     if (incomingSummaryInfo.isNotEmpty) updated.messageSummaryInfo = incomingSummaryInfo;
     if (incomingPayloadData != null) updated.payloadData = incomingPayloadData;
+    updated.associatedMessageGuid = incomingAssociatedMessageGuid;
+    updated.associatedMessagePart = incomingAssociatedMessagePart;
+    updated.associatedMessageType = incomingAssociatedMessageType;
     struct.removeMessage(oldGuid ?? updated.guid!);
     struct.removeAttachments(toUpdate.dbAttachments.map((e) => e.guid!));
     struct.addMessages([updated]);
@@ -903,13 +933,63 @@ class MessagesService extends GetxController {
       messageStates[updated.guid!] = state;
     }
 
-    // Trigger granular update for this specific message
-    messageUpdateTrigger[updated.guid!] = DateTime.now().millisecondsSinceEpoch;
+    if (updated.associatedMessageGuid != null || previousAssociatedMessageGuid != null) {
+      _reconcileUpdatedReaction(
+        updated,
+        previousParentGuid: previousAssociatedMessageGuid,
+        previousReactionGuid: previousReactionGuid,
+      );
+      if (previousAssociatedMessageGuid == null && updated.associatedMessageGuid != null) {
+        removeFunc.call(updated);
+      } else if (previousAssociatedMessageGuid != null && updated.associatedMessageGuid == null) {
+        newFunc.call(updated);
+      }
+    } else {
+      // Trigger granular update for this specific message.
+      messageUpdateTrigger[updated.guid!] = DateTime.now().millisecondsSinceEpoch;
+    }
 
     // Incrementally update indicator ownership; dates or GUID may have changed.
     _updateIndicatorsForMessage(updated);
 
-    updateFunc.call(updated, oldGuid: oldGuid);
+    if (updated.associatedMessageGuid == null && previousAssociatedMessageGuid == null) {
+      updateFunc.call(updated, oldGuid: oldGuid);
+    }
+  }
+
+  void _reconcileUpdatedReaction(
+    Message updated, {
+    required String? previousParentGuid,
+    required String? previousReactionGuid,
+  }) {
+    final currentParentGuid = updated.associatedMessageGuid;
+    if (previousReactionGuid != null) {
+      struct.removePendingReaction(previousReactionGuid);
+    }
+    if (previousParentGuid != null && previousParentGuid != currentParentGuid) {
+      final previousParent = struct.getMessage(previousParentGuid);
+      previousParent?.associatedMessages.removeWhere(
+        (reaction) => reaction.guid == previousReactionGuid || reaction.guid == updated.guid,
+      );
+      if (previousParent != null) {
+        messageStates[previousParentGuid]?.updateAssociatedMessagesInternal(
+          List<Message>.from(previousParent.associatedMessages),
+        );
+        triggerMessageUpdate(previousParentGuid);
+      }
+    }
+    if (currentParentGuid == null) return;
+    final parent = struct.getMessage(currentParentGuid);
+    if (parent == null) {
+      struct.retainPendingReaction(updated);
+      return;
+    }
+    parent.associatedMessages.removeWhere(
+      (reaction) => reaction.guid == previousReactionGuid || reaction.guid == updated.guid,
+    );
+    parent.associatedMessages.add(updated);
+    messageStates[currentParentGuid]?.updateAssociatedMessagesInternal(List<Message>.from(parent.associatedMessages));
+    triggerMessageUpdate(currentParentGuid);
   }
 
   void removeMessage(Message toRemove) {
@@ -1117,191 +1197,157 @@ class MessagesService extends GetxController {
     final guardedLogicalRetry = ChatsSvc.isApprovedLogicalSource(chat);
     if (guardedLogicalRetry && _logicalRetryInFlight) return;
     if (guardedLogicalRetry) _logicalRetryInFlight = true;
-    var executionChat = chat;
-    final persistedExecutionChat = message.chat.target;
-    if (guardedLogicalRetry) {
-      final targetGuid = message.threadOriginatorGuid;
-      final targetMessage = targetGuid == null ? null : Message.findOne(guid: targetGuid);
-      final targetChat = targetMessage?.chat.target;
-      final mutationClass = message.dbAttachments.isNotEmpty
-          ? LogicalMutationClass.attachment
-          : targetGuid != null
-          ? LogicalMutationClass.reply
-          : LogicalMutationClass.newMessage;
-      final decision = await ChatsSvc.resolveLogicalMutation(
-        chat,
-        LogicalMutationRequest(
-          mutationClass: mutationClass,
-          targetMessageGuid: targetMessage?.guid,
-          targetSourceChatRowId: targetChat?.originalROWID,
-          targetSourceChatGuid: targetChat?.guid,
-          persistedExecutionSourceChatRowId: mutationClass == LogicalMutationClass.attachment && targetGuid == null
-              ? persistedExecutionChat?.originalROWID
-              : null,
-          persistedExecutionSourceChatGuid: mutationClass == LogicalMutationClass.attachment && targetGuid == null
-              ? persistedExecutionChat?.guid
-              : null,
-          isRetry: true,
-        ),
-        force: true,
-      );
-      if (!decision.isSingleTarget) {
+    try {
+      final guidToDelete = oldGuid ?? message.guid!;
+      final logicalLedger = LogicalAdmissionLedger.fromEntries(PrefsSvc.messaging.loadLogicalAdmissionLedger());
+      final previouslyAdmitted = logicalLedger.containsTransportTempGuid(guidToDelete);
+      if (previouslyAdmitted || guardedLogicalRetry) {
         ChatsSvc.logicalRouteRuntimeStatus.value = LogicalRouteRuntimeStatus(
           stage: LogicalRouteRuntimeStage.routeNotProven,
-          reason: decision.reason,
+          reason: previouslyAdmitted
+              ? 'LOGICAL_RETRY_ALREADY_ADMITTED_OR_OUTCOME_UNKNOWN'
+              : 'LOGICAL_RETRY_LEGACY_OR_UNTRACKED_OUTCOME',
         );
-        _logicalRetryInFlight = false;
         return;
       }
-      final matches = ChatsSvc.logicalSourceChatsFor(
-        chat,
-      ).where((source) => source.originalROWID == decision.physicalTargetRowIds.single).toList();
-      if (matches.length != 1) {
-        ChatsSvc.logicalRouteRuntimeStatus.value = const LogicalRouteRuntimeStatus(
-          stage: LogicalRouteRuntimeStage.routeNotProven,
-          reason: 'QUALIFIED_TARGET_BINDING_NOT_UNIQUE',
-        );
-        _logicalRetryInFlight = false;
-        return;
+      var executionChat = chat;
+
+      // Generate new temp GUID for retry
+      message.generateTempGuid();
+
+      // Clear error and delivery status
+      message.error = 0;
+      message.errorMessage = null;
+      message.dateCreated = DateTime.now();
+      message.dateDelivered = null;
+      message.dateRead = null;
+
+      // Delete old errored message from DB and save with new temp GUID
+      await Message.delete(guidToDelete);
+      message.id = null;
+      message.save(chat: executionChat);
+
+      // Update struct using the proper map API (struct.messages returns a copy, not the backing map)
+      struct.removeMessage(guidToDelete);
+      struct.addMessages([message]);
+
+      // Always update the UI entry in-place first so error decorations are
+      // immediately cleared, regardless of position.  updateFunc swaps the old
+      // guid entry in _messages for the new temp message object at the same
+      // list index.
+      updateFunc(message, oldGuid: guidToDelete);
+
+      // For non-last messages the date is now newer than the surrounding entries,
+      // so remove the freshly-placed entry and re-insert it at the sorted
+      // position.  removeFunc works correctly after updateFunc because the new
+      // guid is now present in _messages.
+      if (messagesRef.isNotEmpty && messagesRef.last.guid != guidToDelete) {
+        removeFunc(message);
+        newFunc(message);
       }
-      executionChat = matches.single;
-    }
-    final guidToDelete = oldGuid ?? message.guid!;
 
-    // Generate new temp GUID for retry
-    message.generateTempGuid();
+      // Re-key the existing MessageState under the new temp GUID instead of
+      // discarding it.  Attachment widgets capture a direct reference to their
+      // MessageState in initState() via MessageStateScope.readStateOnce() and
+      // never re-resolve it; keeping the same object in memory means that
+      // existing Obx subscriptions on AttachmentState react to the in-place
+      // resetForRetryInternal() call below and immediately show upload progress.
+      // If no prior state exists (e.g. user navigated away during error), fall
+      // back to creating a fresh one as before.
+      final existingState = messageStates.remove(guidToDelete);
+      final MessageState messageState;
+      if (existingState != null) {
+        messageStates[message.guid!] = existingState;
+        messageState = existingState;
+      } else {
+        messageState = getOrCreateMessageState(message.guid!);
+      }
+      messageState.updateErrorInternal(0);
+      messageState.updateErrorMessageInternal(null);
+      messageState.updateDateCreatedInternal(message.dateCreated);
+      messageState.updateDateDeliveredInternal(null);
+      messageState.updateDateReadInternal(null);
 
-    // Clear error and delivery status
-    message.error = 0;
-    message.errorMessage = null;
-    message.dateCreated = DateTime.now();
-    message.dateDelivered = null;
-    message.dateRead = null;
+      // Clear notification
+      await NotificationsSvc.clearFailedToSend(chat.id!);
 
-    // Delete old errored message from DB and save with new temp GUID
-    await Message.delete(guidToDelete);
-    message.id = null;
-    message.save(chat: executionChat);
+      // Reload attachment bytes and synchronise the attachment GUID with the
+      // new message GUID so that:
+      //   (a) the server's socket echo carries a tempGuid that exists in the DB
+      //       (preventing a spurious duplicate message in the list), and
+      //   (b) the attachment progress / state map keys stay consistent across
+      //       prepAttachment → sendAttachment → onSuccess/onError.
+      // The attachment.guid == message.guid invariant is established in
+      // send_animation.dart for initial sends; we must restore it on retry.
+      for (Attachment? a in message.dbAttachments) {
+        if (a == null) continue;
+        final oldAttGuid = a.guid!;
 
-    // Update struct using the proper map API (struct.messages returns a copy, not the backing map)
-    struct.removeMessage(guidToDelete);
-    struct.addMessages([message]);
+        // Read bytes while the file is still at the old (pre-rename) path.
+        a.bytes = await File(a.path).readAsBytes();
 
-    // Always update the UI entry in-place first so error decorations are
-    // immediately cleared, regardless of position.  updateFunc swaps the old
-    // guid entry in _messages for the new temp message object at the same
-    // list index.
-    updateFunc(message, oldGuid: guidToDelete);
+        // Move the attachment directory so the file is immediately accessible
+        // at the new guid-based path.  This lets _restoreInFlightAttachmentStates
+        // populate uploadPreviewFile even before prepAttachment runs.
+        if (!kIsWeb) {
+          final oldDir = Directory("${Attachment.baseDirectory}/$oldAttGuid");
+          final newDir = Directory("${Attachment.baseDirectory}/${message.guid}");
+          if (oldDir.existsSync() && !newDir.existsSync()) {
+            oldDir.renameSync(newDir.path);
+          }
+        }
 
-    // For non-last messages the date is now newer than the surrounding entries,
-    // so remove the freshly-placed entry and re-insert it at the sorted
-    // position.  removeFunc works correctly after updateFunc because the new
-    // guid is now present in _messages.
-    if (messagesRef.isNotEmpty && messagesRef.last.guid != guidToDelete) {
-      removeFunc(message);
-      newFunc(message);
-    }
+        // Sync attachment GUID with the new temp message GUID.
+        a.guid = message.guid;
 
-    // Re-key the existing MessageState under the new temp GUID instead of
-    // discarding it.  Attachment widgets capture a direct reference to their
-    // MessageState in initState() via MessageStateScope.readStateOnce() and
-    // never re-resolve it; keeping the same object in memory means that
-    // existing Obx subscriptions on AttachmentState react to the in-place
-    // resetForRetryInternal() call below and immediately show upload progress.
-    // If no prior state exists (e.g. user navigated away during error), fall
-    // back to creating a fresh one as before.
-    final existingState = messageStates.remove(guidToDelete);
-    final MessageState messageState;
-    if (existingState != null) {
-      messageStates[message.guid!] = existingState;
-      messageState = existingState;
-    } else {
-      messageState = getOrCreateMessageState(message.guid!);
-    }
-    messageState.updateErrorInternal(0);
-    messageState.updateErrorMessageInternal(null);
-    messageState.updateDateCreatedInternal(message.dateCreated);
-    messageState.updateDateDeliveredInternal(null);
-    messageState.updateDateReadInternal(null);
+        // Persist the updated GUID to DB immediately (in-place update via
+        // existing ObjectBox ID).  Without this there is a window between
+        // retryFailedMessage returning and prepAttachment's c.addMessage call
+        // where message.dbAttachments is empty, causing _restoreInFlightAttachmentStates
+        // to skip the message on re-entry and the progress overlay to never show.
+        await a.saveAsync(message);
 
-    // Clear notification
-    await NotificationsSvc.clearFailedToSend(chat.id!);
+        // Pre-register in attachmentProgress so _restoreInFlightAttachmentStates
+        // finds the entry the moment the user re-enters, even before prepAttachment
+        // runs its own add.  prepAttachment will add a second entry for the same
+        // guid; both are cleaned up together by the removeWhere in onSuccess/onError.
+        if (!OutgoingMsgHandler.attachmentProgress.any((e) => e.guid == message.guid)) {
+          OutgoingMsgHandler.attachmentProgress.add(AttachmentUploadProgress(message.guid!, 0.0.obs));
+        }
 
-    // Reload attachment bytes and synchronise the attachment GUID with the
-    // new message GUID so that:
-    //   (a) the server's socket echo carries a tempGuid that exists in the DB
-    //       (preventing a spurious duplicate message in the list), and
-    //   (b) the attachment progress / state map keys stay consistent across
-    //       prepAttachment → sendAttachment → onSuccess/onError.
-    // The attachment.guid == message.guid invariant is established in
-    // send_animation.dart for initial sends; we must restore it on retry.
-    for (Attachment? a in message.dbAttachments) {
-      if (a == null) continue;
-      final oldAttGuid = a.guid!;
-
-      // Read bytes while the file is still at the old (pre-rename) path.
-      a.bytes = await File(a.path).readAsBytes();
-
-      // Move the attachment directory so the file is immediately accessible
-      // at the new guid-based path.  This lets _restoreInFlightAttachmentStates
-      // populate uploadPreviewFile even before prepAttachment runs.
-      if (!kIsWeb) {
-        final oldDir = Directory("${Attachment.baseDirectory}/$oldAttGuid");
-        final newDir = Directory("${Attachment.baseDirectory}/${message.guid}");
-        if (oldDir.existsSync() && !newDir.existsSync()) {
-          oldDir.renameSync(newDir.path);
+        // Reset the existing AttachmentState in-place (re-key + uploading transition)
+        // so the widget's Obx sees isSending=true without needing a full rebuild.
+        final attState = messageState.attachmentStates.remove(oldAttGuid);
+        if (attState != null) {
+          attState.resetForRetryInternal(message.guid!);
+          messageState.attachmentStates[message.guid!] = attState;
         }
       }
 
-      // Sync attachment GUID with the new temp message GUID.
-      a.guid = message.guid;
-
-      // Persist the updated GUID to DB immediately (in-place update via
-      // existing ObjectBox ID).  Without this there is a window between
-      // retryFailedMessage returning and prepAttachment's c.addMessage call
-      // where message.dbAttachments is empty, causing _restoreInFlightAttachmentStates
-      // to skip the message on re-entry and the progress overlay to never show.
-      await a.saveAsync(message);
-
-      // Pre-register in attachmentProgress so _restoreInFlightAttachmentStates
-      // finds the entry the moment the user re-enters, even before prepAttachment
-      // runs its own add.  prepAttachment will add a second entry for the same
-      // guid; both are cleaned up together by the removeWhere in onSuccess/onError.
-      if (!OutgoingMsgHandler.attachmentProgress.any((e) => e.guid == message.guid)) {
-        OutgoingMsgHandler.attachmentProgress.add(AttachmentUploadProgress(message.guid!, 0.0.obs));
+      // Queue for sending (message already in UI, just updated)
+      if (message.dbAttachments.isNotEmpty) {
+        await OutgoingMsgHandler.queue(
+          OutgoingAttachment(
+            chat: executionChat,
+            message: message,
+            attachment: message.dbAttachments.first,
+            logicalPersistedExecutionSourceChatRowId: executionChat.originalROWID,
+            logicalPersistedExecutionSourceChatGuid: executionChat.guid,
+            isAudioMessage: message.itemType == 5,
+            isRetry: true,
+          ),
+        );
+      } else {
+        await OutgoingMsgHandler.queue(OutgoingMessage(chat: executionChat, message: message, isRetry: true));
       }
 
-      // Reset the existing AttachmentState in-place (re-key + uploading transition)
-      // so the widget's Obx sees isSending=true without needing a full rebuild.
-      final attState = messageState.attachmentStates.remove(oldAttGuid);
-      if (attState != null) {
-        attState.resetForRetryInternal(message.guid!);
-        messageState.attachmentStates[message.guid!] = attState;
-      }
+      // The retried message always gets dateCreated = now, making it the newest
+      // message in the chat regardless of what was previously the latest.
+      // Always update the chat's latest message, subtitle, and sort position.
+      ChatsSvc.updateChatLatestMessage(tag, message);
+    } finally {
+      if (guardedLogicalRetry) _logicalRetryInFlight = false;
     }
-
-    // Queue for sending (message already in UI, just updated)
-    if (message.dbAttachments.isNotEmpty) {
-      OutgoingMsgHandler.queue(
-        OutgoingAttachment(
-          chat: executionChat,
-          message: message,
-          attachment: message.dbAttachments.first,
-          logicalPersistedExecutionSourceChatRowId: executionChat.originalROWID,
-          logicalPersistedExecutionSourceChatGuid: executionChat.guid,
-          isAudioMessage: message.itemType == 5,
-          isRetry: true,
-        ),
-      );
-    } else {
-      OutgoingMsgHandler.queue(OutgoingMessage(chat: executionChat, message: message, isRetry: true));
-    }
-
-    // The retried message always gets dateCreated = now, making it the newest
-    // message in the chat regardless of what was previously the latest.
-    // Always update the chat's latest message, subtitle, and sort position.
-    ChatsSvc.updateChatLatestMessage(tag, message);
-    if (guardedLogicalRetry) _logicalRetryInFlight = false;
   }
 
   /// Delete a message from DB, struct, and MessageState.
@@ -1523,14 +1569,21 @@ class MessagesService extends GetxController {
 
   Future<bool> loadChunk(int offset, ConversationViewController controller, {int limit = 25}) async {
     List<Message> _messages = [];
-
-    // Adjust offset because reactions _are_ messages. We just separate them out in the struct.
-    offset = offset + struct.reactions.length;
+    var logicalHydrationFailed = false;
+    final sourceChats = ChatsSvc.logicalSourceChatsFor(chat);
+    final logicalProjection = sourceChats.length > 1;
+    // Ordinary chats preserve the upstream count-based offset. Logical
+    // projection uses a canonical keyset boundary so delayed live events can
+    // never shift the next page and make a source row disappear.
+    if (logicalProjection) {
+      offset = 0;
+    } else {
+      offset += struct.reactions.length;
+    }
 
     try {
       Logger.debug("[loadChunk] Starting to load messages (offset: $offset, limit: $limit)", tag: "MessageReactivity");
 
-      final sourceChats = ChatsSvc.logicalSourceChatsFor(chat);
       void syncSupplementalData() {
         Logger.info(
           "[loadChunk] Supplemental data loaded, syncing MessageStates for ${_messages.length} messages",
@@ -1555,19 +1608,51 @@ class MessagesService extends GetxController {
         offset: offset,
         limit: limit,
         sourceChats: sourceChats,
+        beforeDateCreated: logicalProjection
+            ? (_logicalFallbackBoundaryDateCreated ?? _logicalPaginationBoundaryDateCreated)
+            : null,
+        afterGuidAtBoundary: logicalProjection
+            ? (_logicalFallbackBoundaryGuid ?? _logicalPaginationBoundaryGuid)
+            : null,
         onSupplementalDataLoaded: syncSupplementalData,
       );
 
       Logger.debug("[loadChunk] Loaded ${_messages.length} messages from local DB");
-      if (sourceChats.length > 1 && _messages.length < limit) {
-        await ChatsSvc.hydrateLogicalMessageSources(chat, offset: offset, limit: limit);
-        _messages = await Chat.getMessagesAsync(
-          chat,
-          offset: offset,
-          limit: limit,
-          sourceChats: sourceChats,
-          onSupplementalDataLoaded: syncSupplementalData,
-        );
+      if (sourceChats.length > 1) {
+        try {
+          await ChatsSvc.hydrateLogicalMessageSources(chat, offset: _logicalHydrationDepth, limit: limit);
+          _logicalHydrationDepth += limit;
+          _messages = await Chat.getMessagesAsync(
+            chat,
+            offset: 0,
+            limit: limit,
+            sourceChats: sourceChats,
+            beforeDateCreated: _logicalPaginationBoundaryDateCreated,
+            afterGuidAtBoundary: _logicalPaginationBoundaryGuid,
+            onSupplementalDataLoaded: syncSupplementalData,
+          );
+        } catch (error, stack) {
+          // ObjectBox remains source truth. Provider hydration is a repair path;
+          // failure must not blank a valid local projection.
+          Logger.warn(
+            '[loadChunk] Logical provider hydration failed; retaining local page',
+            error: error,
+            trace: stack,
+            tag: 'MessageReactivity',
+          );
+          logicalHydrationFailed = true;
+          if (_messages.isNotEmpty) {
+            _messages.sort((left, right) {
+              final byCreated = (right.dateCreated?.millisecondsSinceEpoch ?? 0).compareTo(
+                left.dateCreated?.millisecondsSinceEpoch ?? 0,
+              );
+              return byCreated != 0 ? byCreated : (left.guid ?? '').compareTo(right.guid ?? '');
+            });
+            final fallbackBoundary = _messages.last;
+            _logicalFallbackBoundaryDateCreated = fallbackBoundary.dateCreated?.millisecondsSinceEpoch;
+            _logicalFallbackBoundaryGuid = fallbackBoundary.guid;
+          }
+        }
       } else if (_messages.isEmpty) {
         // get from server and save
         final fromServer = await ChatsSvc.getMessages(chat.guid, offset: offset, limit: limit);
@@ -1624,6 +1709,20 @@ class MessagesService extends GetxController {
       return Future.error(e, s);
     }
 
+    if (logicalProjection && !logicalHydrationFailed && _messages.isNotEmpty) {
+      _messages.sort((left, right) {
+        final byCreated = (right.dateCreated?.millisecondsSinceEpoch ?? 0).compareTo(
+          left.dateCreated?.millisecondsSinceEpoch ?? 0,
+        );
+        return byCreated != 0 ? byCreated : (left.guid ?? '').compareTo(right.guid ?? '');
+      });
+      final boundary = _messages.last;
+      _logicalPaginationBoundaryDateCreated = boundary.dateCreated?.millisecondsSinceEpoch;
+      _logicalPaginationBoundaryGuid = boundary.guid;
+      _logicalFallbackBoundaryDateCreated = null;
+      _logicalFallbackBoundaryGuid = null;
+    }
+
     struct.addMessages(_messages);
 
     // Create MessageStates for all loaded messages
@@ -1659,7 +1758,10 @@ class MessagesService extends GetxController {
     }
 
     messagesLoaded = true;
-    return _messages.isNotEmpty;
+    // A failed logical hydration remains retryable. The local page may be a
+    // non-contiguous cached prefix, so it must not terminate pagination even
+    // when it is empty.
+    return (logicalProjection && logicalHydrationFailed) || _messages.isNotEmpty;
   }
 
   Future<void> loadSearchChunk(Message around, SearchMethod method) async {

@@ -11,6 +11,7 @@ import 'package:bluebubbles/database/database.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
+import 'package:bluebubbles/services/ui/chat/logical_conversation_view.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:collection/collection.dart';
 import 'package:defer_pointer/defer_pointer.dart';
@@ -30,12 +31,7 @@ class MessagesView extends StatefulWidget {
   final ConversationViewController controller;
   final String? initialScrollToGuid;
 
-  const MessagesView({
-    super.key,
-    this.customService,
-    this.initialScrollToGuid,
-    required this.controller,
-  });
+  const MessagesView({super.key, this.customService, this.initialScrollToGuid, required this.controller});
 
   @override
   MessagesViewState createState() => MessagesViewState();
@@ -68,6 +64,20 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
 
   RxMap<String, Widget> internalSmartReplies = <String, Widget>{}.obs;
   final RxBool latestMessageDeliveredState = false.obs;
+
+  int _canonicalMessageCompare(Message left, Message right) {
+    if (ChatsSvc.isLogicalConversation(chat)) {
+      final leftCreated = left.dateCreated?.millisecondsSinceEpoch ?? 0;
+      final rightCreated = right.dateCreated?.millisecondsSinceEpoch ?? 0;
+      final byCreated = rightCreated.compareTo(leftCreated);
+      if (byCreated != 0) return byCreated;
+      return (left.guid ?? '').compareTo(right.guid ?? '');
+    }
+    final byChronology = Message.sort(left, right);
+    if (byChronology != 0) return byChronology;
+    return (left.guid ?? '').compareTo(right.guid ?? '');
+  }
+
   final RxBool jumpingToOldestUnread = false.obs;
 
   ConversationViewController get controller => widget.controller;
@@ -118,10 +128,13 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
       } else if (e.type == "add-custom-smartreply") {
         if (!mounted) return;
         if (e.data != null && internalSmartReplies['attach-recent'] == null) {
-          internalSmartReplies['attach-recent'] = _buildReply("Attach recent photo", onTap: () async {
-            controller.pickedAttachments.add(e.data);
-            internalSmartReplies.clear();
-          });
+          internalSmartReplies['attach-recent'] = _buildReply(
+            "Attach recent photo",
+            onTap: () async {
+              controller.pickedAttachments.add(e.data);
+              internalSmartReplies.clear();
+            },
+          );
         }
       }
     });
@@ -134,18 +147,12 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
       // Only load if not already initialized from customService
       if (!handlersInitialized) {
         // Get or create the service
-        final service =
-            widget.customService != null ? registerMessagesSvc(widget.customService!) : ensureMessagesSvc(chat.guid);
+        final service = widget.customService != null
+            ? registerMessagesSvc(widget.customService!)
+            : ensureMessagesSvc(chat.guid);
 
         // Initialize with handlers
-        service.init(
-          chat,
-          handleNewMessage,
-          handleUpdatedMessage,
-          handleDeletedMessage,
-          jumpToMessage,
-          _messages,
-        );
+        service.init(chat, handleNewMessage, handleUpdatedMessage, handleDeletedMessage, jumpToMessage, _messages);
 
         // Load messages if needed (check service flag to avoid redundant loads).
         // Wrap in try-catch: if loadChunk throws (e.g. server HTTP error for a
@@ -156,12 +163,16 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
             await service.loadChunk(0, controller);
           }
         } catch (e, s) {
-          Logger.error('MessagesView: loadChunk failed, continuing with empty state',
-              error: e, trace: s, tag: 'MessagesView');
+          Logger.error(
+            'MessagesView: loadChunk failed, continuing with empty state',
+            error: e,
+            trace: s,
+            tag: 'MessagesView',
+          );
         }
 
         _messages = service.struct.messages;
-        _messages.sort(Message.sort);
+        _messages.sort(_canonicalMessageCompare);
 
         // Initialize the mixin's service reference and create controllers.
         // This MUST always run so _messageService is non-null when
@@ -200,13 +211,16 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
         Future.delayed(const Duration(milliseconds: 100), () {
           if (!mounted) return;
           if (messageService.getMessageStateIfExists(chat.lastReadMessageGuid!)?.built ?? false) return;
-          internalSmartReplies['scroll-last-read'] = _buildReply("Jump to oldest unread", onTap: () async {
-            if (jumpingToOldestUnread.value) return;
-            jumpingToOldestUnread.value = true;
-            await jumpToMessage(chat.lastReadMessageGuid!);
-            internalSmartReplies.remove('scroll-last-read');
-            jumpingToOldestUnread.value = false;
-          });
+          internalSmartReplies['scroll-last-read'] = _buildReply(
+            "Jump to oldest unread",
+            onTap: () async {
+              if (jumpingToOldestUnread.value) return;
+              jumpingToOldestUnread.value = true;
+              await jumpToMessage(chat.lastReadMessageGuid!);
+              internalSmartReplies.remove('scroll-last-read');
+              jumpingToOldestUnread.value = false;
+            },
+          );
         });
       }
     }();
@@ -231,10 +245,7 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
     // addNewMessage so the pending send never appears in the list — a bug that
     // only surfaces in release/AOT mode where the dispose races the send.
     // Solution: just detach our local reference and leave the service intact.
-    disposeMessagesService(
-      force: widget.customService == null,
-      onlyDetach: widget.customService != null,
-    );
+    disposeMessagesService(force: widget.customService == null, onlyDetach: widget.customService != null);
 
     // Controllers are now disposed by MessagesService.onClose()
     _setStateDebouncer?.cancel();
@@ -258,13 +269,14 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
 
     // Merge newly loaded messages into the local list
     final oldGuids = Set<String>.from(_messages.map((m) => m.guid).whereType<String>());
-    final newMessages =
-        messageService.struct.messages.where((m) => m.guid != null && !oldGuids.contains(m.guid)).toList();
+    final newMessages = messageService.struct.messages
+        .where((m) => m.guid != null && !oldGuids.contains(m.guid))
+        .toList();
 
     if (newMessages.isNotEmpty) {
       createStatesForMessages(newMessages, controller);
       _messages = List<Message>.from(messageService.struct.messages);
-      _messages.sort(Message.sort);
+      _messages.sort(_canonicalMessageCompare);
       _listKey = GlobalKey<SliverAnimatedListState>();
       if (mounted) setState(() {});
       // Allow the list to render before scrolling
@@ -279,13 +291,16 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
     if (!SettingsSvc.serverDetails.isMinMonterey) return;
     final recipient = chat.handles.firstOrNull;
     if (recipient != null) {
-      HttpSvc.handle.handleFocusState(recipient.address).then((response) {
-        if (!mounted) return;
-        final status = response.data['data']['status'];
-        controller.recipientNotifsSilenced.value = status != "none";
-      }).catchError((error, stack) async {
-        Logger.error('Failed to get focus state!', error: error, trace: stack);
-      });
+      HttpSvc.handle
+          .handleFocusState(recipient.address)
+          .then((response) {
+            if (!mounted) return;
+            final status = response.data['data']['status'];
+            controller.recipientNotifsSilenced.value = status != "none";
+          })
+          .catchError((error, stack) async {
+            Logger.error('Failed to get focus state!', error: error, trace: stack);
+          });
     }
   }
 
@@ -299,12 +314,23 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
     }
     // otherwise fetch until it is loaded
     final message = Message.findOne(guid: guid);
-    final query = (Database.messages.query(Message_.dateDeleted.isNull().and(Message_.dateCreated.notNull()))
-          ..link(Message_.chat, Chat_.id.equals(chat.id!))
-          ..order(Message_.dateCreated, flags: Order.descending))
-        .build();
+    if (message?.id == null) {
+      showSnackbar("Error", "Failed to find message!");
+      return;
+    }
+    final sourceChatIds = ChatsSvc.logicalSourceChatsFor(chat).map((source) => source.id).whereType<int>().toList();
+    final query =
+        (Database.messages.query(Message_.dateDeleted.isNull().and(Message_.dateCreated.notNull()))
+              ..link(Message_.chat, Chat_.id.oneOf(sourceChatIds))
+              ..order(Message_.dateCreated, flags: Order.descending)
+              ..order(Message_.guid))
+            .build();
     final ids = await query.findIdsAsync();
     final pos = ids.indexOf(message!.id!);
+    if (pos < 0) {
+      showSnackbar("Error", "Failed to find message!");
+      return;
+    }
     await _loadMoreMessages(limit: pos + 10);
     index = _messages.indexWhere((element) => element.guid == guid);
     if (index != -1) {
@@ -325,8 +351,8 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
           .where((e) => !isNullOrEmpty(e.fullText) && e.dateCreated != null)
           .skip(max(_messages.length - 5, 0))
           .forEach((message) {
-        smartRepliesManager.addMessageToContext(message);
-      });
+            smartRepliesManager.addMessageToContext(message);
+          });
     }
     Logger.info("Getting smart replies...");
     await smartRepliesManager.generateSuggestions();
@@ -370,7 +396,8 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
     final newMessages = newMessagesFromService.where((m) => !oldMessageGuids.contains(m.guid)).toList();
 
     Logger.debug(
-        "loadNextChunk: Found ${newMessages.length} new messages (old: $oldLength, new: ${newMessagesFromService.length})");
+      "loadNextChunk: Found ${newMessages.length} new messages (old: $oldLength, new: ${newMessagesFromService.length})",
+    );
 
     // Initialize message widget controllers for new messages
     for (final newMsg in newMessages) {
@@ -379,7 +406,7 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
 
     // Update the list without animation (bulk load)
     _messages = newMessagesFromService;
-    _messages.sort(Message.sort);
+    _messages.sort(_canonicalMessageCompare);
     fetching = false;
 
     // Batch loading: recreate the list key to force rebuild without animation
@@ -399,15 +426,15 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
     final existingIndex = _messages.indexWhere((m) => m.guid == message.guid);
     if (existingIndex != -1) {
       Logger.debug(
-          "handleNewMessage: Message ${message.guid} already exists at index $existingIndex, skipping duplicate");
+        "handleNewMessage: Message ${message.guid} already exists at index $existingIndex, skipping duplicate",
+      );
       return;
     }
 
     // Capture before adding so we know whether a rebuild is needed to hide the loader.
     final wasEmpty = _messages.isEmpty;
-    _messages.add(message);
-    _messages.sort(Message.sort);
-    final insertIndex = _messages.indexOf(message);
+    final insertIndex = IncrementalLogicalProjection.insertionIndex(_messages, message, _canonicalMessageCompare);
+    _messages.insert(insertIndex, message);
 
     // Initialize message widget controller
     createStateForMessage(message, controller);
@@ -417,10 +444,7 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
 
     // Use insertItem to animate the list sliding up to make space (all messages)
     final duration = animationOrchestrator.getInsertionDuration();
-    _listKey.currentState?.insertItem(
-      insertIndex,
-      duration: duration,
-    );
+    _listKey.currentState?.insertItem(insertIndex, duration: duration);
 
     // Update version tracker
     _listVersion.value++;
@@ -457,8 +481,9 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
         PlayerController controller = PlayerController();
         await controller
             .preparePlayer(
-                path: SettingsSvc.settings.receiveSoundPath.value!,
-                volume: SettingsSvc.settings.soundVolume.value / 100)
+              path: SettingsSvc.settings.receiveSoundPath.value!,
+              volume: SettingsSvc.settings.soundVolume.value / 100,
+            )
             .then((_) => controller.startPlayer());
       }
     }
@@ -471,8 +496,15 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
     Logger.debug("handleUpdatedMessage: Updating message ${oldGuid ?? message.guid}");
     final index = _messages.indexWhere((e) => e.guid == (oldGuid ?? message.guid));
     if (index != -1) {
-      _messages[index] = message;
-      Logger.debug("handleUpdatedMessage: Updated message at index $index");
+      _messages.removeAt(index);
+      final newIndex = IncrementalLogicalProjection.insertionIndex(_messages, message, _canonicalMessageCompare);
+      _messages.insert(newIndex, message);
+      if (newIndex != index) {
+        _listKey = GlobalKey<SliverAnimatedListState>();
+        _listVersion.value++;
+        if (mounted) setState(() {});
+      }
+      Logger.debug("handleUpdatedMessage: Updated message from index $index to $newIndex");
     } else {
       Logger.warn("handleUpdatedMessage: Message ${oldGuid ?? message.guid} not found in list");
     }
@@ -502,59 +534,66 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
   }
 
   Widget _buildReply(String text, {Function()? onTap}) => Builder(
-        builder: (replyContext) {
-          final theme = Theme.of(replyContext);
-          final hasBackground =
-              ChatsSvc.getChatState(controller.chat.guid)?.customBackgroundPath.value?.isNotEmpty == true;
-          return Container(
-            margin: const EdgeInsets.all(5),
-            decoration: hasBackground
-                ? BoxDecoration(
-                    color: theme.colorScheme.surfaceContainerHighest,
-                    borderRadius: BorderRadius.circular(19),
-                  )
-                : BoxDecoration(
-                    border: Border.all(
-                      width: 2,
-                      style: BorderStyle.solid,
-                      color: theme.colorScheme.surfaceContainerHighest,
+    builder: (replyContext) {
+      final theme = Theme.of(replyContext);
+      final hasBackground = ChatsSvc.getChatState(controller.chat.guid)?.customBackgroundPath.value?.isNotEmpty == true;
+      return Container(
+        margin: const EdgeInsets.all(5),
+        decoration: hasBackground
+            ? BoxDecoration(color: theme.colorScheme.surfaceContainerHighest, borderRadius: BorderRadius.circular(19))
+            : BoxDecoration(
+                border: Border.all(
+                  width: 2,
+                  style: BorderStyle.solid,
+                  color: theme.colorScheme.surfaceContainerHighest,
+                ),
+                borderRadius: BorderRadius.circular(19),
+              ),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(19),
+          onTap:
+              onTap ??
+              () {
+                if (ChatsSvc.isLogicalConversation(controller.chat)) {
+                  controller.textController.text = text;
+                  controller.textController.selection = TextSelection.collapsed(offset: text.length);
+                  controller.focusNode.requestFocus();
+                  return;
+                }
+                OutgoingMsgHandler.queue(
+                  OutgoingMessage(
+                    chat: controller.chat,
+                    message: Message(
+                      text: text,
+                      dateCreated: DateTime.now(),
+                      hasAttachments: false,
+                      isFromMe: true,
+                      handleId: 0,
                     ),
-                    borderRadius: BorderRadius.circular(19),
                   ),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(19),
-              onTap: onTap ??
-                  () {
-                    OutgoingMsgHandler.queue(OutgoingMessage(
-                      chat: controller.chat,
-                      message: Message(
-                        text: text,
-                        dateCreated: DateTime.now(),
-                        hasAttachments: false,
-                        isFromMe: true,
-                        handleId: 0,
-                      ),
-                    ));
-                  },
-              child: Center(
-                child: Padding(
-                  padding: const EdgeInsets.only(bottom: 1.5, left: 13.0, right: 13.0),
-                  child: Obx(() => RichText(
-                        text: TextSpan(
-                          children: MessageHelper.buildEmojiText(
-                            jumpingToOldestUnread.value && text == "Jump to oldest unread"
-                                ? "Jumping to oldest unread..."
-                                : text,
-                            theme.extension<BubbleText>()!.bubbleText,
-                          ),
-                        ),
-                      )),
+                );
+              },
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 1.5, left: 13.0, right: 13.0),
+              child: Obx(
+                () => RichText(
+                  text: TextSpan(
+                    children: MessageHelper.buildEmojiText(
+                      jumpingToOldestUnread.value && text == "Jump to oldest unread"
+                          ? "Jumping to oldest unread..."
+                          : text,
+                      theme.extension<BubbleText>()!.bubbleText,
+                    ),
+                  ),
                 ),
               ),
             ),
-          );
-        },
+          ),
+        ),
       );
+    },
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -564,162 +603,154 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
       onDragExited: (DropEventDetails details) => dropZoneManager.onDropLeave(details),
       onDragDone: (DropDoneDetails details) async => await dropZoneManager.onPerformDrop(details, controller),
       child: GestureDetector(
-          behavior: HitTestBehavior.deferToChild,
-          onHorizontalDragUpdate: (details) {
-            if (SettingsSvc.settings.skin.value != Skins.Samsung && !kIsWeb && !kIsDesktop) {
-              controller.timestampOffset.value += details.delta.dx * 0.3;
-            }
-          },
-          onHorizontalDragEnd: (details) {
-            if (SettingsSvc.settings.skin.value != Skins.Samsung) {
-              controller.timestampOffset.value = 0;
-            }
-          },
-          onHorizontalDragCancel: () {
-            if (SettingsSvc.settings.skin.value != Skins.Samsung) {
-              controller.timestampOffset.value = 0;
-            }
-          },
-          child: Stack(
-            children: [
-              Obx(
-                () => AnimatedOpacity(
-                  opacity: _messages.isEmpty && widget.customService == null
-                      ? 0
-                      : (dropZoneManager.dragging.value ? 0.3 : 1),
-                  duration: const Duration(milliseconds: 150),
-                  curve: Curves.easeIn,
-                  child: DeferredPointerHandler(
-                    child: ScrollbarWrapper(
-                      reverse: true,
+        behavior: HitTestBehavior.deferToChild,
+        onHorizontalDragUpdate: (details) {
+          if (SettingsSvc.settings.skin.value != Skins.Samsung && !kIsWeb && !kIsDesktop) {
+            controller.timestampOffset.value += details.delta.dx * 0.3;
+          }
+        },
+        onHorizontalDragEnd: (details) {
+          if (SettingsSvc.settings.skin.value != Skins.Samsung) {
+            controller.timestampOffset.value = 0;
+          }
+        },
+        onHorizontalDragCancel: () {
+          if (SettingsSvc.settings.skin.value != Skins.Samsung) {
+            controller.timestampOffset.value = 0;
+          }
+        },
+        child: Stack(
+          children: [
+            Obx(
+              () => AnimatedOpacity(
+                opacity: _messages.isEmpty && widget.customService == null
+                    ? 0
+                    : (dropZoneManager.dragging.value ? 0.3 : 1),
+                duration: const Duration(milliseconds: 150),
+                curve: Curves.easeIn,
+                child: DeferredPointerHandler(
+                  child: ScrollbarWrapper(
+                    reverse: true,
+                    controller: scrollController,
+                    showScrollbar: true,
+                    child: CustomScrollView(
                       controller: scrollController,
-                      showScrollbar: true,
-                      child: CustomScrollView(
-                        controller: scrollController,
-                        reverse: true,
-                        physics: ThemeSwitcher.getScrollPhysics(),
-                        slivers: <Widget>[
+                      reverse: true,
+                      physics: ThemeSwitcher.getScrollPhysics(),
+                      slivers: <Widget>[
+                        SliverToBoxAdapter(
+                          child: SmartRepliesRow(
+                            controller: controller,
+                            smartReplies: smartRepliesManager.smartReplies,
+                            internalSmartReplies: internalSmartReplies,
+                          ),
+                        ),
+                        if (!chat.isGroup && chat.isIMessage)
                           SliverToBoxAdapter(
-                            child: SmartRepliesRow(
+                            child: NotificationsSilencedBanner(
                               controller: controller,
-                              smartReplies: smartRepliesManager.smartReplies,
-                              internalSmartReplies: internalSmartReplies,
+                              latestMessage: _messages.firstOrNull,
                             ),
                           ),
-                          if (!chat.isGroup && chat.isIMessage)
-                            SliverToBoxAdapter(
-                              child: NotificationsSilencedBanner(
-                                controller: controller,
-                                latestMessage: _messages.firstOrNull,
-                              ),
-                            ),
-                          SliverToBoxAdapter(
-                            child: TypingIndicatorRow(
-                              controller: controller,
-                            ),
-                          ),
-                          if (_messages.isEmpty)
-                            const SliverToBoxAdapter(
-                              child: Loader(text: "Loading surrounding message context..."),
-                            ),
-                          Builder(
-                            builder: (context) {
-                              return SliverAnimatedList(
-                                key: _listKey,
-                                initialItemCount: _messages.length + 1,
-                                itemBuilder: (BuildContext context, int index, Animation<double> animation) {
-                                  try {
-                                    // paginate
-                                    if (index >= _messages.length) {
-                                      if (!noMoreMessages && handlersInitialized && index == _messages.length) {
-                                        if (!fetching) {
-                                          _loadMoreMessages();
-                                        }
-                                        return const Loader();
+                        SliverToBoxAdapter(child: TypingIndicatorRow(controller: controller)),
+                        if (_messages.isEmpty)
+                          const SliverToBoxAdapter(child: Loader(text: "Loading surrounding message context...")),
+                        Builder(
+                          builder: (context) {
+                            return SliverAnimatedList(
+                              key: _listKey,
+                              initialItemCount: _messages.length + 1,
+                              itemBuilder: (BuildContext context, int index, Animation<double> animation) {
+                                try {
+                                  // paginate
+                                  if (index >= _messages.length) {
+                                    if (!noMoreMessages && handlersInitialized && index == _messages.length) {
+                                      if (!fetching) {
+                                        _loadMoreMessages();
                                       }
-
-                                      return const SizedBox.shrink();
+                                      return const Loader();
                                     }
 
-                                    Message? olderMessage;
-                                    Message? newerMessage;
-                                    if (index + 1 < _messages.length) {
-                                      olderMessage = _messages[index + 1];
-                                    }
-                                    if (index - 1 >= 0) {
-                                      newerMessage = _messages[index - 1];
-                                    }
+                                    return const SizedBox.shrink();
+                                  }
 
-                                    final message = _messages[index];
-                                    final messageId = message.guid ?? 'unknown-$index';
-                                    final messageWidget = RepaintBoundary(
-                                      key: _messageKeys.putIfAbsent(messageId, () => GlobalKey()),
-                                      child: Padding(
-                                        padding: const EdgeInsets.only(left: 5.0, right: 5.0),
-                                        child: AutoScrollTag(
-                                          key: ValueKey("$messageId-scrolling"),
-                                          index: index,
-                                          controller: scrollController,
-                                          highlightColor: context.theme.colorScheme.surface.withValues(alpha: 0.7),
-                                          child: MessageHolder(
-                                            cvController: controller,
-                                            message: message,
-                                            oldMessage: olderMessage,
-                                            newMessage: newerMessage,
-                                          ),
+                                  Message? olderMessage;
+                                  Message? newerMessage;
+                                  if (index + 1 < _messages.length) {
+                                    olderMessage = _messages[index + 1];
+                                  }
+                                  if (index - 1 >= 0) {
+                                    newerMessage = _messages[index - 1];
+                                  }
+
+                                  final message = _messages[index];
+                                  final messageId = message.guid ?? 'unknown-$index';
+                                  final messageWidget = RepaintBoundary(
+                                    key: _messageKeys.putIfAbsent(messageId, () => GlobalKey()),
+                                    child: Padding(
+                                      padding: const EdgeInsets.only(left: 5.0, right: 5.0),
+                                      child: AutoScrollTag(
+                                        key: ValueKey("$messageId-scrolling"),
+                                        index: index,
+                                        controller: scrollController,
+                                        highlightColor: context.theme.colorScheme.surface.withValues(alpha: 0.7),
+                                        child: MessageHolder(
+                                          cvController: controller,
+                                          message: message,
+                                          oldMessage: olderMessage,
+                                          newMessage: newerMessage,
                                         ),
                                       ),
-                                    );
+                                    ),
+                                  );
 
-                                    // Animate sent messages with size + slide + fade (only if outgoing from this device)
-                                    final isFromMe = message.isFromMe ?? false;
-                                    if (isFromMe &&
-                                        message.isSending &&
-                                        animationOrchestrator.isMessageAnimating(message)) {
-                                      return animationOrchestrator.buildSentMessageAnimation(
-                                        child: messageWidget,
-                                        animation: animation,
-                                      );
-                                    }
-
-                                    // Animate other messages with size + slide only (received or from other devices)
-                                    if (animationOrchestrator.isMessageAnimating(message)) {
-                                      return animationOrchestrator.buildReceivedMessageAnimation(
-                                        child: messageWidget,
-                                        animation: animation,
-                                      );
-                                    }
-
-                                    return messageWidget;
-                                  } catch (e, stack) {
-                                    Logger.error("Error in SliverAnimatedList itemBuilder at index $index",
-                                        error: e, trace: stack);
-                                    return SizedBox(
-                                      key: ValueKey('error-$index'),
-                                      height: 50,
-                                      child: Center(
-                                        child: Text('Error loading message at index $index'),
-                                      ),
+                                  // Animate sent messages with size + slide + fade (only if outgoing from this device)
+                                  final isFromMe = message.isFromMe ?? false;
+                                  if (isFromMe &&
+                                      message.isSending &&
+                                      animationOrchestrator.isMessageAnimating(message)) {
+                                    return animationOrchestrator.buildSentMessageAnimation(
+                                      child: messageWidget,
+                                      animation: animation,
                                     );
                                   }
-                                },
-                              );
-                            },
-                          ),
-                          const SliverPadding(
-                            padding: EdgeInsets.all(70),
-                          ),
-                        ],
-                      ),
+
+                                  // Animate other messages with size + slide only (received or from other devices)
+                                  if (animationOrchestrator.isMessageAnimating(message)) {
+                                    return animationOrchestrator.buildReceivedMessageAnimation(
+                                      child: messageWidget,
+                                      animation: animation,
+                                    );
+                                  }
+
+                                  return messageWidget;
+                                } catch (e, stack) {
+                                  Logger.error(
+                                    "Error in SliverAnimatedList itemBuilder at index $index",
+                                    error: e,
+                                    trace: stack,
+                                  );
+                                  return SizedBox(
+                                    key: ValueKey('error-$index'),
+                                    height: 50,
+                                    child: Center(child: Text('Error loading message at index $index')),
+                                  );
+                                }
+                              },
+                            );
+                          },
+                        ),
+                        const SliverPadding(padding: EdgeInsets.all(70)),
+                      ],
                     ),
                   ),
                 ),
               ),
-              DragDropOverlay(
-                dragging: dropZoneManager.dragging,
-              ),
-            ],
-          )),
+            ),
+            DragDropOverlay(dragging: dropZoneManager.dragging),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -744,9 +775,7 @@ class Loader extends StatelessWidget {
           padding: const EdgeInsets.all(16.0),
           child: SettingsSvc.settings.skin.value == Skins.iOS
               ? Theme(
-                  data: ThemeData(
-                    cupertinoOverrideTheme: const CupertinoThemeData(brightness: Brightness.dark),
-                  ),
+                  data: ThemeData(cupertinoOverrideTheme: const CupertinoThemeData(brightness: Brightness.dark)),
                   child: const CupertinoActivityIndicator(),
                 )
               : const SizedBox(height: 20, width: 20, child: Center(child: CircularProgressIndicator(strokeWidth: 2))),

@@ -42,21 +42,27 @@ class MessageActions {
       if (inputNewMessage.text != null) {
         existing.text = inputNewMessage.text;
       }
+      existing.associatedMessageGuid = inputNewMessage.associatedMessageGuid;
+      existing.associatedMessagePart = inputNewMessage.associatedMessagePart;
+      existing.associatedMessageType = inputNewMessage.associatedMessageType;
 
       existing.dateDelivered = inputNewMessage.dateDelivered ?? existing.dateDelivered;
       existing.isDelivered = inputNewMessage.isDelivered;
       existing.dateRead = inputNewMessage.dateRead ?? existing.dateRead;
       existing.dateEdited = inputNewMessage.dateEdited ?? existing.dateEdited;
-      existing.attributedBody =
-          inputNewMessage.attributedBody.isNotEmpty ? inputNewMessage.attributedBody : existing.attributedBody;
+      existing.attributedBody = inputNewMessage.attributedBody.isNotEmpty
+          ? inputNewMessage.attributedBody
+          : existing.attributedBody;
       existing.messageSummaryInfo = inputNewMessage.messageSummaryInfo.isNotEmpty
           ? inputNewMessage.messageSummaryInfo
           : existing.messageSummaryInfo;
       existing.payloadData = inputNewMessage.payloadData ?? existing.payloadData;
-      existing.wasDeliveredQuietly =
-          inputNewMessage.wasDeliveredQuietly ? inputNewMessage.wasDeliveredQuietly : existing.wasDeliveredQuietly;
-      existing.didNotifyRecipient =
-          inputNewMessage.didNotifyRecipient ? inputNewMessage.didNotifyRecipient : existing.didNotifyRecipient;
+      existing.wasDeliveredQuietly = inputNewMessage.wasDeliveredQuietly
+          ? inputNewMessage.wasDeliveredQuietly
+          : existing.wasDeliveredQuietly;
+      existing.didNotifyRecipient = inputNewMessage.didNotifyRecipient
+          ? inputNewMessage.didNotifyRecipient
+          : existing.didNotifyRecipient;
       existing.error = inputNewMessage.error;
       existing.errorMessage = inputNewMessage.errorMessage;
 
@@ -64,7 +70,8 @@ class MessageActions {
         messageBox.put(existing, mode: PutMode.update);
       } catch (ex) {
         Logger.warn(
-            'Failed to replace message! This is likely due to a unique constraint being violated: ${ex.toString()}');
+          'Failed to replace message! This is likely due to a unique constraint being violated: ${ex.toString()}',
+        );
       }
 
       // Return just the ID for efficient transfer across isolates
@@ -133,9 +140,7 @@ class MessageActions {
 
       associatedMessages.sort((a, b) => a.originalROWID!.compareTo(b.originalROWID!));
 
-      return {
-        'associatedMessages': associatedMessages.map((e) => e.toMap()).toList(),
-      };
+      return {'associatedMessages': associatedMessages.map((e) => e.toMap()).toList()};
     });
   }
 

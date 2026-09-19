@@ -13,7 +13,14 @@ enum LogicalRouteState { qualified, routeNotProven }
 enum LogicalRouteRuntimeStage { unchecked, checking, qualified, routeNotProven }
 
 class LogicalRouteRuntimeStatus {
-  const LogicalRouteRuntimeStatus({required this.stage, required this.reason, this.targetRowId});
+  const LogicalRouteRuntimeStatus({
+    required this.stage,
+    required this.reason,
+    this.targetRowId,
+    this.certificateRevision,
+    this.authorityRevision,
+    this.authorityEpoch,
+  });
 
   const LogicalRouteRuntimeStatus.unchecked()
     : this(stage: LogicalRouteRuntimeStage.unchecked, reason: 'ROUTE_NOT_CHECKED');
@@ -24,6 +31,9 @@ class LogicalRouteRuntimeStatus {
   final LogicalRouteRuntimeStage stage;
   final String reason;
   final int? targetRowId;
+  final String? certificateRevision;
+  final String? authorityRevision;
+  final int? authorityEpoch;
 
   bool get isQualified => stage == LogicalRouteRuntimeStage.qualified && targetRowId != null;
 }
@@ -188,6 +198,81 @@ class LogicalRouteEvidence {
   final bool candidateScopeSnapshotComplete;
   final Map<int, String> unadmittedPotentialSourceChatGuids;
   final List<LogicalRouteCandidateEvidence> candidates;
+
+  /// Digest of every execution-sensitive fact in this complete snapshot.
+  /// Lists are normalized so transport ordering cannot invent a revision.
+  String get authorityRevision {
+    final certified = certifiedSourceChatGuids.entries.toList()..sort((left, right) => left.key.compareTo(right.key));
+    final unadmitted = unadmittedPotentialSourceChatGuids.entries.toList()
+      ..sort((left, right) => left.key.compareTo(right.key));
+    final orderedCandidates = candidates.toList()
+      ..sort((left, right) => left.sourceChatRowId.compareTo(right.sourceChatRowId));
+    final payload = <String, dynamic>{
+      'logicalId': logicalId,
+      'certificateId': certificateId,
+      'certifiedSources': [for (final entry in certified) '${entry.key}:${entry.value}'],
+      'backendComputerId': backendComputerId,
+      'detectedIMessage': detectedIMessage,
+      'privateApiConnected': privateApiConnected,
+      'helperConnected': helperConnected,
+      'accountSnapshotBeforeSha256': accountSnapshotBeforeSha256,
+      'accountSnapshotAfterSha256': accountSnapshotAfterSha256,
+      'activeSelfAlias': _addressJson(activeSelfAlias),
+      'vettedSelfAliases': vettedSelfAliases.map(_addressJson).toList()..sort(_compareJsonText),
+      'executionGeneration': _generationJson(executionGenerationCertificate),
+      'candidateScopeSnapshotComplete': candidateScopeSnapshotComplete,
+      'unadmittedCandidates': [for (final entry in unadmitted) '${entry.key}:${entry.value}'],
+      'candidates': [for (final candidate in orderedCandidates) _candidateJson(candidate)],
+    };
+    return sha256.convert(utf8.encode(jsonEncode(payload))).toString();
+  }
+
+  static Map<String, dynamic> _addressJson(LogicalAddressEvidence address) => <String, dynamic>{
+    'address': address.address,
+    'country': address.country,
+  };
+
+  static Map<String, dynamic>? _generationJson(LogicalExecutionGenerationCertificate? certificate) {
+    if (certificate == null) return null;
+    return <String, dynamic>{
+      'schema': certificate.schema,
+      'logicalId': certificate.logicalId,
+      'evidenceReceiptCommit': certificate.evidenceReceiptCommit,
+      'currentService': certificate.currentService,
+      'predecessorService': certificate.predecessorService,
+      'expectedCurrentMemberCount': certificate.expectedCurrentMemberCount,
+      'expectedPredecessorMemberCount': certificate.expectedPredecessorMemberCount,
+      'authorizedOutboundGuidSha256': certificate.authorizedOutboundGuidSha256,
+      'maximumTransitionEdgeDelayMilliseconds': certificate.maximumTransitionEdgeDelayMilliseconds,
+      'maximumNaturalResponseDelayMilliseconds': certificate.maximumNaturalResponseDelayMilliseconds,
+    };
+  }
+
+  static Map<String, dynamic> _candidateJson(LogicalRouteCandidateEvidence candidate) {
+    final participants = candidate.participants.map(_addressJson).toList()..sort(_compareJsonText);
+    return <String, dynamic>{
+      'sourceChatRowId': candidate.sourceChatRowId,
+      'sourceChatGuid': candidate.sourceChatGuid,
+      'sourceService': candidate.sourceService,
+      'chatIdentifier': candidate.chatIdentifier,
+      'style': candidate.style,
+      'lastAddressedHandle': _addressJson(candidate.lastAddressedHandle),
+      'participants': participants,
+      'chatSnapshotComplete': candidate.chatSnapshotComplete,
+      'messageSnapshotComplete': candidate.messageSnapshotComplete,
+      'lastKnownHybridState': candidate.lastKnownHybridState,
+      'shouldForceToSms': candidate.shouldForceToSms,
+      'groupPhotoGuid': candidate.groupPhotoGuid,
+      // Message chronology is qualification evidence, not an authority
+      // identity by itself. The derived route decision is digested by the
+      // caller, so routine message arrivals do not invalidate a draft while a
+      // changed winner or failed invariant still advances the revision.
+      'hasSuccessfulOutbound': candidate.successfulOutbounds.isNotEmpty,
+    };
+  }
+
+  static int _compareJsonText(Map<String, dynamic> left, Map<String, dynamic> right) =>
+      jsonEncode(left).compareTo(jsonEncode(right));
 }
 
 class LogicalMutationRequest {
@@ -196,6 +281,10 @@ class LogicalMutationRequest {
     this.targetMessageGuid,
     this.targetSourceChatRowId,
     this.targetSourceChatGuid,
+    this.replyIntentMessageGuid,
+    this.replyIntentSourceChatRowId,
+    this.replyIntentSourceChatGuid,
+    this.requireFreshTargetPresence = false,
     this.persistedExecutionSourceChatRowId,
     this.persistedExecutionSourceChatGuid,
     this.isRetry = false,
@@ -206,6 +295,10 @@ class LogicalMutationRequest {
   final String? targetMessageGuid;
   final int? targetSourceChatRowId;
   final String? targetSourceChatGuid;
+  final String? replyIntentMessageGuid;
+  final int? replyIntentSourceChatRowId;
+  final String? replyIntentSourceChatGuid;
+  final bool requireFreshTargetPresence;
   final int? persistedExecutionSourceChatRowId;
   final String? persistedExecutionSourceChatGuid;
   final bool isRetry;
@@ -281,16 +374,23 @@ class LogicalConversationOutboundRoutePolicy {
         return _qualifyWritableSource(evidence);
       case LogicalMutationClass.reply:
       case LogicalMutationClass.reaction:
-        return _targetMessageRoute(byRow, request);
+        return _relationshipTargetRoute(evidence, byRow, request);
       case LogicalMutationClass.attachment:
         if (request.targetMessageGuid != null) {
-          return _targetMessageRoute(byRow, request);
+          return _relationshipTargetRoute(evidence, byRow, request);
         }
         if (request.persistedExecutionSourceChatRowId != null || request.persistedExecutionSourceChatGuid != null) {
           if (!request.isRetry) {
             return const LogicalRouteDecision.notProven('UNTRUSTED_ATTACHMENT_EXECUTION_HINT');
           }
-          return _persistedExecutionRoute(byRow, request);
+          final persisted = _persistedExecutionRoute(byRow, request);
+          if (!persisted.isSingleTarget) return persisted;
+          final current = _qualifyWritableSource(evidence);
+          if (!current.isSingleTarget) return current;
+          if (current.physicalTargetRowIds.single != request.persistedExecutionSourceChatRowId) {
+            return const LogicalRouteDecision.notProven('PERSISTED_ATTACHMENT_ROUTE_NO_LONGER_AUTHORITATIVE');
+          }
+          return persisted;
         }
         final qualification = _qualifyWritableSource(evidence);
         if (!qualification.isSingleTarget) return qualification;
@@ -651,7 +751,52 @@ class LogicalConversationOutboundRoutePolicy {
     if (candidate == null || candidate.sourceChatGuid != targetGuid) {
       return const LogicalRouteDecision.notProven('TARGET_MESSAGE_SOURCE_BINDING_MISMATCH');
     }
+    if (request.requireFreshTargetPresence) {
+      final exactTargets = candidate.messages.where((message) => message.messageGuid == request.targetMessageGuid);
+      if (exactTargets.length != 1) {
+        return const LogicalRouteDecision.notProven('TARGET_MESSAGE_NOT_EXACTLY_PRESENT');
+      }
+    }
+    if (request.replyIntentMessageGuid != null) {
+      final selectedSource = byRow[request.replyIntentSourceChatRowId];
+      if (selectedSource == null || selectedSource.sourceChatGuid != request.replyIntentSourceChatGuid) {
+        return const LogicalRouteDecision.notProven('REPLY_INTENT_SOURCE_BINDING_MISMATCH');
+      }
+      final selected = selectedSource.messages.where(
+        (message) => message.messageGuid == request.replyIntentMessageGuid,
+      );
+      if (selected.length != 1) {
+        return const LogicalRouteDecision.notProven('REPLY_INTENT_MESSAGE_NOT_EXACTLY_PRESENT');
+      }
+    }
     return LogicalRouteDecision.qualified('EXACT_TARGET_MESSAGE_SOURCE_ROUTE', [targetRow]);
+  }
+
+  static LogicalRouteDecision _relationshipTargetRoute(
+    LogicalRouteEvidence evidence,
+    Map<int, LogicalRouteCandidateEvidence> byRow,
+    LogicalMutationRequest request,
+  ) {
+    final exactTarget = _targetMessageRoute(byRow, request);
+    if (!exactTarget.isSingleTarget || evidence.executionGenerationCertificate == null) {
+      return exactTarget;
+    }
+
+    final vettedAliases = evidence.vettedSelfAliases.map(normalizeRoutableAddress).whereType<String>().toSet();
+    final selfMembershipByRow = <int, Set<String>>{};
+    for (final candidate in evidence.candidates) {
+      final participants = candidate.participants.map(normalizeRoutableAddress).whereType<String>().toSet();
+      selfMembershipByRow[candidate.sourceChatRowId] = participants.intersection(vettedAliases);
+    }
+    final generation = _qualifyExecutionGeneration(evidence, selfMembershipByRow);
+    if (!generation.isQualified) {
+      return LogicalRouteDecision.notProven(generation.reason);
+    }
+    final currentRows = generation.currentCandidates.map((candidate) => candidate.sourceChatRowId).toSet();
+    if (!currentRows.contains(exactTarget.physicalTargetRowIds.single)) {
+      return const LogicalRouteDecision.notProven('RELATIONSHIP_TARGET_NOT_IN_CURRENT_EXECUTION_GENERATION');
+    }
+    return exactTarget;
   }
 
   static LogicalRouteDecision _persistedExecutionRoute(
@@ -688,12 +833,35 @@ class LogicalExecutionAdmissionGate {
 
   bool admit(String actionId, {bool explicitRetry = false}) {
     if (actionId.isEmpty) return false;
-    final admissionId = '${explicitRetry ? 'retry' : 'initial'}:$actionId';
+    final admissionId = actionId;
     if (!_admitted.add(admissionId)) return false;
     _order.addLast(admissionId);
     while (_order.length > capacity) {
       _admitted.remove(_order.removeFirst());
     }
+    return true;
+  }
+
+  /// Atomically admits every member of one UI action or none of them.
+  bool admitBatch(Iterable<String> actionIds, {bool explicitRetry = false}) {
+    final ids = actionIds.toList(growable: false);
+    if (ids.isEmpty || ids.any((id) => id.isEmpty) || ids.toSet().length != ids.length) return false;
+    if (ids.any(_admitted.contains)) return false;
+    for (final id in ids) {
+      _admitted.add(id);
+      _order.addLast(id);
+    }
+    while (_order.length > capacity) {
+      _admitted.remove(_order.removeFirst());
+    }
+    return true;
+  }
+
+  bool rollbackBatch(Iterable<String> actionIds) {
+    final ids = actionIds.toSet();
+    if (ids.isEmpty || ids.length != actionIds.length || !ids.every(_admitted.contains)) return false;
+    _admitted.removeAll(ids);
+    _order.removeWhere(ids.contains);
     return true;
   }
 }
