@@ -11,29 +11,20 @@ import 'package:get/get.dart';
 /// Isolated widget for delivered indicator
 /// Only rebuilds when tapped state changes
 class DeliveredIndicatorObserver extends StatelessWidget {
-  const DeliveredIndicatorObserver({
-    super.key,
-    required this.tapped,
-  });
+  const DeliveredIndicatorObserver({super.key, required this.tapped});
 
   final RxBool tapped;
 
   @override
   Widget build(BuildContext context) {
-    return Obx(() => DeliveredIndicator(
-          forceShow: tapped.value,
-        ));
+    return Obx(() => DeliveredIndicator(forceShow: tapped.value));
   }
 }
 
 /// Isolated widget for error indicator
 /// Only rebuilds when error state changes
 class ErrorIndicatorObserver extends StatelessWidget {
-  const ErrorIndicatorObserver({
-    super.key,
-    required this.chat,
-    required this.service,
-  });
+  const ErrorIndicatorObserver({super.key, required this.chat, required this.service});
 
   final Chat chat;
   final MessagesService service;
@@ -62,12 +53,8 @@ class ErrorIndicatorObserver extends StatelessWidget {
                 errorCode: errorCode,
                 errorText: errorText,
                 chatId: chat.id!,
-                onRetry: () => retryMessage(
-                  message: message,
-                  chat: chat,
-                  service: service,
-                  controller: ms,
-                ),
+                retryAllowed: !ChatsSvc.isApprovedLogicalSource(chat),
+                onRetry: () => retryMessage(message: message, chat: chat, service: service, controller: ms),
                 onRemove: () async {
                   // Delete the message from DB and remove from service
                   await service.deleteMessage(message);

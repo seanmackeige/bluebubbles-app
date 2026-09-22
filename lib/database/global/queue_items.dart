@@ -18,6 +18,7 @@ abstract class OutgoingQueueItem extends QueueItem {
   String? logicalActionId;
   LogicalDraft? logicalDraft;
   LogicalSendAdmissionReceipt? logicalAdmissionReceipt;
+  String? acknowledgedAmbiguousAdmissionId;
   String? logicalTransportMethod;
   bool? logicalDdScan;
   String? logicalAttachmentContentFingerprint;
@@ -31,6 +32,7 @@ abstract class OutgoingQueueItem extends QueueItem {
     this.logicalActionId,
     this.logicalDraft,
     this.logicalAdmissionReceipt,
+    this.acknowledgedAmbiguousAdmissionId,
     this.logicalTransportMethod,
     this.logicalDdScan,
     this.logicalAttachmentContentFingerprint,
@@ -63,6 +65,7 @@ class OutgoingMessage extends OutgoingQueueItem {
     super.logicalActionId,
     super.logicalDraft,
     super.logicalAdmissionReceipt,
+    super.acknowledgedAmbiguousAdmissionId,
     super.logicalTransportMethod,
     super.logicalDdScan,
     super.logicalAttachmentContentFingerprint,
@@ -90,6 +93,7 @@ class OutgoingReaction extends OutgoingQueueItem {
     super.logicalActionId,
     super.logicalDraft,
     super.logicalAdmissionReceipt,
+    super.acknowledgedAmbiguousAdmissionId,
     super.logicalTransportMethod,
     super.logicalDdScan,
     super.logicalAttachmentContentFingerprint,
@@ -116,6 +120,7 @@ class OutgoingAttachment extends OutgoingQueueItem {
     super.logicalActionId,
     super.logicalDraft,
     super.logicalAdmissionReceipt,
+    super.acknowledgedAmbiguousAdmissionId,
     super.logicalTransportMethod,
     super.logicalDdScan,
     super.logicalAttachmentContentFingerprint,
@@ -141,6 +146,7 @@ class OutgoingMultipartMessage extends OutgoingQueueItem {
     super.logicalActionId,
     super.logicalDraft,
     super.logicalAdmissionReceipt,
+    super.acknowledgedAmbiguousAdmissionId,
     super.logicalTransportMethod,
     super.logicalDdScan,
     super.logicalAttachmentContentFingerprint,

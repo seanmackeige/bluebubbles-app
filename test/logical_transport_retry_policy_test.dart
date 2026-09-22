@@ -54,7 +54,10 @@ LogicalSendAdmissionReceipt _receipt() => const LogicalSendAdmissionReceipt(
   targetSourceChatGuid: 'source-guid',
   transportTempGuid: 'temp-1',
   payloadFingerprint: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+  intentFingerprint: 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
   providerContextFingerprint: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+  transportReadinessRevision: 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+  transportSendDisposition: 'allowedWithReachabilityUnknown',
   committedAtEpochMilliseconds: 1,
 );
 
@@ -62,6 +65,8 @@ void main() {
   test('logical receipt disables transport retry while ordinary chat behavior is unchanged', () {
     expect(logicalTransportMayRetry(_receipt()), isFalse);
     expect(logicalTransportMayRetry(null), isTrue);
+    expect(logicalSocketEchoMayComplete(_receipt()), isFalse);
+    expect(logicalSocketEchoMayComplete(null), isTrue);
   });
 
   test('all outbound provider mutation classes carry the no-retry policy', () async {

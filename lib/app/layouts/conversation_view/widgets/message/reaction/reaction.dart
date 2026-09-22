@@ -16,13 +16,7 @@ import 'package:flutter_svg/svg.dart';
 import 'package:get/get.dart';
 
 class ReactionWidget extends StatefulWidget {
-  const ReactionWidget({
-    super.key,
-    required this.reaction,
-    this.reactions,
-    this.chatGuid,
-    this.tailDirection,
-  });
+  const ReactionWidget({super.key, required this.reaction, this.reactions, this.chatGuid, this.tailDirection});
 
   final Message reaction;
   final List<Message>? reactions;
@@ -57,15 +51,18 @@ class ReactionWidgetState extends State<ReactionWidget> with ThemeHelpers {
     //  2. parent message's chat relation – used in conversation view
     //  3. ChatsSvc.activeChat – last-resort fallback
     final chatGuid = widget.chatGuid ?? _parentMessage?.chat.target?.guid ?? ChatsSvc.activeChat?.chat.guid;
-    final parentController =
-        chatGuid != null ? maybeFindMessagesSvc(chatGuid)?.getMessageStateIfExists(_parentMessage?.guid ?? '') : null;
+    final parentController = chatGuid != null
+        ? maybeFindMessagesSvc(chatGuid)?.getMessageStateIfExists(_parentMessage?.guid ?? '')
+        : null;
     if (parentController != null) {
       // Find our reaction in the observable associatedMessages list
-      final found = parentController.associatedMessages.firstWhereOrNull((m) =>
-          m.guid == widget.reaction.guid ||
-          (m.associatedMessageType == widget.reaction.associatedMessageType &&
-              m.associatedMessagePart == widget.reaction.associatedMessagePart &&
-              m.isFromMe == widget.reaction.isFromMe));
+      final found = parentController.associatedMessages.firstWhereOrNull(
+        (m) =>
+            m.guid == widget.reaction.guid ||
+            (m.associatedMessageType == widget.reaction.associatedMessageType &&
+                m.associatedMessagePart == widget.reaction.associatedMessagePart &&
+                m.isFromMe == widget.reaction.isFromMe),
+      );
       if (found != null) return found;
     }
     // Fallback to widget.reaction if not found in MessageState
@@ -117,69 +114,68 @@ class ReactionWidgetState extends State<ReactionWidget> with ThemeHelpers {
 
       if (SettingsSvc.settings.skin.value != Skins.iOS) {
         return Container(
-            width: 30,
-            height: 30,
-            decoration: BoxDecoration(
-              color: reactionIsFromMe
-                  ? context.theme.colorScheme.primary
-                  : ((context.theme.extensions[BubbleColors] as BubbleColors?)?.receivedBubbleColor ??
+          width: 30,
+          height: 30,
+          decoration: BoxDecoration(
+            color: reactionIsFromMe
+                ? context.theme.colorScheme.primary
+                : ((context.theme.extensions[BubbleColors] as BubbleColors?)?.receivedBubbleColor ??
                       context.theme.colorScheme.surfaceContainerHighest),
-              border: Border.all(color: context.theme.colorScheme.surface),
-              shape: BoxShape.circle,
-            ),
-            child: GestureDetector(
-              onTap: () {
-                if (reactions == null) return;
-                // Capture the conversation's theme before pushing \u2014 if adaptive
-                // theming is active, context.theme is already the per-chat theme.
-                final capturedTheme = context.theme;
-                final capturedIsM3 = ThemeSvc.isMaterialYouActive(context);
-                final capturedBubbleExt = capturedTheme.extensions[BubbleColors] as BubbleColors?;
-                Navigator.push(
-                  context,
-                  PageRouteBuilder(
-                    transitionDuration: const Duration(milliseconds: 500),
-                    pageBuilder: (routeCtx, animation, secondaryAnimation) {
-                      return SlideTransition(
-                        position: Tween<Offset>(
-                          begin: const Offset(0.0, 1.0),
-                          end: Offset.zero,
-                        ).animate(CurvedAnimation(parent: animation, curve: Curves.easeOut)),
-                        child: Theme(
-                          data: capturedTheme.copyWith(
-                            // in case some components still use legacy theming
-                            primaryColor: capturedBubbleExt?.iMessageBubbleColor ?? capturedTheme.colorScheme.primary,
-                            colorScheme: capturedTheme.colorScheme.copyWith(
-                              primary: capturedBubbleExt?.iMessageBubbleColor ?? capturedTheme.colorScheme.primary,
-                              onPrimary:
-                                  capturedBubbleExt?.oniMessageBubbleColor ?? capturedTheme.colorScheme.onPrimary,
-                              surface: capturedIsM3 ? null : capturedBubbleExt?.receivedBubbleColor,
-                              onSurface: capturedIsM3 ? null : capturedBubbleExt?.onReceivedBubbleColor,
-                            ),
-                          ),
-                          child: Stack(
-                            alignment: Alignment.bottomCenter,
-                            children: [
-                              GestureDetector(
-                                onTap: () {
-                                  Navigator.of(routeCtx).pop();
-                                },
-                              ),
-                              Positioned(
-                                  bottom: 10, left: 15, right: 15, child: ReactionDetails(reactions: reactions!)),
-                            ],
+            border: Border.all(color: context.theme.colorScheme.surface),
+            shape: BoxShape.circle,
+          ),
+          child: GestureDetector(
+            onTap: () {
+              if (reactions == null) return;
+              // Capture the conversation's theme before pushing \u2014 if adaptive
+              // theming is active, context.theme is already the per-chat theme.
+              final capturedTheme = context.theme;
+              final capturedIsM3 = ThemeSvc.isMaterialYouActive(context);
+              final capturedBubbleExt = capturedTheme.extensions[BubbleColors] as BubbleColors?;
+              Navigator.push(
+                context,
+                PageRouteBuilder(
+                  transitionDuration: const Duration(milliseconds: 500),
+                  pageBuilder: (routeCtx, animation, secondaryAnimation) {
+                    return SlideTransition(
+                      position: Tween<Offset>(
+                        begin: const Offset(0.0, 1.0),
+                        end: Offset.zero,
+                      ).animate(CurvedAnimation(parent: animation, curve: Curves.easeOut)),
+                      child: Theme(
+                        data: capturedTheme.copyWith(
+                          // in case some components still use legacy theming
+                          primaryColor: capturedBubbleExt?.iMessageBubbleColor ?? capturedTheme.colorScheme.primary,
+                          colorScheme: capturedTheme.colorScheme.copyWith(
+                            primary: capturedBubbleExt?.iMessageBubbleColor ?? capturedTheme.colorScheme.primary,
+                            onPrimary: capturedBubbleExt?.oniMessageBubbleColor ?? capturedTheme.colorScheme.onPrimary,
+                            surface: capturedIsM3 ? null : capturedBubbleExt?.receivedBubbleColor,
+                            onSurface: capturedIsM3 ? null : capturedBubbleExt?.onReceivedBubbleColor,
                           ),
                         ),
-                      );
-                    },
-                    fullscreenDialog: true,
-                    opaque: false,
-                    barrierDismissible: true,
-                  ),
-                );
-              },
-              child: Center(
-                child: Builder(builder: (context) {
+                        child: Stack(
+                          alignment: Alignment.bottomCenter,
+                          children: [
+                            GestureDetector(
+                              onTap: () {
+                                Navigator.of(routeCtx).pop();
+                              },
+                            ),
+                            Positioned(bottom: 10, left: 15, right: 15, child: ReactionDetails(reactions: reactions!)),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                  fullscreenDialog: true,
+                  opaque: false,
+                  barrierDismissible: true,
+                ),
+              );
+            },
+            child: Center(
+              child: Builder(
+                builder: (context) {
                   final text = Text(
                     ReactionTypes.reactionToEmoji[reactionType] ?? "X",
                     style: const TextStyle(fontSize: 15, fontFamily: 'Apple Color Emoji'),
@@ -194,9 +190,11 @@ class ReactionWidgetState extends State<ReactionWidget> with ThemeHelpers {
                     );
                   }
                   return text;
-                }),
+                },
               ),
-            ));
+            ),
+          ),
+        );
       }
       return Stack(
         alignment: messageIsFromMe ? Alignment.centerRight : Alignment.centerLeft,
@@ -209,48 +207,50 @@ class ReactionWidgetState extends State<ReactionWidget> with ThemeHelpers {
             right: !messageIsFromMe ? 0 : -1,
             child: ClipPath(
               clipper: ReactionBorderClipper(tailDirection: _effectiveTailDirection),
-              child: Container(
-                width: iosSize + 2,
-                height: iosSize + 2,
-                color: context.theme.colorScheme.surface,
-              ),
+              child: Container(width: iosSize + 2, height: iosSize + 2, color: context.theme.colorScheme.surface),
             ),
           ),
           ClipPath(
-              clipper: ReactionClipper(tailDirection: _effectiveTailDirection),
-              child: Obx(() {
-                // reactionController is null when no MessageState exists for the reaction (typical).
-                // Fall back to checking the GUID prefix so temp reactions always show as pending.
-                final isSending = reactionController?.isSending.value ??
-                    (reaction.guid?.startsWith('temp') == true && reaction.error == 0);
-                return Container(
-                    width: iosSize,
-                    height: iosSize,
-                    color: reactionIsFromMe
-                        ? context.theme.colorScheme.primary.darkenAmount(isSending ? 0.2 : 0)
-                        : ((context.theme.extensions[BubbleColors] as BubbleColors?)?.receivedBubbleColor ??
-                            context.theme.colorScheme.surfaceContainerHighest),
-                    alignment: messageIsFromMe ? Alignment.topRight : Alignment.topLeft,
-                    child: SizedBox(
-                      width: iosSize * 0.8,
-                      height: iosSize * 0.8,
-                      child: Center(
-                          child: Padding(
-                        padding:
-                            const EdgeInsets.all(6.5).add(EdgeInsets.only(right: reactionType == "emphasize" ? 1 : 0)),
-                        child: SvgPicture.asset(
-                          'assets/reactions/$reactionType-black.svg',
-                          colorFilter: ColorFilter.mode(
-                              reactionType == "love"
-                                  ? Colors.pink
-                                  : (reactionIsFromMe
-                                      ? context.theme.colorScheme.onPrimary
-                                      : context.theme.colorScheme.onSurfaceVariant),
-                              BlendMode.srcIn),
+            clipper: ReactionClipper(tailDirection: _effectiveTailDirection),
+            child: Obx(() {
+              // reactionController is null when no MessageState exists for the reaction (typical).
+              // Fall back to checking the GUID prefix so temp reactions always show as pending.
+              final isSending =
+                  reactionController?.isSending.value ??
+                  (reaction.guid?.startsWith('temp') == true && reaction.error == 0);
+              return Container(
+                width: iosSize,
+                height: iosSize,
+                color: reactionIsFromMe
+                    ? context.theme.colorScheme.primary.darkenAmount(isSending ? 0.2 : 0)
+                    : ((context.theme.extensions[BubbleColors] as BubbleColors?)?.receivedBubbleColor ??
+                          context.theme.colorScheme.surfaceContainerHighest),
+                alignment: messageIsFromMe ? Alignment.topRight : Alignment.topLeft,
+                child: SizedBox(
+                  width: iosSize * 0.8,
+                  height: iosSize * 0.8,
+                  child: Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(
+                        6.5,
+                      ).add(EdgeInsets.only(right: reactionType == "emphasize" ? 1 : 0)),
+                      child: SvgPicture.asset(
+                        'assets/reactions/$reactionType-black.svg',
+                        colorFilter: ColorFilter.mode(
+                          reactionType == "love"
+                              ? Colors.pink
+                              : (reactionIsFromMe
+                                    ? context.theme.colorScheme.onPrimary
+                                    : context.theme.colorScheme.onSurfaceVariant),
+                          BlendMode.srcIn,
                         ),
-                      )),
-                    ));
-              })),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            }),
+          ),
           Positioned(
             left: !messageIsFromMe ? 0 : -75,
             right: messageIsFromMe ? 0 : -75,
@@ -269,12 +269,14 @@ class ReactionWidgetState extends State<ReactionWidget> with ThemeHelpers {
                       color: context.theme.colorScheme.error,
                     ),
                     onTap: () {
-                      final chat = ChatStateScope.maybeChatOf(context) ??
+                      final chat =
+                          ChatStateScope.maybeChatOf(context) ??
                           ChatsSvc.getChatState(widget.chatGuid ?? _parentMessage?.chat.target?.guid ?? '')?.chat ??
                           ChatsSvc.activeChat!.chat;
-                      final selected = maybeFindMessagesSvc(chat.guid)
-                              ?.getMessageStateIfExists(reaction.associatedMessageGuid!)
-                              ?.message ??
+                      final selected =
+                          maybeFindMessagesSvc(
+                            chat.guid,
+                          )?.getMessageStateIfExists(reaction.associatedMessageGuid!)?.message ??
                           _parentMessage;
                       if (selected == null) return;
 
@@ -284,15 +286,9 @@ class ReactionWidgetState extends State<ReactionWidget> with ThemeHelpers {
                           errorCode: errorCode,
                           errorText: errorText,
                           chatId: chat.id!,
-                          onRetry: () => retryReaction(
-                            reaction: reaction,
-                            chat: chat,
-                            selected: selected,
-                          ),
-                          onRemove: () => removeReaction(
-                            reaction: reaction,
-                            chat: chat,
-                          ),
+                          retryAllowed: !ChatsSvc.isApprovedLogicalSource(chat),
+                          onRetry: () => retryReaction(reaction: reaction, chat: chat, selected: selected),
+                          onRemove: () => removeReaction(reaction: reaction, chat: chat),
                         ),
                       );
                     },
@@ -301,7 +297,7 @@ class ReactionWidgetState extends State<ReactionWidget> with ThemeHelpers {
               }
               return const SizedBox.shrink();
             }),
-          )
+          ),
         ],
       );
     }); // Close outer Obx
@@ -326,7 +322,7 @@ class ReactionWidgetState extends State<ReactionWidget> with ThemeHelpers {
           color: isFromMe
               ? context.theme.colorScheme.primary
               : ((context.theme.extensions[BubbleColors] as BubbleColors?)?.receivedBubbleColor ??
-                  context.theme.colorScheme.surfaceContainerHighest),
+                    context.theme.colorScheme.surfaceContainerHighest),
           border: Border.all(color: context.theme.colorScheme.surface),
           shape: BoxShape.circle,
           boxShadow: [
@@ -339,21 +335,23 @@ class ReactionWidgetState extends State<ReactionWidget> with ThemeHelpers {
           ],
         ),
         child: Center(
-          child: Builder(builder: (ctx) {
-            final text = Text(
-              ReactionTypes.reactionToEmoji[rType] ?? "X",
-              style: const TextStyle(fontSize: 15, fontFamily: 'Apple Color Emoji'),
-              textAlign: TextAlign.center,
-            );
-            if (rType == "dislike") {
-              return Transform(
-                transform: Matrix4.identity()..rotateY(pi),
-                alignment: FractionalOffset.center,
-                child: text,
+          child: Builder(
+            builder: (ctx) {
+              final text = Text(
+                ReactionTypes.reactionToEmoji[rType] ?? "X",
+                style: const TextStyle(fontSize: 15, fontFamily: 'Apple Color Emoji'),
+                textAlign: TextAlign.center,
               );
-            }
-            return text;
-          }),
+              if (rType == "dislike") {
+                return Transform(
+                  transform: Matrix4.identity()..rotateY(pi),
+                  alignment: FractionalOffset.center,
+                  child: text,
+                );
+              }
+              return text;
+            },
+          ),
         ),
       );
     }
@@ -384,11 +382,7 @@ class ReactionWidgetState extends State<ReactionWidget> with ThemeHelpers {
             right: tailIsRight ? 0 : -1,
             child: ClipPath(
               clipper: ReactionBorderClipper(tailDirection: tailDirection),
-              child: Container(
-                width: iosSize + 2,
-                height: iosSize + 2,
-                color: context.theme.colorScheme.surface,
-              ),
+              child: Container(width: iosSize + 2, height: iosSize + 2, color: context.theme.colorScheme.surface),
             ),
           ),
           ClipPath(
@@ -399,7 +393,7 @@ class ReactionWidgetState extends State<ReactionWidget> with ThemeHelpers {
               color: isFromMe
                   ? context.theme.colorScheme.primary
                   : ((context.theme.extensions[BubbleColors] as BubbleColors?)?.receivedBubbleColor ??
-                      context.theme.colorScheme.surfaceContainerHighest),
+                        context.theme.colorScheme.surfaceContainerHighest),
               alignment: !tailIsRight ? Alignment.topRight : Alignment.topLeft,
               child: SizedBox(
                 width: iosSize * 0.8,
@@ -413,8 +407,8 @@ class ReactionWidgetState extends State<ReactionWidget> with ThemeHelpers {
                         rType == "love"
                             ? Colors.pink
                             : (isFromMe
-                                ? context.theme.colorScheme.onPrimary
-                                : context.theme.colorScheme.onSurfaceVariant),
+                                  ? context.theme.colorScheme.onPrimary
+                                  : context.theme.colorScheme.onSurfaceVariant),
                         BlendMode.srcIn,
                       ),
                     ),

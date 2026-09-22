@@ -36,6 +36,7 @@ class MessageErrorDialog extends StatelessWidget {
     required this.onRetry,
     required this.onRemove,
     required this.chatId,
+    this.retryAllowed = true,
   });
 
   final int errorCode;
@@ -43,24 +44,31 @@ class MessageErrorDialog extends StatelessWidget {
   final VoidCallback onRetry;
   final VoidCallback onRemove;
   final int chatId;
+  final bool retryAllowed;
 
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
       backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
       title: Text(ErrorHelper.getErrorTitle(errorCode), style: context.theme.textTheme.titleLarge),
-      content: Text(errorText, style: context.theme.textTheme.bodyLarge),
+      content: Text(
+        retryAllowed
+            ? errorText
+            : '$errorText\n\nThis execution may have crossed the physical boundary. It will not be retried automatically. The content remains available for a deliberate new operation.',
+        style: context.theme.textTheme.bodyLarge,
+      ),
       actions: <Widget>[
-        TextButton(
-          child: Text(
-            "Retry",
-            style: context.theme.textTheme.bodyLarge!.copyWith(color: Get.context!.theme.colorScheme.primary),
+        if (retryAllowed)
+          TextButton(
+            child: Text(
+              "Retry",
+              style: context.theme.textTheme.bodyLarge!.copyWith(color: Get.context!.theme.colorScheme.primary),
+            ),
+            onPressed: () async {
+              Navigator.of(context).pop();
+              onRetry();
+            },
           ),
-          onPressed: () async {
-            Navigator.of(context).pop();
-            onRetry();
-          },
-        ),
         TextButton(
           child: Text(
             "Remove",

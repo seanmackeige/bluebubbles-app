@@ -12,6 +12,75 @@ enum LogicalRouteState { qualified, routeNotProven }
 
 enum LogicalRouteRuntimeStage { unchecked, checking, qualified, routeNotProven }
 
+enum LogicalTransportReadinessState { ready, unavailable, unknown }
+
+enum LogicalTransportEvidenceStrength { authoritative, strongIndicator, weakIndicator, unavailable }
+
+enum LogicalTransportSendDisposition { ready, blocked, allowedWithReachabilityUnknown }
+
+/// Read-only transport evidence, deliberately separate from route authority.
+///
+/// A valid SMS writer can remain authoritative while its enrolled iPhone relay
+/// is offline. Apple/BlueBubbles do not expose a continuous iPhone reachability
+/// heartbeat, so absence of recent terminal evidence remains [unknown], never
+/// an invented healthy state.
+class LogicalTransportReadinessEvidence {
+  const LogicalTransportReadinessEvidence({
+    required this.service,
+    required this.state,
+    required this.strength,
+    required this.reason,
+    required this.observedAtEpochMilliseconds,
+    this.validUntilEpochMilliseconds,
+  });
+
+  final String service;
+  final LogicalTransportReadinessState state;
+  final LogicalTransportEvidenceStrength strength;
+  final String reason;
+  final int observedAtEpochMilliseconds;
+  final int? validUntilEpochMilliseconds;
+
+  LogicalTransportReadinessState effectiveStateAt(int nowEpochMilliseconds) {
+    if (state == LogicalTransportReadinessState.ready &&
+        validUntilEpochMilliseconds != null &&
+        nowEpochMilliseconds > validUntilEpochMilliseconds!) {
+      return LogicalTransportReadinessState.unknown;
+    }
+    if (state == LogicalTransportReadinessState.unavailable &&
+        strength != LogicalTransportEvidenceStrength.authoritative) {
+      return LogicalTransportReadinessState.unknown;
+    }
+    return state;
+  }
+
+  LogicalTransportSendDisposition sendDispositionAt(int nowEpochMilliseconds) {
+    switch (effectiveStateAt(nowEpochMilliseconds)) {
+      case LogicalTransportReadinessState.ready:
+        return LogicalTransportSendDisposition.ready;
+      case LogicalTransportReadinessState.unavailable:
+        return LogicalTransportSendDisposition.blocked;
+      case LogicalTransportReadinessState.unknown:
+        return LogicalTransportSendDisposition.allowedWithReachabilityUnknown;
+    }
+  }
+
+  String get revision => sha256
+      .convert(
+        utf8.encode(
+          jsonEncode(<String, dynamic>{
+            'service': service,
+            'state': state.name,
+            'strength': strength.name,
+            'reason': reason,
+            'observedAtEpochMilliseconds': observedAtEpochMilliseconds,
+            'validUntilEpochMilliseconds': validUntilEpochMilliseconds,
+          }),
+        ),
+      )
+      .toString();
+}
+
 class LogicalRouteRuntimeStatus {
   const LogicalRouteRuntimeStatus({
     required this.stage,
@@ -20,6 +89,10 @@ class LogicalRouteRuntimeStatus {
     this.certificateRevision,
     this.authorityRevision,
     this.authorityEpoch,
+    this.service,
+    this.transportReadiness,
+    this.transportReason,
+    this.sendDisposition,
   });
 
   const LogicalRouteRuntimeStatus.unchecked()
@@ -34,8 +107,14 @@ class LogicalRouteRuntimeStatus {
   final String? certificateRevision;
   final String? authorityRevision;
   final int? authorityEpoch;
+  final String? service;
+  final LogicalTransportReadinessState? transportReadiness;
+  final String? transportReason;
+  final LogicalTransportSendDisposition? sendDisposition;
 
   bool get isQualified => stage == LogicalRouteRuntimeStage.qualified && targetRowId != null;
+
+  bool get isSendBlocked => !isQualified || sendDisposition == LogicalTransportSendDisposition.blocked;
 }
 
 class LogicalAddressEvidence {
@@ -50,11 +129,13 @@ class LogicalSuccessfulOutboundEvidence {
     required this.messageGuid,
     required this.messageRowId,
     required this.createdAtEpoch,
+    this.terminalAcknowledgement = false,
   });
 
   final String messageGuid;
   final int messageRowId;
   final int createdAtEpoch;
+  final bool terminalAcknowledgement;
 }
 
 class LogicalRouteMessageEvidence {
@@ -320,6 +401,96 @@ class LogicalRouteDecision {
 
   bool get isQualified => state == LogicalRouteState.qualified;
   bool get isSingleTarget => isQualified && physicalTargetRowIds.length == 1;
+}
+
+/// Evaluates only evidence that is already present in the bounded provider
+/// snapshot. It never converts enrollment, Mac health, or an old successful
+/// send into proof that an iPhone relay is reachable now.
+class LogicalTransportReadinessPolicy {
+  LogicalTransportReadinessPolicy._();
+
+  static const Duration recentTerminalEvidenceWindow = Duration(minutes: 10);
+
+  static LogicalTransportReadinessEvidence resolve(
+    LogicalRouteEvidence evidence,
+    LogicalRouteDecision decision, {
+    required int observedAtEpochMilliseconds,
+  }) {
+    if (!decision.isSingleTarget) {
+      return LogicalTransportReadinessEvidence(
+        service: 'UNKNOWN',
+        state: LogicalTransportReadinessState.unknown,
+        strength: LogicalTransportEvidenceStrength.unavailable,
+        reason: 'TRANSPORT_ROUTE_NOT_QUALIFIED',
+        observedAtEpochMilliseconds: observedAtEpochMilliseconds,
+      );
+    }
+    final matches = evidence.candidates
+        .where((candidate) => candidate.sourceChatRowId == decision.physicalTargetRowIds.single)
+        .toList(growable: false);
+    if (matches.length != 1) {
+      return LogicalTransportReadinessEvidence(
+        service: 'UNKNOWN',
+        state: LogicalTransportReadinessState.unknown,
+        strength: LogicalTransportEvidenceStrength.unavailable,
+        reason: 'TRANSPORT_TARGET_EVIDENCE_NOT_UNIQUE',
+        observedAtEpochMilliseconds: observedAtEpochMilliseconds,
+      );
+    }
+    final candidate = matches.single;
+    final service = candidate.sourceService;
+    if (service == 'SMS') {
+      final successful =
+          candidate.successfulOutbounds.where((outbound) => outbound.terminalAcknowledgement).toList(growable: false)
+            ..sort((left, right) => right.createdAtEpoch.compareTo(left.createdAtEpoch));
+      if (successful.isNotEmpty) {
+        final latest = successful.first.createdAtEpoch;
+        final age = observedAtEpochMilliseconds - latest;
+        if (age >= 0 && age <= recentTerminalEvidenceWindow.inMilliseconds) {
+          return LogicalTransportReadinessEvidence(
+            service: service,
+            state: LogicalTransportReadinessState.ready,
+            strength: LogicalTransportEvidenceStrength.strongIndicator,
+            reason: 'RECENT_NATURAL_SMS_TERMINAL_SUCCESS',
+            observedAtEpochMilliseconds: observedAtEpochMilliseconds,
+            validUntilEpochMilliseconds: latest + recentTerminalEvidenceWindow.inMilliseconds,
+          );
+        }
+      }
+      final hasFailedNormalOutbound = candidate.messages.any(
+        (message) => message.isNormal && message.isFromMe && message.error != 0,
+      );
+      return LogicalTransportReadinessEvidence(
+        service: service,
+        state: LogicalTransportReadinessState.unknown,
+        strength: hasFailedNormalOutbound
+            ? LogicalTransportEvidenceStrength.weakIndicator
+            : LogicalTransportEvidenceStrength.unavailable,
+        reason: hasFailedNormalOutbound
+            ? 'SMS_FAILURE_OBSERVED_RELAY_REACHABILITY_NOT_PROVEN'
+            : 'SMS_RELAY_REACHABILITY_NOT_PROVEN',
+        observedAtEpochMilliseconds: observedAtEpochMilliseconds,
+      );
+    }
+    if (service == 'iMessage' && !evidence.detectedIMessage) {
+      return LogicalTransportReadinessEvidence(
+        service: service,
+        state: LogicalTransportReadinessState.unavailable,
+        strength: LogicalTransportEvidenceStrength.authoritative,
+        reason: 'IMESSAGE_PROVIDER_UNAVAILABLE',
+        observedAtEpochMilliseconds: observedAtEpochMilliseconds,
+      );
+    }
+    return LogicalTransportReadinessEvidence(
+      service: service.isEmpty ? 'UNKNOWN' : service,
+      state: LogicalTransportReadinessState.unknown,
+      strength: LogicalTransportEvidenceStrength.unavailable,
+      reason: service == 'iMessage'
+          ? 'IMESSAGE_ROUTE_READY_TRANSPORT_REACHABILITY_NOT_PROVEN'
+          : 'TRANSPORT_REACHABILITY_NOT_PROVEN',
+      observedAtEpochMilliseconds: observedAtEpochMilliseconds,
+    );
+  }
 }
 
 class _LogicalGenerationQualification {

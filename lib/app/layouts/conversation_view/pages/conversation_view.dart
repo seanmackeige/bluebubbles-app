@@ -13,6 +13,7 @@ import 'package:bluebubbles/app/layouts/conversation_view/widgets/effects/screen
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/services/ui/chat/logical_conversation_route.dart';
+import 'package:bluebubbles/services/ui/chat/logical_conversation_view.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -295,9 +296,29 @@ class _LogicalComposerGate extends StatelessWidget {
       children: [
         Obx(() {
           final status = ChatsSvc.logicalRouteRuntimeStatus.value;
-          if (status.isQualified) return const SizedBox.shrink();
+          final ledger = LogicalAdmissionLedger.fromEntries(PrefsSvc.messaging.loadLogicalAdmissionLedger());
+          final ambiguousOutcome =
+              !ledger.isCorrupt &&
+              ledger.hasAmbiguousOutcomeForLogical(LogicalConversationViewPolicy.comcastNodeUpdates.id);
+          final transportUnknown =
+              status.isQualified &&
+              status.sendDisposition == LogicalTransportSendDisposition.allowedWithReachabilityUnknown;
+          final transportBlocked =
+              status.isQualified && status.sendDisposition == LogicalTransportSendDisposition.blocked;
+          if (status.isQualified && !transportUnknown && !transportBlocked && !ambiguousOutcome) {
+            return const SizedBox.shrink();
+          }
           final checking =
               status.stage == LogicalRouteRuntimeStage.checking || status.stage == LogicalRouteRuntimeStage.unchecked;
+          final message = ambiguousOutcome
+              ? 'Previous send outcome unknown • no automatic retry'
+              : transportBlocked
+              ? 'Send blocked — ${status.service ?? 'SMS'} relay unavailable'
+              : transportUnknown
+              ? '${status.service ?? 'SMS'} route ready • relay reachability unknown • send allowed'
+              : checking
+              ? 'Refreshing send authority…'
+              : 'Send paused until the current route is verified';
           return SafeArea(
             top: false,
             bottom: false,
@@ -308,16 +329,13 @@ class _LogicalComposerGate extends StatelessWidget {
                 children: [
                   if (checking)
                     const SizedBox.square(dimension: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                  else if (transportUnknown)
+                    const Icon(Icons.info_outline, size: 18)
                   else
                     const Icon(Icons.lock_outline, size: 18),
                   const SizedBox(width: 8),
                   Flexible(
-                    child: Text(
-                      checking ? 'Refreshing send authority…' : 'Send paused until the current route is verified',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.center,
-                    ),
+                    child: Text(message, maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center),
                   ),
                   if (!checking)
                     IconButton(

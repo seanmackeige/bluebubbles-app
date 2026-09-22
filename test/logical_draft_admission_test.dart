@@ -85,7 +85,10 @@ LogicalSendAdmissionReceipt _receipt(
     targetSourceChatGuid: targetSourceChatGuid,
     transportTempGuid: 'temp-$suffix',
     payloadFingerprint: sha256.convert(utf8.encode('payload-$suffix')).toString(),
+    intentFingerprint: sha256.convert(utf8.encode('intent-$suffix')).toString(),
     providerContextFingerprint: sha256.convert(utf8.encode('provider-$suffix')).toString(),
+    transportReadinessRevision: sha256.convert(utf8.encode('transport-$suffix')).toString(),
+    transportSendDisposition: 'allowedWithReachabilityUnknown',
     committedAtEpochMilliseconds: 2000,
   );
 }
@@ -653,7 +656,10 @@ void main() {
         targetSourceChatGuid: first.targetSourceChatGuid,
         transportTempGuid: first.transportTempGuid,
         payloadFingerprint: first.payloadFingerprint,
+        intentFingerprint: first.intentFingerprint,
         providerContextFingerprint: first.providerContextFingerprint,
+        transportReadinessRevision: first.transportReadinessRevision,
+        transportSendDisposition: first.transportSendDisposition,
         committedAtEpochMilliseconds: first.committedAtEpochMilliseconds,
       );
 

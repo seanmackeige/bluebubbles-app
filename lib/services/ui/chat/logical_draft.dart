@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 
 const logicalDraftSchema = 'LOGICAL_DRAFT_V1';
-const logicalSendAdmissionSchema = 'LOGICAL_SEND_ADMISSION_V1';
+const logicalSendAdmissionSchema = 'LOGICAL_SEND_ADMISSION_V2_TRANSPORT_READINESS';
 
 /// Content-safe stable identity for non-composer logical actions. Raw text is
 /// hashed and never persisted in the admission key.
@@ -412,6 +412,8 @@ class LogicalEvidenceObservationEpochTracker {
 
 enum LogicalSendAdmissionState {
   sendReady,
+  transportUnavailable,
+  ambiguousPreviousExecution,
   routeAmbiguous,
   authorityChanged,
   participantSetChanged,
@@ -429,6 +431,10 @@ String logicalSendAdmissionUserMessage(LogicalSendAdmissionState state) {
   switch (state) {
     case LogicalSendAdmissionState.sendReady:
       return 'Ready to send';
+    case LogicalSendAdmissionState.transportUnavailable:
+      return 'Send is blocked because the required SMS relay is unavailable. Your draft was kept.';
+    case LogicalSendAdmissionState.ambiguousPreviousExecution:
+      return 'A previous execution has an unknown outcome. It was not retried and your draft was kept.';
     case LogicalSendAdmissionState.replyTargetInvalid:
       return 'The reply target can no longer be verified. Your draft was kept.';
     case LogicalSendAdmissionState.attachmentIntentInvalid:
@@ -449,6 +455,10 @@ String logicalSendAdmissionUserMessage(LogicalSendAdmissionState state) {
 }
 
 LogicalSendAdmissionState logicalSendAdmissionStateForReason(String reason) {
+  if (reason.contains('TRANSPORT_UNAVAILABLE')) return LogicalSendAdmissionState.transportUnavailable;
+  if (reason.contains('AMBIGUOUS_PREVIOUS_EXECUTION') || reason.contains('OUTCOME_UNKNOWN')) {
+    return LogicalSendAdmissionState.ambiguousPreviousExecution;
+  }
   if (reason.contains('PARTICIPANT')) return LogicalSendAdmissionState.participantSetChanged;
   if (reason.contains('ACCOUNT') || reason.contains('SENDER')) return LogicalSendAdmissionState.accountChanged;
   if (reason.contains('SERVICE') || reason.contains('GENERATION')) return LogicalSendAdmissionState.serviceChanged;
@@ -486,7 +496,10 @@ class LogicalSendAdmissionReceipt {
     required this.targetSourceChatGuid,
     required this.transportTempGuid,
     required this.payloadFingerprint,
+    required this.intentFingerprint,
     required this.providerContextFingerprint,
+    required this.transportReadinessRevision,
+    required this.transportSendDisposition,
     required this.committedAtEpochMilliseconds,
   });
 
@@ -501,7 +514,10 @@ class LogicalSendAdmissionReceipt {
   final String targetSourceChatGuid;
   final String transportTempGuid;
   final String payloadFingerprint;
+  final String intentFingerprint;
   final String providerContextFingerprint;
+  final String transportReadinessRevision;
+  final String transportSendDisposition;
   final int committedAtEpochMilliseconds;
 
   bool get isValid =>
@@ -516,7 +532,10 @@ class LogicalSendAdmissionReceipt {
       targetSourceChatGuid.isNotEmpty &&
       transportTempGuid.isNotEmpty &&
       RegExp(r'^[0-9a-f]{64}$').hasMatch(payloadFingerprint) &&
+      RegExp(r'^[0-9a-f]{64}$').hasMatch(intentFingerprint) &&
       RegExp(r'^[0-9a-f]{64}$').hasMatch(providerContextFingerprint) &&
+      RegExp(r'^[0-9a-f]{64}$').hasMatch(transportReadinessRevision) &&
+      <String>{'ready', 'allowedWithReachabilityUnknown'}.contains(transportSendDisposition) &&
       committedAtEpochMilliseconds > 0;
 
   Map<String, dynamic> toJson() => <String, dynamic>{
@@ -532,7 +551,10 @@ class LogicalSendAdmissionReceipt {
     'targetSourceChatGuid': targetSourceChatGuid,
     'transportTempGuid': transportTempGuid,
     'payloadFingerprint': payloadFingerprint,
+    'intentFingerprint': intentFingerprint,
     'providerContextFingerprint': providerContextFingerprint,
+    'transportReadinessRevision': transportReadinessRevision,
+    'transportSendDisposition': transportSendDisposition,
     'committedAtEpochMilliseconds': committedAtEpochMilliseconds,
   };
 
@@ -552,7 +574,10 @@ class LogicalSendAdmissionReceipt {
       targetSourceChatGuid: json['targetSourceChatGuid'] as String,
       transportTempGuid: json['transportTempGuid'] as String,
       payloadFingerprint: json['payloadFingerprint'] as String,
+      intentFingerprint: json['intentFingerprint'] as String,
       providerContextFingerprint: json['providerContextFingerprint'] as String,
+      transportReadinessRevision: json['transportReadinessRevision'] as String,
+      transportSendDisposition: json['transportSendDisposition'] as String,
       committedAtEpochMilliseconds: (json['committedAtEpochMilliseconds'] as num).toInt(),
     );
     if (!receipt.isValid) {
@@ -568,7 +593,14 @@ class LogicalSendAdmissionReceipt {
 /// a second time.
 bool logicalTransportMayRetry(LogicalSendAdmissionReceipt? receipt) => receipt == null;
 
+/// Provider socket echoes can acknowledge optimistic message creation before
+/// an SMS relay returns its terminal result. Only ordinary upstream sends may
+/// use that echo to complete the local send future.
+bool logicalSocketEchoMayComplete(LogicalSendAdmissionReceipt? receipt) => receipt == null;
+
 enum LogicalOperationState { admitted, dispatchReserved, confirmed, outcomeUnknown }
+
+enum LogicalOperationOrigin { seanEditionLedger, externalOrLegacyUnattributed }
 
 class LogicalAdmissionLedger {
   LogicalAdmissionLedger._(this._entries, {required this.capacity, required this.isCorrupt});
@@ -618,6 +650,41 @@ class LogicalAdmissionLedger {
   bool containsTransportTempGuid(String tempGuid) {
     if (tempGuid.isEmpty) return false;
     return _entries.any((entry) => entry['transportTempGuid'] == tempGuid);
+  }
+
+  LogicalOperationOrigin originForTransportTempGuid(String tempGuid) => containsTransportTempGuid(tempGuid)
+      ? LogicalOperationOrigin.seanEditionLedger
+      : LogicalOperationOrigin.externalOrLegacyUnattributed;
+
+  List<String> ambiguousAdmissionIdsForIntent(String logicalId, String intentFingerprint) => _entries
+      .where(
+        (entry) =>
+            entry['logicalId'] == logicalId &&
+            entry['intentFingerprint'] == intentFingerprint &&
+            entry['operationState'] == LogicalOperationState.outcomeUnknown.name,
+      )
+      .map((entry) => entry['admissionId'])
+      .whereType<String>()
+      .toList(growable: false);
+
+  bool hasAmbiguousOutcomeForLogical(String logicalId) => _entries.any(
+    (entry) => entry['logicalId'] == logicalId && entry['operationState'] == LogicalOperationState.outcomeUnknown.name,
+  );
+
+  bool permitsExplicitNewOperation({
+    required String logicalId,
+    required String intentFingerprint,
+    required String? acknowledgedAmbiguousAdmissionId,
+    required String newActionId,
+  }) {
+    if (newActionId.isEmpty) return false;
+    final ambiguous = ambiguousAdmissionIdsForIntent(logicalId, intentFingerprint);
+    if (ambiguous.isEmpty) return true;
+    if (acknowledgedAmbiguousAdmissionId == null || !ambiguous.contains(acknowledgedAmbiguousAdmissionId)) {
+      return false;
+    }
+    final prior = _entries.singleWhere((entry) => entry['admissionId'] == acknowledgedAmbiguousAdmissionId);
+    return prior['actionId'] != newActionId;
   }
 
   bool commitBatch(List<LogicalSendAdmissionReceipt> receipts, List<String> admissionKeys) {

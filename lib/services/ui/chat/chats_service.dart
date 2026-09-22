@@ -105,6 +105,8 @@ class ChatsService {
   final Rx<LogicalRouteRuntimeStatus> logicalRouteRuntimeStatus = const LogicalRouteRuntimeStatus.unchecked().obs;
   LogicalRouteEvidence? _logicalRouteEvidence;
   DateTime? _logicalRouteEvidenceAt;
+  final Map<int, LogicalTransportReadinessEvidence> _logicalTransportReadinessBySourceRow =
+      <int, LogicalTransportReadinessEvidence>{};
   Completer<void>? _logicalEvidenceMutex;
   final LogicalEvidenceObservationEpochTracker _logicalEvidenceObservationEpochTracker =
       LogicalEvidenceObservationEpochTracker();
@@ -117,6 +119,9 @@ class ChatsService {
   final Map<String, int> _logicalSourceEventWatermarks = <String, int>{};
 
   LogicalAuthorityRevision? get currentLogicalAuthorityRevision => _logicalAuthorityRevisionTracker.current;
+
+  LogicalTransportReadinessEvidence? logicalTransportReadinessForSourceRow(int sourceRowId) =>
+      _logicalTransportReadinessBySourceRow[sourceRowId];
 
   bool isLogicalEvidenceObservationCurrent(int epoch) => _logicalEvidenceObservationEpochTracker.isCurrent(epoch);
 
@@ -505,7 +510,12 @@ class ChatsService {
             itemType == 0 &&
             (associatedMessageGuid == null || associatedMessageGuid.isEmpty)) {
           successfulOutbounds.add(
-            LogicalSuccessfulOutboundEvidence(messageGuid: guid, messageRowId: rowId, createdAtEpoch: createdAt),
+            LogicalSuccessfulOutboundEvidence(
+              messageGuid: guid,
+              messageRowId: rowId,
+              createdAtEpoch: createdAt,
+              terminalAcknowledgement: message['isSent'] == true && message['isFinished'] == true,
+            ),
           );
         }
       }
@@ -849,8 +859,23 @@ class ChatsService {
 
   /// Resolves a batch from one complete evidence snapshot. Every decision and
   /// its revision therefore describe the same point-in-time provider truth.
-  Future<({List<LogicalRouteDecision> decisions, LogicalAuthorityRevision? revision, int? observationEpoch})>
+  Future<
+    ({
+      List<LogicalRouteDecision> decisions,
+      List<LogicalTransportReadinessEvidence> transportReadiness,
+      LogicalAuthorityRevision? revision,
+      int? observationEpoch,
+    })
+  >
   resolveLogicalMutationBatch(Chat chat, List<LogicalMutationRequest> requests, {bool force = false}) async {
+    final observedAt = DateTime.now().millisecondsSinceEpoch;
+    LogicalTransportReadinessEvidence unavailableEvidence(String reason) => LogicalTransportReadinessEvidence(
+      service: 'UNKNOWN',
+      state: LogicalTransportReadinessState.unknown,
+      strength: LogicalTransportEvidenceStrength.unavailable,
+      reason: reason,
+      observedAtEpochMilliseconds: observedAt,
+    );
     if (!isLogicalConversation(chat)) {
       if (isApprovedLogicalSource(chat)) {
         logicalRouteRuntimeStatus.value = const LogicalRouteRuntimeStatus(
@@ -862,6 +887,7 @@ class ChatsService {
         decisions: [
           for (final _ in requests) const LogicalRouteDecision.notProven('NOT_A_CERTIFIED_LOGICAL_CONVERSATION'),
         ],
+        transportReadiness: [for (final _ in requests) unavailableEvidence('TRANSPORT_ROUTE_NOT_QUALIFIED')],
         revision: null,
         observationEpoch: null,
       );
@@ -879,6 +905,7 @@ class ChatsService {
             for (final _ in requests)
               const LogicalRouteDecision.notProven('MISSING_OR_AMBIGUOUS_LOGICAL_SOURCE_BINDING'),
           ],
+          transportReadiness: [for (final _ in requests) unavailableEvidence('TRANSPORT_ROUTE_NOT_QUALIFIED')],
           revision: null,
           observationEpoch: observation.observationEpoch,
         );
@@ -899,6 +926,17 @@ class ChatsService {
       final decisions = <LogicalRouteDecision>[
         for (final request in requests) LogicalConversationOutboundRoutePolicy.resolve(evidence, request),
       ];
+      final transportReadiness = <LogicalTransportReadinessEvidence>[
+        for (final decision in decisions)
+          LogicalTransportReadinessPolicy.resolve(evidence, decision, observedAtEpochMilliseconds: observedAt),
+      ];
+      _logicalTransportReadinessBySourceRow.clear();
+      for (var index = 0; index < decisions.length; index++) {
+        final decision = decisions[index];
+        if (decision.isSingleTarget) {
+          _logicalTransportReadinessBySourceRow[decision.physicalTargetRowIds.single] = transportReadiness[index];
+        }
+      }
       for (var index = 0; index < requests.length; index++) {
         final request = requests[index];
         final decision = decisions[index];
@@ -923,9 +961,18 @@ class ChatsService {
           certificateRevision: revision.certificateRevision,
           authorityRevision: revision.authorityRevision,
           authorityEpoch: revision.epoch,
+          service: transportReadiness[newMessageDecision].service,
+          transportReadiness: transportReadiness[newMessageDecision].effectiveStateAt(observedAt),
+          transportReason: transportReadiness[newMessageDecision].reason,
+          sendDisposition: transportReadiness[newMessageDecision].sendDispositionAt(observedAt),
         );
       }
-      return (decisions: decisions, revision: revision, observationEpoch: observation.observationEpoch);
+      return (
+        decisions: decisions,
+        transportReadiness: transportReadiness,
+        revision: revision,
+        observationEpoch: observation.observationEpoch,
+      );
     } catch (_) {
       Logger.warn('Logical route evidence unavailable; mutation remains fail closed', tag: 'LogicalConversationRoute');
       _logicalAuthorityRevisionTracker.invalidate('CURRENT_ROUTE_EVIDENCE_UNAVAILABLE');
@@ -939,6 +986,7 @@ class ChatsService {
         decisions: [
           for (final _ in requests) const LogicalRouteDecision.notProven('CURRENT_ROUTE_EVIDENCE_UNAVAILABLE'),
         ],
+        transportReadiness: [for (final _ in requests) unavailableEvidence('TRANSPORT_PROVIDER_EVIDENCE_UNAVAILABLE')],
         revision: null,
         observationEpoch: null,
       );
@@ -959,6 +1007,7 @@ class ChatsService {
   void invalidateLogicalAuthority(String reason) {
     _logicalRouteEvidence = null;
     _logicalRouteEvidenceAt = null;
+    _logicalTransportReadinessBySourceRow.clear();
     _logicalEvidenceObservationEpochTracker.invalidate();
     final revision = _logicalAuthorityRevisionTracker.invalidate(reason);
     logicalRouteRuntimeStatus.value = LogicalRouteRuntimeStatus(

@@ -78,8 +78,9 @@ class _OutgoingEntry {
 class _SendProgressTracker {
   final Chat chat;
   final Completer<void> completer;
+  final bool allowSocketCompletion;
 
-  _SendProgressTracker(this.chat, this.completer);
+  _SendProgressTracker(this.chat, this.completer, {required this.allowSocketCompletion});
 }
 
 class OutgoingMessageHandler {
@@ -140,8 +141,17 @@ class OutgoingMessageHandler {
   /// Registers a tracker so that [completeSendProgressIfExists] can complete
   /// [completer] and update [chat.sendProgress] if the socket event wins the
   /// HTTP vs. socket race.
-  void registerSendProgressTracker(String tempGuid, Chat chat, Completer<void> completer) {
-    _sendProgressTrackers[tempGuid] = _SendProgressTracker(chat, completer);
+  void registerSendProgressTracker(
+    String tempGuid,
+    Chat chat,
+    Completer<void> completer, {
+    bool allowSocketCompletion = true,
+  }) {
+    _sendProgressTrackers[tempGuid] = _SendProgressTracker(
+      chat,
+      completer,
+      allowSocketCompletion: allowSocketCompletion,
+    );
   }
 
   /// Called by [IncomingMessageHandler] when it receives a socket event for a
@@ -151,8 +161,16 @@ class OutgoingMessageHandler {
   /// animation to its final state so the UI doesn't wait for the HTTP
   /// response.
   void completeSendProgressIfExists(String tempGuid, Origin origin, {Object? error, StackTrace? stack}) {
-    final tracker = _sendProgressTrackers.remove(tempGuid);
+    final tracker = _sendProgressTrackers[tempGuid];
     if (tracker == null) return;
+
+    // A socket echo proves that Apple created/observed a message, but it does
+    // not prove terminal SMS relay acknowledgement. Logical sends therefore
+    // keep waiting for the server request's terminal result.
+    if (origin == Origin.incomingMessageHandler && !tracker.allowSocketCompletion) {
+      return;
+    }
+    _sendProgressTrackers.remove(tempGuid);
 
     if (origin == Origin.incomingMessageHandler) {
     } else if (origin == Origin.outgoingMessageHandler) {
@@ -220,6 +238,9 @@ class OutgoingMessageHandler {
       if (items.any((item) => item.logicalActionId == null || item.logicalActionId!.isEmpty)) {
         _failLogicalAdmission(items, 'SEND_BLOCKED_LOGICAL_ACTION_IDENTITY_MISSING');
       }
+      for (final item in items) {
+        item.completer ??= Completer<void>();
+      }
       await _withLogicalAdmissionLock(() => _admitLogicalBatch(items));
       for (final item in items) {
         item.logicalDispatchReservationCompleter = Completer<void>();
@@ -265,6 +286,7 @@ class OutgoingMessageHandler {
         prepared.map((entry) => entry.item.logicalDispatchReservationCompleter!.future),
         eagerError: true,
       );
+      await Future.wait(items.map((item) => item.completer!.future), eagerError: true);
     }
   }
 
@@ -314,7 +336,7 @@ class OutgoingMessageHandler {
     );
     final revision = result.revision;
     final observationEpoch = result.observationEpoch;
-    if (revision == null || observationEpoch == null) {
+    if (revision == null || observationEpoch == null || result.transportReadiness.length != items.length) {
       _failLogicalAdmission(items, 'SEND_BLOCKED_PROVIDER_EVIDENCE_UNAVAILABLE');
     }
     if (_currentLogicalProviderContextFingerprint() != providerContextAtObservationStart) {
@@ -364,6 +386,16 @@ class OutgoingMessageHandler {
       targets.add(matches.single);
     }
 
+    final transportDisposition = <LogicalTransportSendDisposition>[];
+    final transportObservedAt = DateTime.now().millisecondsSinceEpoch;
+    for (final readiness in result.transportReadiness) {
+      final disposition = readiness.sendDispositionAt(transportObservedAt);
+      if (disposition == LogicalTransportSendDisposition.blocked) {
+        _failLogicalAdmission(items, 'SEND_BLOCKED_TRANSPORT_UNAVAILABLE:${readiness.reason}');
+      }
+      transportDisposition.add(disposition);
+    }
+
     final actionIds = <String>[
       for (var index = 0; index < items.length; index++)
         items[index].logicalActionId ?? '${items[index].message.guid!}:$index',
@@ -371,6 +403,18 @@ class OutgoingMessageHandler {
     final ledger = LogicalAdmissionLedger.fromEntries(PrefsSvc.messaging.loadLogicalAdmissionLedger());
     if (ledger.isCorrupt) {
       _failLogicalAdmission(items, 'SEND_BLOCKED_ADMISSION_LEDGER_UNAVAILABLE');
+    }
+    for (var index = 0; index < items.length; index++) {
+      final logicalId = draft?.logicalId ?? LogicalConversationViewPolicy.comcastNodeUpdates.id;
+      final intentFingerprint = draft?.contentFingerprint ?? _logicalPayloadFingerprint(items[index]);
+      if (!ledger.permitsExplicitNewOperation(
+        logicalId: logicalId,
+        intentFingerprint: intentFingerprint,
+        acknowledgedAmbiguousAdmissionId: items[index].acknowledgedAmbiguousAdmissionId,
+        newActionId: actionIds[index],
+      )) {
+        _failLogicalAdmission(items, 'SEND_BLOCKED_AMBIGUOUS_PREVIOUS_EXECUTION');
+      }
     }
     final admissionKeys = <String>[
       for (var index = 0; index < items.length; index++)
@@ -386,10 +430,13 @@ class OutgoingMessageHandler {
     for (var index = 0; index < items.length; index++) {
       final target = targets[index];
       final payloadFingerprint = _logicalPayloadFingerprint(items[index]);
+      final intentFingerprint = draft?.contentFingerprint ?? payloadFingerprint;
+      final transportReadiness = result.transportReadiness[index];
       final material = utf8.encode(
         '$logicalSendAdmissionSchema\u0000${admissionKeys[index]}\u0000${revision.authorityRevision}'
         '\u0000${target.originalROWID}\u0000${target.guid}\u0000$payloadFingerprint'
-        '\u0000$providerContextFingerprint',
+        '\u0000$providerContextFingerprint\u0000${transportReadiness.revision}'
+        '\u0000${transportDisposition[index].name}',
       );
       receipts.add(
         LogicalSendAdmissionReceipt(
@@ -404,7 +451,10 @@ class OutgoingMessageHandler {
           targetSourceChatGuid: target.guid,
           transportTempGuid: items[index].message.guid!,
           payloadFingerprint: payloadFingerprint,
+          intentFingerprint: intentFingerprint,
           providerContextFingerprint: providerContextFingerprint,
+          transportReadinessRevision: transportReadiness.revision,
+          transportSendDisposition: transportDisposition[index].name,
           committedAtEpochMilliseconds: now,
         ),
       );
@@ -737,6 +787,7 @@ class OutgoingMessageHandler {
         logicalActionId: item.logicalActionId,
         logicalDraft: item.logicalDraft,
         logicalAdmissionReceipt: item.logicalAdmissionReceipt,
+        acknowledgedAmbiguousAdmissionId: item.acknowledgedAmbiguousAdmissionId,
         logicalTransportMethod: item.logicalTransportMethod,
         logicalDdScan: item.logicalDdScan,
         logicalAttachmentContentFingerprint: item.logicalAttachmentContentFingerprint,
@@ -753,6 +804,7 @@ class OutgoingMessageHandler {
         logicalActionId: item.logicalActionId,
         logicalDraft: item.logicalDraft,
         logicalAdmissionReceipt: item.logicalAdmissionReceipt,
+        acknowledgedAmbiguousAdmissionId: item.acknowledgedAmbiguousAdmissionId,
         logicalTransportMethod: item.logicalTransportMethod,
         logicalDdScan: item.logicalDdScan,
         logicalAttachmentContentFingerprint: item.logicalAttachmentContentFingerprint,
@@ -769,6 +821,7 @@ class OutgoingMessageHandler {
         logicalActionId: item.logicalActionId,
         logicalDraft: item.logicalDraft,
         logicalAdmissionReceipt: item.logicalAdmissionReceipt,
+        acknowledgedAmbiguousAdmissionId: item.acknowledgedAmbiguousAdmissionId,
         logicalTransportMethod: item.logicalTransportMethod,
         logicalDdScan: item.logicalDdScan,
         logicalAttachmentContentFingerprint: item.logicalAttachmentContentFingerprint,
@@ -786,6 +839,7 @@ class OutgoingMessageHandler {
         logicalActionId: item.logicalActionId,
         logicalDraft: item.logicalDraft,
         logicalAdmissionReceipt: item.logicalAdmissionReceipt,
+        acknowledgedAmbiguousAdmissionId: item.acknowledgedAmbiguousAdmissionId,
         logicalTransportMethod: item.logicalTransportMethod,
         logicalDdScan: item.logicalDdScan,
         logicalAttachmentContentFingerprint: item.logicalAttachmentContentFingerprint,
@@ -825,9 +879,11 @@ class OutgoingMessageHandler {
         dispatchReserved = true;
         final reservation = item.logicalDispatchReservationCompleter;
         if (reservation != null && !reservation.isCompleted) reservation.complete();
-        var dispatchFailed = false;
-        await _handleSend(() => _dispatchItem(item), item.chat).catchError((err) async {
-          dispatchFailed = true;
+        Object? dispatchError;
+        StackTrace? dispatchStack;
+        await _handleSend(() => _dispatchItem(item), item.chat).catchError((Object err, StackTrace stack) async {
+          dispatchError = err;
+          dispatchStack = stack;
           if (SettingsSvc.settings.cancelQueuedMessages.value) {
             // Cancel all subsequent messages for the same chat.
             final toCancel = _queue.where((e) => e.item.chat.guid == item.chat.guid).map((e) => e.item).toList();
@@ -844,9 +900,20 @@ class OutgoingMessageHandler {
         await _transitionLogicalOperation(
           item,
           from: LogicalOperationState.dispatchReserved,
-          to: dispatchFailed ? LogicalOperationState.outcomeUnknown : LogicalOperationState.confirmed,
+          to: dispatchError != null ? LogicalOperationState.outcomeUnknown : LogicalOperationState.confirmed,
         );
-        item.completer?.complete();
+        if (dispatchError != null && item.logicalAdmissionReceipt != null) {
+          final error = LogicalSendAdmissionException(
+            LogicalSendAdmissionState.ambiguousPreviousExecution,
+            'SEND_OUTCOME_AMBIGUOUS:${item.logicalAdmissionReceipt!.admissionId}',
+            rearmedDraft: item.logicalDraft,
+          );
+          if (item.completer != null && !item.completer!.isCompleted) {
+            item.completer!.completeError(error, dispatchStack);
+          }
+        } else if (item.completer != null && !item.completer!.isCompleted) {
+          item.completer!.complete();
+        }
       } catch (ex, st) {
         if (!dispatchReserved && item.logicalAdmissionReceipt != null) {
           try {
@@ -871,7 +938,9 @@ class OutgoingMessageHandler {
           );
         }
         Logger.error('Failed to handle outgoing queue item', error: ex, trace: st, tag: _tag);
-        item.completer?.completeError(ex);
+        if (item.completer != null && !item.completer!.isCompleted) {
+          item.completer!.completeError(ex, st);
+        }
       }
 
       // Recompute the reactive pending set after each item is fully processed.
@@ -961,9 +1030,10 @@ class OutgoingMessageHandler {
     required Future<Map<String, dynamic>> Function() httpCall,
     required Future<void> Function(Map<String, dynamic> data) onSuccess,
     required Future<void> Function(Object error, StackTrace stack) onError,
+    bool allowSocketCompletion = true,
   }) {
     final race = Completer<void>();
-    registerSendProgressTracker(tempGuid, chat, race);
+    registerSendProgressTracker(tempGuid, chat, race, allowSocketCompletion: allowSocketCompletion);
 
     httpCall().then(
       (data) async {
@@ -1002,6 +1072,7 @@ class OutgoingMessageHandler {
           ddScan: typed.logicalDdScan,
           expectedProviderContextFingerprint: typed.logicalAdmissionReceipt?.providerContextFingerprint,
           allowTransientRetry: logicalTransportMayRetry(typed.logicalAdmissionReceipt),
+          allowSocketCompletion: logicalSocketEchoMayComplete(typed.logicalAdmissionReceipt),
         );
       case QueueType.sendReaction:
         final typed = item as OutgoingReaction;
@@ -1013,6 +1084,7 @@ class OutgoingMessageHandler {
           transportMethod: typed.logicalTransportMethod,
           expectedProviderContextFingerprint: typed.logicalAdmissionReceipt?.providerContextFingerprint,
           allowTransientRetry: logicalTransportMayRetry(typed.logicalAdmissionReceipt),
+          allowSocketCompletion: logicalSocketEchoMayComplete(typed.logicalAdmissionReceipt),
         );
       case QueueType.sendMultipart:
         final typed = item as OutgoingMultipartMessage;
@@ -1025,6 +1097,7 @@ class OutgoingMessageHandler {
           ddScan: typed.logicalDdScan,
           expectedProviderContextFingerprint: typed.logicalAdmissionReceipt?.providerContextFingerprint,
           allowTransientRetry: logicalTransportMayRetry(typed.logicalAdmissionReceipt),
+          allowSocketCompletion: logicalSocketEchoMayComplete(typed.logicalAdmissionReceipt),
         );
       case QueueType.sendAttachment:
         final typed = item as OutgoingAttachment;
@@ -1036,6 +1109,7 @@ class OutgoingMessageHandler {
           transportMethod: typed.logicalTransportMethod,
           expectedProviderContextFingerprint: typed.logicalAdmissionReceipt?.providerContextFingerprint,
           allowTransientRetry: logicalTransportMayRetry(typed.logicalAdmissionReceipt),
+          allowSocketCompletion: logicalSocketEchoMayComplete(typed.logicalAdmissionReceipt),
         );
     }
   }
@@ -1052,7 +1126,13 @@ class OutgoingMessageHandler {
     final receipt = item.logicalAdmissionReceipt;
     if (receipt == null) return;
     final currentRevision = ChatsSvc.currentLogicalAuthorityRevision;
+    final currentTransport = ChatsSvc.logicalTransportReadinessForSourceRow(receipt.targetSourceChatRowId);
+    final now = DateTime.now().millisecondsSinceEpoch;
     if (currentRevision == null ||
+        currentTransport == null ||
+        currentTransport.revision != receipt.transportReadinessRevision ||
+        currentTransport.sendDispositionAt(now).name != receipt.transportSendDisposition ||
+        currentTransport.sendDispositionAt(now) == LogicalTransportSendDisposition.blocked ||
         currentRevision.certificateRevision != receipt.certificateRevision ||
         currentRevision.authorityRevision != receipt.authorityRevision ||
         currentRevision.epoch != receipt.authorityEpoch ||
@@ -1349,6 +1429,7 @@ class OutgoingMessageHandler {
     bool? ddScan,
     String? expectedProviderContextFingerprint,
     bool allowTransientRetry = true,
+    bool allowSocketCompletion = true,
   }) {
     ChatsSvc.updateChat(c);
 
@@ -1430,6 +1511,7 @@ class OutgoingMessageHandler {
               }
             : null,
       ),
+      allowSocketCompletion: allowSocketCompletion,
     );
   }
 
@@ -1443,6 +1525,7 @@ class OutgoingMessageHandler {
     bool? ddScan,
     String? expectedProviderContextFingerprint,
     bool allowTransientRetry = true,
+    bool allowSocketCompletion = true,
   }) {
     ChatsSvc.updateChat(c);
 
@@ -1487,6 +1570,7 @@ class OutgoingMessageHandler {
         error: error,
         stack: stack,
       ),
+      allowSocketCompletion: allowSocketCompletion,
     );
   }
 
@@ -1499,6 +1583,7 @@ class OutgoingMessageHandler {
     String? transportMethod,
     String? expectedProviderContextFingerprint,
     bool allowTransientRetry = true,
+    bool allowSocketCompletion = true,
   }) async {
     if (attachment == null) {
       throw StateError('Missing attachment for sendAttachment on message ${m.guid}');
@@ -1588,6 +1673,7 @@ class OutgoingMessageHandler {
           attachmentProgress.removeWhere((e) => e.guid == tempGuid);
         },
       ),
+      allowSocketCompletion: allowSocketCompletion,
     );
   }
 
