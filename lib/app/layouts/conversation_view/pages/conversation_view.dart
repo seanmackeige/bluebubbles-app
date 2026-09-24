@@ -318,7 +318,7 @@ class _LogicalComposerGate extends StatelessWidget {
               ? '${status.service ?? 'SMS'} route ready • relay reachability unknown • send allowed'
               : checking
               ? 'Refreshing send authority…'
-              : 'Send paused until the current route is verified';
+              : 'Send blocked — ${status.reason}';
           return SafeArea(
             top: false,
             bottom: false,
@@ -335,7 +335,7 @@ class _LogicalComposerGate extends StatelessWidget {
                     const Icon(Icons.lock_outline, size: 18),
                   const SizedBox(width: 8),
                   Flexible(
-                    child: Text(message, maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center),
+                    child: Text(message, maxLines: 2, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center),
                   ),
                   if (!checking)
                     IconButton(

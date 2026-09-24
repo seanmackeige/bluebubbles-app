@@ -220,6 +220,7 @@ tasks.configureEach { task ->
 def seanRequiredLogicalRouteSchema = 'LOGICAL_CONVERSATION_OUTBOUND_ROUTE_V3_GENERATION_PROVENANCE'
 def seanForbiddenLogicalRouteSchema = 'LOGICAL_CONVERSATION_OUTBOUND_ROUTE_V1_GOLDEN_2155_2156'
 def seanRequiredLogicalReadCertificateSchema = 'LOGICAL_CONVERSATION_READ_CERTIFICATE_V2_N_MEMBER'
+def seanRequiredExecutionGenerationSchema = 'LOGICAL_EXECUTION_GENERATION_CERTIFICATE_V2_PROVIDER_ADVANCEMENT'
 def seanRequiredLogicalDraftSchema = 'LOGICAL_DRAFT_V1'
 def seanRequiredLogicalAdmissionSchema = 'LOGICAL_SEND_ADMISSION_V1'
 def seanRequiredIncrementalProjectionSchema = 'INCREMENTAL_LOGICAL_PROJECTION_V1'
@@ -248,6 +249,7 @@ def verifySeanLogicalRouteAot = { File apk ->
             boolean hasRequiredRoute = asciiPayload.contains(seanRequiredLogicalRouteSchema)
             boolean hasForbiddenRoute = asciiPayload.contains(seanForbiddenLogicalRouteSchema)
             boolean hasRequiredReadCertificate = asciiPayload.contains(seanRequiredLogicalReadCertificateSchema)
+            boolean hasRequiredExecutionGeneration = asciiPayload.contains(seanRequiredExecutionGenerationSchema)
             boolean hasRequiredLogicalDraft = asciiPayload.contains(seanRequiredLogicalDraftSchema)
             boolean hasRequiredLogicalAdmission = asciiPayload.contains(seanRequiredLogicalAdmissionSchema)
             boolean hasRequiredIncrementalProjection = asciiPayload.contains(seanRequiredIncrementalProjectionSchema)
@@ -255,17 +257,20 @@ def verifySeanLogicalRouteAot = { File apk ->
             if (!hasRequiredRoute && hasForbiddenRoute) {
                 throw new GradleException("SEAN_RELEASE_AOT_STALE_ROUTE_SCHEMA_V1: ${entry.name}")
             }
+            if (!hasRequiredReadCertificate && hasForbiddenPairId) {
+                throw new GradleException("SEAN_RELEASE_AOT_STALE_READ_CERTIFICATE_PAIR: ${entry.name}")
+            }
             if (!hasRequiredRoute) {
                 throw new GradleException("SEAN_RELEASE_AOT_ROUTE_SCHEMA_MISSING: ${entry.name}")
             }
             if (hasForbiddenRoute) {
                 throw new GradleException("SEAN_RELEASE_AOT_FORBIDDEN_ROUTE_SCHEMA_PRESENT: ${entry.name}")
             }
-            if (!hasRequiredReadCertificate && hasForbiddenPairId) {
-                throw new GradleException("SEAN_RELEASE_AOT_STALE_READ_CERTIFICATE_PAIR: ${entry.name}")
-            }
             if (!hasRequiredReadCertificate) {
                 throw new GradleException("SEAN_RELEASE_AOT_READ_CERTIFICATE_SCHEMA_MISSING: ${entry.name}")
+            }
+            if (!hasRequiredExecutionGeneration) {
+                throw new GradleException("SEAN_RELEASE_AOT_EXECUTION_GENERATION_SCHEMA_MISSING: ${entry.name}")
             }
             if (!hasRequiredLogicalDraft) {
                 throw new GradleException("SEAN_RELEASE_AOT_LOGICAL_DRAFT_SCHEMA_MISSING: ${entry.name}")

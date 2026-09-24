@@ -24,6 +24,25 @@ const _alternateParticipants = <LogicalAddressEvidence>[
   LogicalAddressEvidence(address: _otherSelf),
 ];
 
+const _currentComcastExternalParticipants = <LogicalAddressEvidence>[
+  LogicalAddressEvidence(address: 'tel:+1 202-555-0100', country: 'US'),
+  LogicalAddressEvidence(address: 'tel:+1 202-555-0101', country: 'US'),
+  LogicalAddressEvidence(address: 'tel:+1 202-555-0102', country: 'US'),
+  LogicalAddressEvidence(address: 'tel:+1 202-555-0103', country: 'US'),
+  LogicalAddressEvidence(address: 'tel:+1 202-555-0104', country: 'US'),
+  LogicalAddressEvidence(address: 'tel:+1 202-555-0105', country: 'US'),
+  LogicalAddressEvidence(address: 'tel:+1 202-555-0106', country: 'US'),
+  LogicalAddressEvidence(address: 'tel:+1 202-555-0107', country: 'US'),
+  LogicalAddressEvidence(address: 'tel:+1 202-555-0108', country: 'US'),
+  LogicalAddressEvidence(address: 'tel:+1 202-555-0109', country: 'US'),
+  LogicalAddressEvidence(address: 'tel:+1 202-555-0110', country: 'US'),
+  LogicalAddressEvidence(address: 'tel:+1 202-555-0111', country: 'US'),
+  LogicalAddressEvidence(address: 'tel:+1 202-555-0112', country: 'US'),
+  LogicalAddressEvidence(address: 'tel:+1 202-555-0113', country: 'US'),
+  LogicalAddressEvidence(address: 'tel:+1 202-555-0114', country: 'US'),
+  LogicalAddressEvidence(address: 'tel:+1 202-555-0115', country: 'US'),
+];
+
 LogicalRouteCandidateEvidence _candidate(
   int rowId, {
   List<LogicalAddressEvidence>? participants,
@@ -129,7 +148,9 @@ LogicalRouteMessageEvidence _message(
   associatedMessageGuid: associatedMessageGuid,
 );
 
-LogicalExecutionGenerationCertificate _generationCertificate() => LogicalExecutionGenerationCertificate(
+LogicalExecutionGenerationCertificate _generationCertificate({
+  List<LogicalAddressEvidence> externalParticipants = _writableParticipants,
+}) => LogicalExecutionGenerationCertificate(
   schema: logicalExecutionGenerationCertificateSchema,
   logicalId: _logicalId,
   evidenceReceiptCommit: '272fb442c343665459957eaf52b6e61411dd7e3e',
@@ -137,6 +158,14 @@ LogicalExecutionGenerationCertificate _generationCertificate() => LogicalExecuti
   predecessorService: 'iMessage',
   expectedCurrentMemberCount: 2,
   expectedPredecessorMemberCount: 1,
+  expectedExternalParticipantCount: externalParticipants.length,
+  expectedExternalParticipantSetSha256: LogicalConversationOutboundRoutePolicy.externalParticipantSetFingerprint(
+    externalParticipants
+        .map(LogicalConversationOutboundRoutePolicy.normalizeRoutableAddress)
+        .whereType<String>()
+        .toSet(),
+  ),
+  predecessorHandoffGuidSha256: _anchorFingerprint('predecessor-terminal'),
   authorizedOutboundGuidSha256: _anchorFingerprint('authorized-anchor'),
   maximumTransitionEdgeDelayMilliseconds: 60,
   maximumNaturalResponseDelayMilliseconds: 900,
@@ -214,6 +243,115 @@ LogicalRouteEvidence _generationEvidence({
   );
 }
 
+LogicalRouteEvidence _advancedGenerationEvidence({
+  List<int>? order,
+  int predecessorRow = 30,
+  int writableRow = _writableRow,
+  int selfVariantRow = _alternateRow,
+  List<LogicalAddressEvidence> externalParticipants = _writableParticipants,
+  List<LogicalAddressEvidence>? certificateExternalParticipants,
+  List<LogicalAddressEvidence>? writableParticipants,
+  List<LogicalAddressEvidence>? selfVariantParticipants,
+  String writableService = 'SMS',
+  int predecessorReactivationAt = 6000,
+  String crossMemberTarget = 'self-variant-post-reactivation',
+  int crossMemberEdgeAt = 7100,
+  int crossMemberEdgeError = 0,
+  int crossMemberTargetItemType = 0,
+  bool includePostAdvancementResponse = true,
+}) {
+  final candidates = <int, LogicalRouteCandidateEvidence>{
+    predecessorRow: _candidate(
+      predecessorRow,
+      sourceGuid: 'predecessor-guid',
+      sourceService: 'iMessage',
+      participants: externalParticipants,
+      lastSeenMessageGuid: 'reactivated-predecessor',
+      groupPhotoGuid: 'shared-group-photo',
+      messages: [
+        _message('predecessor-terminal', 301, 1000, isFromMe: true),
+        _message('reactivated-predecessor', 302, predecessorReactivationAt, isFromMe: true),
+      ],
+      successfulOutbounds: [
+        const LogicalSuccessfulOutboundEvidence(
+          messageGuid: 'predecessor-terminal',
+          messageRowId: 301,
+          createdAtEpoch: 1000,
+        ),
+        LogicalSuccessfulOutboundEvidence(
+          messageGuid: 'reactivated-predecessor',
+          messageRowId: 302,
+          createdAtEpoch: predecessorReactivationAt,
+        ),
+      ],
+    ),
+    writableRow: _candidate(
+      writableRow,
+      sourceGuid: 'current-writable-guid',
+      sourceService: writableService,
+      participants: writableParticipants ?? externalParticipants,
+      lastKnownHybridState: true,
+      lastSeenMessageGuid: 'writable-latest',
+      groupPhotoGuid: 'shared-group-photo',
+      messages: [
+        _message('transition-reaction', 101, 1010, associatedMessageGuid: 'p:0/predecessor-terminal'),
+        _message('authorized-anchor', 102, 2000, isFromMe: true),
+        _message('current-normal', 103, 3000),
+        _message('post-reactivation-outbound', 104, 7000, isFromMe: true),
+        _message(
+          'current-cross-member-edge',
+          105,
+          crossMemberEdgeAt,
+          error: crossMemberEdgeError,
+          associatedMessageGuid: 'p:0/$crossMemberTarget',
+        ),
+        _message('writable-latest', 106, 9000),
+      ],
+      successfulOutbounds: const [
+        LogicalSuccessfulOutboundEvidence(messageGuid: 'authorized-anchor', messageRowId: 102, createdAtEpoch: 2000),
+        LogicalSuccessfulOutboundEvidence(
+          messageGuid: 'post-reactivation-outbound',
+          messageRowId: 104,
+          createdAtEpoch: 7000,
+        ),
+      ],
+    ),
+    selfVariantRow: _candidate(
+      selfVariantRow,
+      sourceGuid: 'current-self-variant-guid',
+      sourceService: 'SMS',
+      participants:
+          selfVariantParticipants ?? [...externalParticipants, const LogicalAddressEvidence(address: _otherSelf)],
+      lastKnownHybridState: true,
+      lastSeenMessageGuid: 'self-variant-latest',
+      messages: [
+        _message('self-variant-outbound', 201, 1500, isFromMe: true),
+        _message('natural-response', 202, 2300),
+        _message('self-variant-post-reactivation', 203, 6900, itemType: crossMemberTargetItemType),
+        if (includePostAdvancementResponse) _message('post-reactivation-response', 204, 7200),
+        _message('self-variant-latest', 205, 8000),
+      ],
+      successfulOutbounds: const [
+        LogicalSuccessfulOutboundEvidence(
+          messageGuid: 'self-variant-outbound',
+          messageRowId: 201,
+          createdAtEpoch: 1500,
+        ),
+      ],
+    ),
+  };
+  final ordered = (order ?? [predecessorRow, writableRow, selfVariantRow])
+      .map((rowId) => candidates[rowId]!)
+      .toList(growable: false);
+  return _evidence(
+    certifiedSourceChatGuids: {for (final candidate in ordered) candidate.sourceChatRowId: candidate.sourceChatGuid},
+    executionGenerationCertificate: _generationCertificate(
+      externalParticipants: certificateExternalParticipants ?? externalParticipants,
+    ),
+    candidates: ordered,
+  );
+}
+
 void main() {
   group('current execution generation certificate', () {
     const newMessage = LogicalMutationRequest(mutationClass: LogicalMutationClass.newMessage);
@@ -235,7 +373,7 @@ void main() {
       expect(reverse.physicalTargetRowIds, forward.physicalTargetRowIds);
     });
 
-    test('stale-generation normal traffic after the handoff fails closed', () {
+    test('predecessor activity without current-generation reproof fails closed', () {
       final evidence = _generationEvidence(
         predecessorMessages: [
           _message('predecessor-terminal', 301, 1000, isFromMe: true),
@@ -244,7 +382,139 @@ void main() {
       );
       final decision = _resolve(newMessage, evidence: evidence);
       expect(decision.isQualified, isFalse);
-      expect(decision.reason, 'PREDECESSOR_TERMINAL_POINTER_CONTRADICTION');
+      expect(decision.reason, 'CURRENT_GENERATION_REPROOF_AFTER_PREDECESSOR_ADVANCEMENT_MISSING');
+    });
+
+    test('current natural Comcast-shaped advancement re-proves exactly one SMS writer', () {
+      final decision = _resolve(newMessage, evidence: _advancedGenerationEvidence());
+      expect(decision.isSingleTarget, isTrue);
+      expect(decision.physicalTargetRowIds, [_writableRow]);
+      expect(
+        decision.reason,
+        'CURRENT_EXECUTION_GENERATION_REPROVEN_AFTER_PREDECESSOR_ACTIVITY_UNIQUE_WRITABLE_SOURCE',
+      );
+    });
+
+    test('current public-safe 2027 2155 2156 fixture preserves all 16 external identities', () {
+      final evidence = _advancedGenerationEvidence(
+        order: const [2155, 2027, 2156],
+        predecessorRow: 2027,
+        writableRow: 2156,
+        selfVariantRow: 2155,
+        externalParticipants: _currentComcastExternalParticipants,
+      );
+      final decision = _resolve(newMessage, evidence: evidence);
+      expect(evidence.candidates.map((candidate) => candidate.sourceChatRowId).toSet(), {2027, 2155, 2156});
+      expect(evidence.executionGenerationCertificate!.expectedExternalParticipantCount, 16);
+      expect(decision.isSingleTarget, isTrue);
+      expect(decision.physicalTargetRowIds, [2156]);
+    });
+
+    test('production certificate pins the independently observed current external set', () {
+      expect(LogicalConversationOutboundRoutePolicy.comcastNodeUpdatesGeneration.expectedExternalParticipantCount, 16);
+      expect(
+        LogicalConversationOutboundRoutePolicy.comcastNodeUpdatesGeneration.expectedExternalParticipantSetSha256,
+        '7c5deb71cf0ad257a7b708b25ed4c7aa0c0f0f3dfb2e1694ed4f32d60b71e8bc',
+      );
+    });
+
+    test('current natural Comcast-shaped advancement is input-order invariant', () {
+      final forward = _resolve(newMessage, evidence: _advancedGenerationEvidence());
+      final reverse = _resolve(
+        newMessage,
+        evidence: _advancedGenerationEvidence(order: const [_alternateRow, _writableRow, 30]),
+      );
+      expect(reverse.reason, forward.reason);
+      expect(reverse.physicalTargetRowIds, forward.physicalTargetRowIds);
+    });
+
+    test('two current writers after predecessor advancement fail closed', () {
+      final decision = _resolve(
+        newMessage,
+        evidence: _advancedGenerationEvidence(selfVariantParticipants: _writableParticipants),
+      );
+      expect(decision.isQualified, isFalse);
+      expect(decision.reason, 'CURRENT_GENERATION_WRITER_NOT_UNIQUE_AFTER_PREDECESSOR_ADVANCEMENT');
+    });
+
+    test('zero current writers after predecessor advancement fail closed', () {
+      final decision = _resolve(
+        newMessage,
+        evidence: _advancedGenerationEvidence(
+          writableParticipants: _alternateParticipants,
+          selfVariantParticipants: _alternateParticipants,
+        ),
+      );
+      expect(decision.isQualified, isFalse);
+      expect(decision.reason, 'GENERATION_HANDOFF_SOURCE_NOT_WRITABLE');
+    });
+
+    test('service-generation conflict after predecessor advancement fails closed', () {
+      final decision = _resolve(newMessage, evidence: _advancedGenerationEvidence(writableService: 'iMessage'));
+      expect(decision.isQualified, isFalse);
+      expect(decision.reason, 'UNCLASSIFIED_EXECUTION_GENERATION_MEMBER');
+    });
+
+    test('predecessor advancement newer than the current reproof invalidates stale authority', () {
+      final decision = _resolve(newMessage, evidence: _advancedGenerationEvidence(predecessorReactivationAt: 9500));
+      expect(decision.isQualified, isFalse);
+      expect(decision.reason, 'CURRENT_GENERATION_REPROOF_AFTER_PREDECESSOR_ADVANCEMENT_MISSING');
+    });
+
+    test('cross-member reproof must retain an exact current message target', () {
+      final decision = _resolve(
+        newMessage,
+        evidence: _advancedGenerationEvidence(crossMemberTarget: 'unrelated-or-missing-target'),
+      );
+      expect(decision.isQualified, isFalse);
+      expect(decision.reason, 'CURRENT_GENERATION_CROSS_MEMBER_REPROOF_AFTER_PREDECESSOR_ADVANCEMENT_MISSING');
+    });
+
+    test('failed cross-member relationship cannot become advancement proof', () {
+      final decision = _resolve(newMessage, evidence: _advancedGenerationEvidence(crossMemberEdgeError: 4));
+      expect(decision.isQualified, isFalse);
+      expect(decision.reason, 'CURRENT_GENERATION_CROSS_MEMBER_REPROOF_AFTER_PREDECESSOR_ADVANCEMENT_MISSING');
+    });
+
+    test('relationship cannot target a future current-generation message', () {
+      final decision = _resolve(newMessage, evidence: _advancedGenerationEvidence(crossMemberEdgeAt: 6800));
+      expect(decision.isQualified, isFalse);
+      expect(decision.reason, 'CURRENT_GENERATION_CROSS_MEMBER_REPROOF_AFTER_PREDECESSOR_ADVANCEMENT_MISSING');
+    });
+
+    test('relationship target must be authority-bearing natural activity', () {
+      final decision = _resolve(newMessage, evidence: _advancedGenerationEvidence(crossMemberTargetItemType: 1));
+      expect(decision.isQualified, isFalse);
+      expect(decision.reason, 'CURRENT_GENERATION_CROSS_MEMBER_REPROOF_AFTER_PREDECESSOR_ADVANCEMENT_MISSING');
+    });
+
+    test('current writer requires a bounded natural response after predecessor advancement', () {
+      final decision = _resolve(
+        newMessage,
+        evidence: _advancedGenerationEvidence(includePostAdvancementResponse: false),
+      );
+      expect(decision.isQualified, isFalse);
+      expect(decision.reason, 'CURRENT_GENERATION_NATURAL_RESPONSE_REPROOF_AFTER_PREDECESSOR_ADVANCEMENT_MISSING');
+    });
+
+    test('simultaneous certified-member participant co-drift fails the admitted-set digest', () {
+      const driftedExternal = <LogicalAddressEvidence>[
+        LogicalAddressEvidence(address: 'tel:+1 303-555-0101', country: 'US'),
+        LogicalAddressEvidence(address: 'mailto:different@example.invalid'),
+      ];
+      final decision = _resolve(
+        newMessage,
+        evidence: _advancedGenerationEvidence(
+          externalParticipants: driftedExternal,
+          certificateExternalParticipants: _writableParticipants,
+        ),
+      );
+      expect(decision.isQualified, isFalse);
+      expect(decision.reason, 'INTENDED_EXTERNAL_PARTICIPANT_SET_CERTIFICATE_MISMATCH');
+    });
+
+    test('predecessor advancement changes the execution authority revision', () {
+      expect(_generationEvidence().authorityRevision, isNot(_advancedGenerationEvidence().authorityRevision));
     });
 
     test('future unadmitted physical identity cannot inherit write authority', () {

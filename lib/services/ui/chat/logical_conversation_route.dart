@@ -4,7 +4,7 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 
 const logicalConversationOutboundRouteSchema = 'LOGICAL_CONVERSATION_OUTBOUND_ROUTE_V3_GENERATION_PROVENANCE';
-const logicalExecutionGenerationCertificateSchema = 'LOGICAL_EXECUTION_GENERATION_CERTIFICATE_V1';
+const logicalExecutionGenerationCertificateSchema = 'LOGICAL_EXECUTION_GENERATION_CERTIFICATE_V2_PROVIDER_ADVANCEMENT';
 
 enum LogicalMutationClass { newMessage, reply, reaction, attachment, markRead, unsupported }
 
@@ -176,6 +176,9 @@ class LogicalExecutionGenerationCertificate {
     required this.predecessorService,
     required this.expectedCurrentMemberCount,
     required this.expectedPredecessorMemberCount,
+    required this.expectedExternalParticipantCount,
+    required this.expectedExternalParticipantSetSha256,
+    required this.predecessorHandoffGuidSha256,
     required this.authorizedOutboundGuidSha256,
     required this.maximumTransitionEdgeDelayMilliseconds,
     required this.maximumNaturalResponseDelayMilliseconds,
@@ -189,6 +192,9 @@ class LogicalExecutionGenerationCertificate {
   final String predecessorService;
   final int expectedCurrentMemberCount;
   final int expectedPredecessorMemberCount;
+  final int expectedExternalParticipantCount;
+  final String expectedExternalParticipantSetSha256;
+  final String predecessorHandoffGuidSha256;
   final String authorizedOutboundGuidSha256;
   final int maximumTransitionEdgeDelayMilliseconds;
   final int maximumNaturalResponseDelayMilliseconds;
@@ -203,6 +209,9 @@ class LogicalExecutionGenerationCertificate {
       currentService != predecessorService &&
       expectedCurrentMemberCount > 0 &&
       expectedPredecessorMemberCount > 0 &&
+      expectedExternalParticipantCount > 1 &&
+      RegExp(r'^[0-9a-f]{64}$').hasMatch(expectedExternalParticipantSetSha256) &&
+      RegExp(r'^[0-9a-f]{64}$').hasMatch(predecessorHandoffGuidSha256) &&
       RegExp(r'^[0-9a-f]{64}$').hasMatch(authorizedOutboundGuidSha256) &&
       maximumTransitionEdgeDelayMilliseconds > 0 &&
       maximumNaturalResponseDelayMilliseconds > 0 &&
@@ -303,7 +312,9 @@ class LogicalRouteEvidence {
       'executionGeneration': _generationJson(executionGenerationCertificate),
       'candidateScopeSnapshotComplete': candidateScopeSnapshotComplete,
       'unadmittedCandidates': [for (final entry in unadmitted) '${entry.key}:${entry.value}'],
-      'candidates': [for (final candidate in orderedCandidates) _candidateJson(candidate)],
+      'candidates': [
+        for (final candidate in orderedCandidates) _candidateJson(candidate, executionGenerationCertificate),
+      ],
     };
     return sha256.convert(utf8.encode(jsonEncode(payload))).toString();
   }
@@ -323,14 +334,34 @@ class LogicalRouteEvidence {
       'predecessorService': certificate.predecessorService,
       'expectedCurrentMemberCount': certificate.expectedCurrentMemberCount,
       'expectedPredecessorMemberCount': certificate.expectedPredecessorMemberCount,
+      'expectedExternalParticipantCount': certificate.expectedExternalParticipantCount,
+      'expectedExternalParticipantSetSha256': certificate.expectedExternalParticipantSetSha256,
+      'predecessorHandoffGuidSha256': certificate.predecessorHandoffGuidSha256,
       'authorizedOutboundGuidSha256': certificate.authorizedOutboundGuidSha256,
       'maximumTransitionEdgeDelayMilliseconds': certificate.maximumTransitionEdgeDelayMilliseconds,
       'maximumNaturalResponseDelayMilliseconds': certificate.maximumNaturalResponseDelayMilliseconds,
     };
   }
 
-  static Map<String, dynamic> _candidateJson(LogicalRouteCandidateEvidence candidate) {
+  static Map<String, dynamic> _candidateJson(
+    LogicalRouteCandidateEvidence candidate,
+    LogicalExecutionGenerationCertificate? generation,
+  ) {
     final participants = candidate.participants.map(_addressJson).toList()..sort(_compareJsonText);
+    final isPredecessor =
+        generation != null &&
+        candidate.sourceService == generation.predecessorService &&
+        candidate.lastKnownHybridState == null;
+    final predecessorNaturals = isPredecessor
+        ? candidate.messages.where((message) => message.isInboundNormal || message.isSuccessfulOutbound).toList()
+        : const <LogicalRouteMessageEvidence>[];
+    if (predecessorNaturals.length > 1) {
+      predecessorNaturals.sort((left, right) {
+        final byTime = left.createdAtEpoch.compareTo(right.createdAtEpoch);
+        return byTime != 0 ? byTime : left.messageGuid.compareTo(right.messageGuid);
+      });
+    }
+    final latestPredecessorNatural = predecessorNaturals.isEmpty ? null : predecessorNaturals.last;
     return <String, dynamic>{
       'sourceChatRowId': candidate.sourceChatRowId,
       'sourceChatGuid': candidate.sourceChatGuid,
@@ -344,6 +375,16 @@ class LogicalRouteEvidence {
       'lastKnownHybridState': candidate.lastKnownHybridState,
       'shouldForceToSms': candidate.shouldForceToSms,
       'groupPhotoGuid': candidate.groupPhotoGuid,
+      if (isPredecessor) 'lastSeenMessageGuid': candidate.lastSeenMessageGuid,
+      if (latestPredecessorNatural != null)
+        'latestPredecessorNatural': <String, dynamic>{
+          'messageGuid': latestPredecessorNatural.messageGuid,
+          'messageRowId': latestPredecessorNatural.messageRowId,
+          'createdAtEpoch': latestPredecessorNatural.createdAtEpoch,
+          'isFromMe': latestPredecessorNatural.isFromMe,
+          'error': latestPredecessorNatural.error,
+          'itemType': latestPredecessorNatural.itemType,
+        },
       // Message chronology is qualification evidence, not an authority
       // identity by itself. The derived route decision is digested by the
       // caller, so routine message arrivals do not invalidate a draft while a
@@ -500,8 +541,10 @@ class _LogicalGenerationQualification {
     this.currentCandidates = const [],
   });
 
-  const _LogicalGenerationQualification.qualified(List<LogicalRouteCandidateEvidence> candidates)
-    : this._(isQualified: true, reason: 'CURRENT_EXECUTION_GENERATION_PROVEN', currentCandidates: candidates);
+  const _LogicalGenerationQualification.qualified(
+    List<LogicalRouteCandidateEvidence> candidates, {
+    required String reason,
+  }) : this._(isQualified: true, reason: reason, currentCandidates: candidates);
 
   const _LogicalGenerationQualification.notProven(String reason) : this._(isQualified: false, reason: reason);
 
@@ -527,13 +570,17 @@ class LogicalConversationOutboundRoutePolicy {
     predecessorService: 'iMessage',
     expectedCurrentMemberCount: 2,
     expectedPredecessorMemberCount: 1,
+    expectedExternalParticipantCount: 16,
+    expectedExternalParticipantSetSha256: '7c5deb71cf0ad257a7b708b25ed4c7aa0c0f0f3dfb2e1694ed4f32d60b71e8bc',
+    predecessorHandoffGuidSha256: '6a078f896a2324b55434e4f103e16fc9b580f4eab909e6e8456ba14ea5c8bc5d',
     authorizedOutboundGuidSha256: '7b0b32bebfa9a6a4811d19f7a33a7a6cc451a015b5d2a0ba8118eba97542f649',
     maximumTransitionEdgeDelayMilliseconds: 60 * 1000,
     maximumNaturalResponseDelayMilliseconds: 15 * 60 * 1000,
     explanation:
         'Apple chat properties and message account/service provenance establish an iMessage-to-SMS generation '
-        'succession. A terminal cross-generation reaction, the independently authorized outbound, its natural '
-        'response, and post-cutover last-seen pointers admit only the current SMS generation for execution.',
+        'succession. The exact handoff reaction, the independently authorized outbound, its natural response, and '
+        'post-cutover last-seen pointers admit only the current SMS generation. Later predecessor activity never '
+        'inherits authority and can be superseded only by fresh current-generation relationships and response proof.',
   );
 
   static LogicalRouteDecision resolve(LogicalRouteEvidence evidence, LogicalMutationRequest request) {
@@ -621,6 +668,16 @@ class LogicalConversationOutboundRoutePolicy {
     return null;
   }
 
+  /// Public-safe binding used by the execution certificate. Each already-
+  /// normalized external identity is individually hashed before the sorted set
+  /// is hashed, matching the independent provider observer's admitted-set ID.
+  static String externalParticipantSetFingerprint(Set<String> normalizedParticipants) {
+    final memberFingerprints =
+        normalizedParticipants.map((participant) => sha256.convert(utf8.encode(participant)).toString()).toList()
+          ..sort();
+    return sha256.convert(utf8.encode('${memberFingerprints.join('\n')}\n')).toString();
+  }
+
   static LogicalRouteDecision _qualifyWritableSource(LogicalRouteEvidence evidence) {
     final sourceQualification = _qualifyCertifiedSources(evidence);
     if (!sourceQualification.isQualified) return sourceQualification;
@@ -633,12 +690,14 @@ class LogicalConversationOutboundRoutePolicy {
     }
 
     var routeCandidates = evidence.candidates;
+    String? generationReason;
     if (evidence.executionGenerationCertificate != null) {
       final generation = _qualifyExecutionGeneration(evidence, selfMembershipByRow);
       if (!generation.isQualified) {
         return LogicalRouteDecision.notProven(generation.reason);
       }
       routeCandidates = generation.currentCandidates;
+      generationReason = generation.reason;
     }
 
     final writable = routeCandidates
@@ -669,7 +728,7 @@ class LogicalConversationOutboundRoutePolicy {
     return LogicalRouteDecision.qualified(
       evidence.executionGenerationCertificate == null
           ? 'UNIQUE_CURRENT_PROVENANCE_WRITABLE_SOURCE'
-          : 'CURRENT_EXECUTION_GENERATION_PROVEN_UNIQUE_WRITABLE_SOURCE',
+          : '${generationReason ?? 'CURRENT_EXECUTION_GENERATION_PROVEN'}_UNIQUE_WRITABLE_SOURCE',
       [selected.sourceChatRowId],
     );
   }
@@ -712,25 +771,32 @@ class LogicalConversationOutboundRoutePolicy {
     }
 
     final predecessorCandidate = predecessor.single;
-    final predecessorNormals = predecessorCandidate.messages.where((message) => message.isNormal).toList();
-    if (predecessorNormals.isEmpty) {
+    final predecessorNaturals = predecessorCandidate.messages.where(_isAuthorityBearingNatural).toList()
+      ..sort(_compareMessageChronology);
+    if (predecessorNaturals.isEmpty) {
       return const _LogicalGenerationQualification.notProven('PREDECESSOR_NORMAL_HISTORY_MISSING');
     }
-    predecessorNormals.sort(_compareMessageChronology);
-    final terminalPredecessorMessage = predecessorNormals.last;
-    if (!terminalPredecessorMessage.isSuccessfulOutbound ||
-        predecessorCandidate.lastSeenMessageGuid != terminalPredecessorMessage.messageGuid) {
-      return const _LogicalGenerationQualification.notProven('PREDECESSOR_TERMINAL_POINTER_CONTRADICTION');
+
+    final predecessorHandoffAnchors = predecessorNaturals
+        .where(
+          (message) =>
+              message.isSuccessfulOutbound &&
+              _anchorFingerprint(message.messageGuid) == certificate.predecessorHandoffGuidSha256,
+        )
+        .toList(growable: false);
+    if (predecessorHandoffAnchors.length != 1) {
+      return const _LogicalGenerationQualification.notProven('PREDECESSOR_HANDOFF_ANCHOR_MISSING');
     }
+    final predecessorHandoff = predecessorHandoffAnchors.single;
 
     final transitionSources = <LogicalRouteCandidateEvidence>{};
     for (final candidate in current) {
       for (final message in candidate.messages) {
         if (_normalizedRelationshipTarget(message.associatedMessageGuid) !=
-            terminalPredecessorMessage.messageGuid.toUpperCase()) {
+            predecessorHandoff.messageGuid.toUpperCase()) {
           continue;
         }
-        final delay = message.createdAtEpoch - terminalPredecessorMessage.createdAtEpoch;
+        final delay = message.createdAtEpoch - predecessorHandoff.createdAtEpoch;
         if (delay >= 0 && delay <= certificate.maximumTransitionEdgeDelayMilliseconds) {
           transitionSources.add(candidate);
         }
@@ -751,7 +817,7 @@ class LogicalConversationOutboundRoutePolicy {
 
     for (final candidate in current) {
       final postTransitionNormals = candidate.messages.where(
-        (message) => message.isNormal && message.createdAtEpoch > terminalPredecessorMessage.createdAtEpoch,
+        (message) => _isAuthorityBearingNatural(message) && message.createdAtEpoch > predecessorHandoff.createdAtEpoch,
       );
       if (postTransitionNormals.isEmpty) {
         return const _LogicalGenerationQualification.notProven('CURRENT_GENERATION_CONTINUITY_INCOMPLETE');
@@ -760,7 +826,7 @@ class LogicalConversationOutboundRoutePolicy {
       final lastSeen = candidate.messages.where((message) => message.messageGuid == lastSeenGuid).toList();
       if (lastSeen.length != 1 ||
           lastSeen.single.itemType != 0 ||
-          lastSeen.single.createdAtEpoch <= terminalPredecessorMessage.createdAtEpoch) {
+          lastSeen.single.createdAtEpoch <= predecessorHandoff.createdAtEpoch) {
         return const _LogicalGenerationQualification.notProven('CURRENT_GENERATION_LAST_SEEN_POINTER_CONTRADICTION');
       }
     }
@@ -777,7 +843,7 @@ class LogicalConversationOutboundRoutePolicy {
       return const _LogicalGenerationQualification.notProven('AUTHORIZED_OUTBOUND_GENERATION_ANCHOR_MISSING');
     }
     final anchor = anchored.single.message;
-    if (anchor.createdAtEpoch <= terminalPredecessorMessage.createdAtEpoch) {
+    if (anchor.createdAtEpoch <= predecessorHandoff.createdAtEpoch) {
       return const _LogicalGenerationQualification.notProven('AUTHORIZED_OUTBOUND_PRECEDES_GENERATION_HANDOFF');
     }
 
@@ -792,8 +858,110 @@ class LogicalConversationOutboundRoutePolicy {
       return const _LogicalGenerationQualification.notProven('AUTHORIZED_OUTBOUND_NATURAL_RESPONSE_MISSING');
     }
 
-    return _LogicalGenerationQualification.qualified(current);
+    final latestPredecessor = predecessorNaturals.last;
+    final predecessorLastSeen = predecessorCandidate.messages
+        .where((message) => message.messageGuid == predecessorCandidate.lastSeenMessageGuid)
+        .toList(growable: false);
+    if (predecessorLastSeen.length != 1 ||
+        predecessorLastSeen.single.itemType != 0 ||
+        predecessorLastSeen.single.createdAtEpoch < latestPredecessor.createdAtEpoch) {
+      return const _LogicalGenerationQualification.notProven('PREDECESSOR_LAST_SEEN_POINTER_CONTRADICTION');
+    }
+
+    if (latestPredecessor.messageGuid == predecessorHandoff.messageGuid) {
+      return _LogicalGenerationQualification.qualified(current, reason: 'CURRENT_EXECUTION_GENERATION_PROVEN');
+    }
+
+    final advancementCutoff = latestPredecessor.createdAtEpoch;
+    for (final candidate in current) {
+      final postAdvancementNaturals = candidate.messages.where(
+        (message) => _isAuthorityBearingNatural(message) && message.createdAtEpoch > advancementCutoff,
+      );
+      if (postAdvancementNaturals.isEmpty) {
+        return const _LogicalGenerationQualification.notProven(
+          'CURRENT_GENERATION_REPROOF_AFTER_PREDECESSOR_ADVANCEMENT_MISSING',
+        );
+      }
+      final lastSeen = candidate.messages
+          .where((message) => message.messageGuid == candidate.lastSeenMessageGuid)
+          .toList(growable: false);
+      if (lastSeen.length != 1 ||
+          lastSeen.single.itemType != 0 ||
+          lastSeen.single.createdAtEpoch <= advancementCutoff) {
+        return const _LogicalGenerationQualification.notProven(
+          'CURRENT_GENERATION_REPROOF_LAST_SEEN_POINTER_CONTRADICTION',
+        );
+      }
+    }
+
+    final currentMessageOwners = <String, Set<int>>{};
+    final currentMessagesByGuid = <String, List<LogicalRouteMessageEvidence>>{};
+    for (final candidate in current) {
+      for (final message in candidate.messages) {
+        final guid = message.messageGuid.toUpperCase();
+        currentMessageOwners.putIfAbsent(guid, () => <int>{}).add(candidate.sourceChatRowId);
+        currentMessagesByGuid.putIfAbsent(guid, () => <LogicalRouteMessageEvidence>[]).add(message);
+      }
+    }
+    final postAdvancementCrossMemberEdges = <LogicalRouteMessageEvidence>[];
+    for (final candidate in current) {
+      for (final message in candidate.messages) {
+        if (message.createdAtEpoch <= advancementCutoff || message.error != 0 || message.itemType != 0) continue;
+        final target = _normalizedRelationshipTarget(message.associatedMessageGuid);
+        if (target == null) continue;
+        final owners = currentMessageOwners[target] ?? const <int>{};
+        final targetMessages = currentMessagesByGuid[target] ?? const <LogicalRouteMessageEvidence>[];
+        if (owners.length != 1 || owners.contains(candidate.sourceChatRowId) || targetMessages.length != 1) continue;
+        final targetMessage = targetMessages.single;
+        if (!_isAuthorityBearingNatural(targetMessage) ||
+            targetMessage.createdAtEpoch <= advancementCutoff ||
+            targetMessage.createdAtEpoch > message.createdAtEpoch) {
+          continue;
+        }
+        postAdvancementCrossMemberEdges.add(message);
+      }
+    }
+    if (postAdvancementCrossMemberEdges.isEmpty) {
+      return const _LogicalGenerationQualification.notProven(
+        'CURRENT_GENERATION_CROSS_MEMBER_REPROOF_AFTER_PREDECESSOR_ADVANCEMENT_MISSING',
+      );
+    }
+
+    final writableCurrent = current
+        .where((candidate) => selfMembershipByRow[candidate.sourceChatRowId]?.isEmpty == true)
+        .toList(growable: false);
+    if (writableCurrent.length != 1) {
+      return const _LogicalGenerationQualification.notProven(
+        'CURRENT_GENERATION_WRITER_NOT_UNIQUE_AFTER_PREDECESSOR_ADVANCEMENT',
+      );
+    }
+    final reproofWriter = writableCurrent.single;
+    final postAdvancementOutbounds = reproofWriter.messages
+        .where((message) => message.isSuccessfulOutbound && message.createdAtEpoch > advancementCutoff)
+        .toList(growable: false);
+    final hasPostAdvancementResponse = postAdvancementOutbounds.any(
+      (outbound) => current
+          .where((candidate) => candidate.sourceChatRowId != reproofWriter.sourceChatRowId)
+          .expand((candidate) => candidate.messages)
+          .any((message) {
+            final delay = message.createdAtEpoch - outbound.createdAtEpoch;
+            return message.isInboundNormal && delay > 0 && delay <= certificate.maximumNaturalResponseDelayMilliseconds;
+          }),
+    );
+    if (!hasPostAdvancementResponse) {
+      return const _LogicalGenerationQualification.notProven(
+        'CURRENT_GENERATION_NATURAL_RESPONSE_REPROOF_AFTER_PREDECESSOR_ADVANCEMENT_MISSING',
+      );
+    }
+
+    return _LogicalGenerationQualification.qualified(
+      current,
+      reason: 'CURRENT_EXECUTION_GENERATION_REPROVEN_AFTER_PREDECESSOR_ACTIVITY',
+    );
   }
+
+  static bool _isAuthorityBearingNatural(LogicalRouteMessageEvidence message) =>
+      message.isInboundNormal || message.isSuccessfulOutbound;
 
   static int _compareMessageChronology(LogicalRouteMessageEvidence left, LogicalRouteMessageEvidence right) {
     final byTime = left.createdAtEpoch.compareTo(right.createdAtEpoch);
@@ -899,6 +1067,18 @@ class LogicalConversationOutboundRoutePolicy {
             !globallySeenOutboundGuids.add(outbound.messageGuid)) {
           return const LogicalRouteDecision.notProven('SUCCESSFUL_OUTBOUND_PROVENANCE_AMBIGUOUS');
         }
+      }
+    }
+
+    final generationCertificate = evidence.executionGenerationCertificate;
+    if (generationCertificate != null) {
+      final externalParticipants = acceptedExternalParticipants!;
+      if (externalParticipants.length != generationCertificate.expectedExternalParticipantCount) {
+        return const LogicalRouteDecision.notProven('INTENDED_EXTERNAL_PARTICIPANT_CARDINALITY_CONTRADICTION');
+      }
+      if (externalParticipantSetFingerprint(externalParticipants) !=
+          generationCertificate.expectedExternalParticipantSetSha256) {
+        return const LogicalRouteDecision.notProven('INTENDED_EXTERNAL_PARTICIPANT_SET_CERTIFICATE_MISMATCH');
       }
     }
 

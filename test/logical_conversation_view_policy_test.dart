@@ -198,10 +198,10 @@ void main() {
       expect(result.groupMetadataFingerprint, fixture.groupMetadataFingerprint);
     });
 
-    test('all 14 currently observed cross-chat reactions retain exact targets', () {
+    test('all 15 currently observed cross-chat reactions retain exact targets', () {
       final targets = <LogicalConversationEvent<_MessageFixture>>[];
       final edges = <LogicalConversationEvent<_MessageFixture>>[];
-      for (var index = 0; index < 12; index++) {
+      for (var index = 0; index < 13; index++) {
         final targetGuid = 'pair-target-$index';
         targets.add(_event(targetGuid, 2155, index * 2 + 1));
         edges.add(
@@ -231,7 +231,7 @@ void main() {
       final merged = LogicalConversationViewPolicy.mergePage([...targets, ...edges]);
       final byGuid = {for (final event in merged) event.guid: event};
       final relationshipEvents = merged.where((event) => event.value.relationshipTargetGuid != null).toList();
-      expect(relationshipEvents, hasLength(14));
+      expect(relationshipEvents, hasLength(15));
       for (final edge in relationshipEvents) {
         final target = byGuid[edge.value.relationshipTargetGuid];
         expect(target, isNotNull);

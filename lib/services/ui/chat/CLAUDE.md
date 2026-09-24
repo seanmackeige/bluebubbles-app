@@ -36,6 +36,18 @@ GetIt singleton. Accessed via `ChatsSvc`.
   are not admission evidence.
 - Keep read membership and outbound routing independent. An N-member read
   certificate has no writable target; current route evidence must qualify one.
+- Bind a service-generation handoff to its exact historical provider message;
+  do not require that message to remain the predecessor's terminal message
+  forever. Later predecessor activity fails closed until fresh current-member
+  relationships, last-seen pointers, a unique writer, and a bounded natural
+  response independently re-prove the current execution generation.
+- Bind execution to the independently admitted external-participant count and
+  public-safe set digest. Mutual equality among physical members is necessary
+  but does not admit simultaneous participant co-drift.
+- Advancement relationships must be successful, causal, cross-member edges to
+  an exact authority-bearing natural message after the advancement cutoff.
+- Never promote a predecessor or a new physical candidate from recent activity,
+  title similarity, participant similarity, or service preference alone.
 
 ---
 
