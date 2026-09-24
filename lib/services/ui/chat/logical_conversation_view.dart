@@ -84,7 +84,7 @@ class IncrementalLogicalProjection<T> {
       final id = identityOf(event);
       final existing = _byId[id];
       if (existing != null && provenanceOf(existing) != provenanceOf(event)) {
-        throw StateError('LOGICAL_EVENT_PROVENANCE_CONFLICT:$id');
+        throw StateError('$incrementalLogicalProjectionSchema:LOGICAL_EVENT_PROVENANCE_CONFLICT:$id');
       }
       _byId[id] = event;
     }
@@ -103,7 +103,7 @@ class IncrementalLogicalProjection<T> {
     final id = identityOf(event);
     final existing = _byId[id];
     if (existing != null && provenanceOf(existing) != provenanceOf(event)) {
-      throw StateError('LOGICAL_EVENT_PROVENANCE_CONFLICT:$id');
+      throw StateError('$incrementalLogicalProjectionSchema:LOGICAL_EVENT_PROVENANCE_CONFLICT:$id');
     }
     if (existing != null && (equivalent?.call(existing, event) ?? identical(existing, event))) {
       return LogicalProjectionDelta(

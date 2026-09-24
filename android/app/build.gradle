@@ -222,7 +222,7 @@ def seanForbiddenLogicalRouteSchema = 'LOGICAL_CONVERSATION_OUTBOUND_ROUTE_V1_GO
 def seanRequiredLogicalReadCertificateSchema = 'LOGICAL_CONVERSATION_READ_CERTIFICATE_V2_N_MEMBER'
 def seanRequiredExecutionGenerationSchema = 'LOGICAL_EXECUTION_GENERATION_CERTIFICATE_V2_PROVIDER_ADVANCEMENT'
 def seanRequiredLogicalDraftSchema = 'LOGICAL_DRAFT_V1'
-def seanRequiredLogicalAdmissionSchema = 'LOGICAL_SEND_ADMISSION_V1'
+def seanRequiredLogicalAdmissionSchema = 'LOGICAL_SEND_ADMISSION_V2_TRANSPORT_READINESS'
 def seanRequiredIncrementalProjectionSchema = 'INCREMENTAL_LOGICAL_PROJECTION_V1'
 def seanForbiddenLogicalPairId = 'LGC_V1_8ef6ba9306f2e2c3c2a28990d01a583e5c270c5ec61a313992c9d40322367c7f'
 
