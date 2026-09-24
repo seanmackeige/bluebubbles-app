@@ -420,7 +420,9 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
       return;
     }
 
-    Logger.debug("handleNewMessage: Received new message ${message.guid}, current count: ${_messages.length}");
+    Logger.debug(
+      "$incrementalLogicalProjectionSchema: handleNewMessage received ${message.guid}, current count: ${_messages.length}",
+    );
 
     // Check if message already exists to prevent duplicates
     final existingIndex = _messages.indexWhere((m) => m.guid == message.guid);
