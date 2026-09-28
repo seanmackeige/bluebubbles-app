@@ -169,7 +169,12 @@ enum LogicalConversationMemberEvidenceKind {
   passiveNaturalProduction,
 }
 
-enum LogicalConversationCandidateClassification { historicalInertRelatedIdentity }
+enum LogicalConversationCandidateClassification {
+  certifiedCurrentOrHistoricalReadMember,
+  historicalRelatedButNotSameParticipantSet,
+  legitimatelyDistinct,
+  ambiguousNotEnrolled,
+}
 
 class LogicalConversationMemberProof {
   const LogicalConversationMemberProof({
@@ -204,6 +209,75 @@ class LogicalConversationMemberProof {
       directRelationshipPeerRowIds.isNotEmpty &&
       minimumStructuredRelationshipCount > 0 &&
       explanation.isNotEmpty;
+
+  LogicalConversationMemberProof withAdditionalPairwisePeer(int sourceChatRowId) =>
+      LogicalConversationMemberProof(
+        sourceChatRowId: this.sourceChatRowId,
+        sourceChatGuidHmacSha256: sourceChatGuidHmacSha256,
+        admissionReceiptCommit: admissionReceiptCommit,
+        evidence: evidence,
+        pairwiseComparedSourceRowIds: {...pairwiseComparedSourceRowIds, sourceChatRowId},
+        directRelationshipPeerRowIds: directRelationshipPeerRowIds,
+        minimumStructuredRelationshipCount: minimumStructuredRelationshipCount,
+        explanation: explanation,
+      );
+}
+
+/// Complete, independently collected evidence for one nominated physical chat.
+/// A display name, candidate ordering, or relationship through another new
+/// candidate is deliberately insufficient for admission.
+class LogicalConversationCandidateEvidence {
+  const LogicalConversationCandidateEvidence({
+    required this.sourceChatRowId,
+    required this.sourceChatGuidHmacSha256,
+    required this.admissionReceiptCommit,
+    required this.appleBlueBubblesGuidParity,
+    required this.stableCompleteSnapshots,
+    required this.exactNormalizedExternalParticipants,
+    required this.pairwiseComparedSourceRowIds,
+    required this.directRelationshipPeerRowIds,
+    required this.structuredRelationshipCount,
+    required this.passiveNaturalProduction,
+    required this.groupIdentityContinuity,
+    required this.historicalLineage,
+    required this.explanation,
+  });
+
+  final int sourceChatRowId;
+  final String sourceChatGuidHmacSha256;
+  final String admissionReceiptCommit;
+  final bool appleBlueBubblesGuidParity;
+  final bool stableCompleteSnapshots;
+  final bool exactNormalizedExternalParticipants;
+  final Set<int> pairwiseComparedSourceRowIds;
+  final Set<int> directRelationshipPeerRowIds;
+  final int structuredRelationshipCount;
+  final bool passiveNaturalProduction;
+  final bool groupIdentityContinuity;
+  final bool historicalLineage;
+  final String explanation;
+}
+
+class LogicalConversationCandidateDecision {
+  const LogicalConversationCandidateDecision({
+    required this.sourceChatRowId,
+    required this.classification,
+    required this.reason,
+  });
+
+  final int sourceChatRowId;
+  final LogicalConversationCandidateClassification classification;
+  final String reason;
+}
+
+class LogicalConversationCertificateReconciliation {
+  const LogicalConversationCertificateReconciliation({
+    required this.certificate,
+    required this.decisions,
+  });
+
+  final LogicalConversationReadCertificate certificate;
+  final List<LogicalConversationCandidateDecision> decisions;
 }
 
 class LogicalConversationExcludedCandidateProof {
@@ -272,7 +346,7 @@ class LogicalConversationReadCertificate {
   }
 
   bool get isValid {
-    if (schema != logicalConversationReadCertificateSchema || id.isEmpty || members.length < 2 || members.length > 8) {
+    if (schema != logicalConversationReadCertificateSchema || id.isEmpty || members.length < 2) {
       return false;
     }
     final rows = sourceChatRowIds;
@@ -352,10 +426,10 @@ class LogicalConversationViewPolicy {
         },
         pairwiseComparedSourceRowIds: {2027, 2156},
         directRelationshipPeerRowIds: {2156},
-        minimumStructuredRelationshipCount: 11,
+        minimumStructuredRelationshipCount: 18,
         explanation:
             'GUID parity, exact external membership with only the active self alias added, complete pairwise '
-            'differentials, and direct 2156 reaction relationships prove independent read membership.',
+            'differentials, and 18 direct 2156 reaction relationships prove independent read membership.',
       ),
       LogicalConversationMemberProof(
         sourceChatRowId: 2156,
@@ -373,10 +447,10 @@ class LogicalConversationViewPolicy {
         },
         pairwiseComparedSourceRowIds: {2027, 2155},
         directRelationshipPeerRowIds: {2027, 2155},
-        minimumStructuredRelationshipCount: 13,
+        minimumStructuredRelationshipCount: 20,
         explanation:
             'GUID parity, exact external membership, complete pairwise differentials, direct reactions to both '
-            'other members, and shared group metadata prove independent read membership.',
+            'other members (20 relationships total), and shared group metadata prove independent read membership.',
       ),
     ],
   );
@@ -384,7 +458,7 @@ class LogicalConversationViewPolicy {
   static const fourthCandidate = LogicalConversationExcludedCandidateProof(
     sourceChatRowId: 1674,
     sourceChatGuidHmacSha256: 'e0c906040606a28f6bd9c95abc257d31917977ff4962a451e04169cbe47859f4',
-    classification: LogicalConversationCandidateClassification.historicalInertRelatedIdentity,
+    classification: LogicalConversationCandidateClassification.historicalRelatedButNotSameParticipantSet,
     admissionReceiptCommit: _receipt,
     evidence: {
       'TWO_CURRENT_AND_TWO_HISTORICAL_EXTERNAL_PARTICIPANT_DIFFERENCES',
@@ -397,6 +471,131 @@ class LogicalConversationViewPolicy {
         'The older prior-participant-set lineage ended April 30 and has no structured edge to the current set; '
         'it remains historical/inert and is not enrolled.',
   );
+
+  /// Reconciles a complete nominated universe without trusting input order or
+  /// rewriting a read certificate into write authority. Every admitted
+  /// candidate must bind Apple/provider identity, the exact external set,
+  /// complete pairwise comparisons against the already certified set, and a
+  /// direct structured relationship to an original certified member.
+  static LogicalConversationCertificateReconciliation reconcileCertificate(
+    LogicalConversationReadCertificate base,
+    Iterable<LogicalConversationCandidateEvidence> candidateEvidence,
+  ) {
+    if (!base.isValid) {
+      throw ArgumentError.value(base, 'base', 'BASE_READ_CERTIFICATE_INVALID');
+    }
+    final baseRows = base.sourceChatRowIds;
+    var certificate = base;
+    final decisions = <LogicalConversationCandidateDecision>[];
+    final candidates = candidateEvidence.toList(growable: false)
+      ..sort((left, right) => left.sourceChatRowId.compareTo(right.sourceChatRowId));
+    final rowCounts = <int, int>{};
+    for (final candidate in candidates) {
+      rowCounts.update(candidate.sourceChatRowId, (value) => value + 1, ifAbsent: () => 1);
+    }
+    final duplicateRows = rowCounts.entries.where((entry) => entry.value > 1).map((entry) => entry.key).toSet();
+    if (duplicateRows.isNotEmpty) {
+      return LogicalConversationCertificateReconciliation(
+        certificate: base,
+        decisions: [
+          for (final candidate in candidates)
+            LogicalConversationCandidateDecision(
+              sourceChatRowId: candidate.sourceChatRowId,
+              classification: LogicalConversationCandidateClassification.ambiguousNotEnrolled,
+              reason: duplicateRows.contains(candidate.sourceChatRowId)
+                  ? 'DUPLICATE_CANDIDATE_EVIDENCE'
+                  : 'RECONCILIATION_ABORTED_DUPLICATE_UNIVERSE',
+            ),
+        ],
+      );
+    }
+    for (final candidate in candidates) {
+      if (certificate.containsSourceRowId(candidate.sourceChatRowId)) {
+        decisions.add(LogicalConversationCandidateDecision(
+          sourceChatRowId: candidate.sourceChatRowId,
+          classification: LogicalConversationCandidateClassification.certifiedCurrentOrHistoricalReadMember,
+          reason: 'ALREADY_INDEPENDENTLY_CERTIFIED_READ_MEMBER',
+        ));
+        continue;
+      }
+      if (!candidate.exactNormalizedExternalParticipants) {
+        decisions.add(LogicalConversationCandidateDecision(
+          sourceChatRowId: candidate.sourceChatRowId,
+          classification: candidate.historicalLineage
+              ? LogicalConversationCandidateClassification.historicalRelatedButNotSameParticipantSet
+              : LogicalConversationCandidateClassification.legitimatelyDistinct,
+          reason: candidate.historicalLineage
+              ? 'HISTORICAL_LINEAGE_PARTICIPANT_SET_DIFFERS'
+              : 'DISTINCT_EXTERNAL_PARTICIPANT_SET',
+        ));
+        continue;
+      }
+      final currentRows = certificate.sourceChatRowIds;
+      final hasDirectOriginalRelationship = candidate.directRelationshipPeerRowIds.intersection(baseRows).isNotEmpty;
+      final canAdmit =
+          candidate.sourceChatRowId > 0 &&
+          RegExp(r'^[0-9a-f]{64}$').hasMatch(candidate.sourceChatGuidHmacSha256) &&
+          RegExp(r'^[0-9a-f]{40}$').hasMatch(candidate.admissionReceiptCommit) &&
+          candidate.appleBlueBubblesGuidParity &&
+          candidate.stableCompleteSnapshots &&
+          candidate.pairwiseComparedSourceRowIds.containsAll(currentRows) &&
+          hasDirectOriginalRelationship &&
+          candidate.structuredRelationshipCount > 0 &&
+          candidate.passiveNaturalProduction &&
+          candidate.explanation.isNotEmpty;
+      if (!canAdmit) {
+        decisions.add(LogicalConversationCandidateDecision(
+          sourceChatRowId: candidate.sourceChatRowId,
+          classification: LogicalConversationCandidateClassification.ambiguousNotEnrolled,
+          reason: 'INDIVIDUAL_READ_MEMBERSHIP_PROOF_INCOMPLETE',
+        ));
+        continue;
+      }
+
+      final evidence = <LogicalConversationMemberEvidenceKind>{
+        LogicalConversationMemberEvidenceKind.appleBlueBubblesGuidParity,
+        LogicalConversationMemberEvidenceKind.exactNormalizedExternalParticipants,
+        LogicalConversationMemberEvidenceKind.completePairwiseDifferential,
+        LogicalConversationMemberEvidenceKind.structuredCrossChatRelationship,
+        LogicalConversationMemberEvidenceKind.passiveNaturalProduction,
+        if (candidate.groupIdentityContinuity) LogicalConversationMemberEvidenceKind.sharedGroupIdentity,
+      };
+      final updatedMembers = certificate.members
+          .map((member) => member.withAdditionalPairwisePeer(candidate.sourceChatRowId))
+          .toList(growable: true)
+        ..add(LogicalConversationMemberProof(
+          sourceChatRowId: candidate.sourceChatRowId,
+          sourceChatGuidHmacSha256: candidate.sourceChatGuidHmacSha256,
+          admissionReceiptCommit: candidate.admissionReceiptCommit,
+          evidence: evidence,
+          pairwiseComparedSourceRowIds: currentRows,
+          directRelationshipPeerRowIds: candidate.directRelationshipPeerRowIds.intersection(currentRows),
+          minimumStructuredRelationshipCount: candidate.structuredRelationshipCount,
+          explanation: candidate.explanation,
+        ));
+      final advanced = LogicalConversationReadCertificate(
+        schema: certificate.schema,
+        id: certificate.id,
+        members: updatedMembers,
+        presentationSourceChatRowId: certificate.presentationSourceChatRowId,
+      );
+      if (!advanced.isValid) {
+        decisions.add(LogicalConversationCandidateDecision(
+          sourceChatRowId: candidate.sourceChatRowId,
+          classification: LogicalConversationCandidateClassification.ambiguousNotEnrolled,
+          reason: 'ADVANCED_READ_CERTIFICATE_INVALID',
+        ));
+        continue;
+      }
+      certificate = advanced;
+      decisions.add(LogicalConversationCandidateDecision(
+        sourceChatRowId: candidate.sourceChatRowId,
+        classification: LogicalConversationCandidateClassification.certifiedCurrentOrHistoricalReadMember,
+        reason: 'INDIVIDUAL_READ_MEMBERSHIP_PROVEN',
+      ));
+    }
+    return LogicalConversationCertificateReconciliation(certificate: certificate, decisions: decisions);
+  }
 
   static bool isApprovedSourceRowId(int? rowId) => comcastNodeUpdates.containsSourceRowId(rowId);
 

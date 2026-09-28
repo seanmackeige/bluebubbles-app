@@ -52,6 +52,7 @@ LogicalRouteCandidateEvidence _candidate(
   String? sourceGuid,
   int style = 43,
   String sourceService = 'iMessage',
+  String sourceAccount = 'test-account',
   bool chatSnapshotComplete = true,
   bool? lastKnownHybridState,
   bool? shouldForceToSms = false,
@@ -64,6 +65,7 @@ LogicalRouteCandidateEvidence _candidate(
     sourceChatRowId: rowId,
     sourceChatGuid: sourceGuid ?? (writable ? 'source-a-guid' : 'source-b-guid'),
     sourceService: sourceService,
+    sourceAccount: sourceAccount,
     chatIdentifier: writable ? 'source-a-identifier' : 'source-b-identifier',
     style: style,
     lastAddressedHandle: lastAddressed ?? const LogicalAddressEvidence(address: _activeSelf),
@@ -138,6 +140,8 @@ LogicalRouteMessageEvidence _message(
   int error = 0,
   int itemType = 0,
   String? associatedMessageGuid,
+  String? replyToGuid,
+  String account = 'test-account',
 }) => LogicalRouteMessageEvidence(
   messageGuid: guid,
   messageRowId: rowId,
@@ -146,10 +150,13 @@ LogicalRouteMessageEvidence _message(
   error: error,
   itemType: itemType,
   associatedMessageGuid: associatedMessageGuid,
+  replyToGuid: replyToGuid,
+  account: account,
 );
 
 LogicalExecutionGenerationCertificate _generationCertificate({
   List<LogicalAddressEvidence> externalParticipants = _writableParticipants,
+  bool allowAdditionalCurrentMembers = false,
 }) => LogicalExecutionGenerationCertificate(
   schema: logicalExecutionGenerationCertificateSchema,
   logicalId: _logicalId,
@@ -169,6 +176,7 @@ LogicalExecutionGenerationCertificate _generationCertificate({
   authorizedOutboundGuidSha256: _anchorFingerprint('authorized-anchor'),
   maximumTransitionEdgeDelayMilliseconds: 60,
   maximumNaturalResponseDelayMilliseconds: 900,
+  allowAdditionalCurrentMembers: allowAdditionalCurrentMembers,
   explanation: 'Runtime-shaped generation proof fixture.',
 );
 
@@ -252,12 +260,15 @@ LogicalRouteEvidence _advancedGenerationEvidence({
   List<LogicalAddressEvidence>? certificateExternalParticipants,
   List<LogicalAddressEvidence>? writableParticipants,
   List<LogicalAddressEvidence>? selfVariantParticipants,
+  String writableAccount = 'current-account',
+  String selfVariantAccount = 'current-account',
   String writableService = 'SMS',
   int predecessorReactivationAt = 6000,
   String crossMemberTarget = 'self-variant-post-reactivation',
   int crossMemberEdgeAt = 7100,
   int crossMemberEdgeError = 0,
   int crossMemberTargetItemType = 0,
+  bool useReplyEdge = false,
   bool includePostAdvancementResponse = true,
 }) {
   final candidates = <int, LogicalRouteCandidateEvidence>{
@@ -289,6 +300,7 @@ LogicalRouteEvidence _advancedGenerationEvidence({
       writableRow,
       sourceGuid: 'current-writable-guid',
       sourceService: writableService,
+      sourceAccount: writableAccount,
       participants: writableParticipants ?? externalParticipants,
       lastKnownHybridState: true,
       lastSeenMessageGuid: 'writable-latest',
@@ -303,7 +315,8 @@ LogicalRouteEvidence _advancedGenerationEvidence({
           105,
           crossMemberEdgeAt,
           error: crossMemberEdgeError,
-          associatedMessageGuid: 'p:0/$crossMemberTarget',
+          associatedMessageGuid: useReplyEdge ? null : 'p:0/$crossMemberTarget',
+          replyToGuid: useReplyEdge ? 'p:0/$crossMemberTarget' : null,
         ),
         _message('writable-latest', 106, 9000),
       ],
@@ -320,6 +333,7 @@ LogicalRouteEvidence _advancedGenerationEvidence({
       selfVariantRow,
       sourceGuid: 'current-self-variant-guid',
       sourceService: 'SMS',
+      sourceAccount: selfVariantAccount,
       participants:
           selfVariantParticipants ?? [...externalParticipants, const LogicalAddressEvidence(address: _otherSelf)],
       lastKnownHybridState: true,
@@ -371,6 +385,78 @@ void main() {
       );
       expect(reverse.reason, forward.reason);
       expect(reverse.physicalTargetRowIds, forward.physicalTargetRowIds);
+    });
+
+    test('new proven current member does not require a hard-coded member count', () {
+      final base = _generationEvidence();
+      final added = _candidate(
+        40,
+        sourceGuid: 'new-evidence-admitted-current-guid',
+        sourceService: 'SMS',
+        participants: _alternateParticipants,
+        lastKnownHybridState: true,
+        lastSeenMessageGuid: 'new-current-last',
+        messages: [
+          _message('new-current-natural', 401, 2400),
+          _message('new-current-last', 402, 4200),
+        ],
+        successfulOutbounds: const [
+          LogicalSuccessfulOutboundEvidence(
+            messageGuid: 'new-current-historical-outbound',
+            messageRowId: 400,
+            createdAtEpoch: 1400,
+          ),
+        ],
+      );
+      final candidates = [...base.candidates, added];
+      final decision = _resolve(
+        newMessage,
+        evidence: _evidence(
+          certifiedSourceChatGuids: {
+            for (final candidate in candidates) candidate.sourceChatRowId: candidate.sourceChatGuid,
+          },
+          executionGenerationCertificate: _generationCertificate(allowAdditionalCurrentMembers: true),
+          candidates: candidates,
+        ),
+      );
+      expect(decision.isSingleTarget, isTrue);
+      expect(decision.physicalTargetRowIds, [_writableRow]);
+    });
+
+    test('additional current member cannot add a second writer', () {
+      final base = _generationEvidence();
+      final added = _candidate(
+        40,
+        sourceGuid: 'new-conflicting-writer-guid',
+        sourceService: 'SMS',
+        participants: _writableParticipants,
+        lastKnownHybridState: true,
+        lastSeenMessageGuid: 'new-writer-last',
+        messages: [
+          _message('new-writer-outbound', 401, 2400, isFromMe: true),
+          _message('new-writer-last', 402, 4200),
+        ],
+        successfulOutbounds: const [
+          LogicalSuccessfulOutboundEvidence(
+            messageGuid: 'new-writer-outbound',
+            messageRowId: 401,
+            createdAtEpoch: 2400,
+          ),
+        ],
+      );
+      final candidates = [...base.candidates, added];
+      final decision = _resolve(
+        newMessage,
+        evidence: _evidence(
+          certifiedSourceChatGuids: {
+            for (final candidate in candidates) candidate.sourceChatRowId: candidate.sourceChatGuid,
+          },
+          executionGenerationCertificate: _generationCertificate(allowAdditionalCurrentMembers: true),
+          candidates: candidates,
+        ),
+      );
+      expect(decision.isQualified, isFalse);
+      expect(decision.reason, 'ROUTE_NOT_PROVEN_EXPANDED_SET_AMBIGUOUS');
     });
 
     test('predecessor activity without current-generation reproof fails closed', () {
@@ -453,6 +539,15 @@ void main() {
       final decision = _resolve(newMessage, evidence: _advancedGenerationEvidence(writableService: 'iMessage'));
       expect(decision.isQualified, isFalse);
       expect(decision.reason, 'UNCLASSIFIED_EXECUTION_GENERATION_MEMBER');
+    });
+
+    test('current-generation account mismatch fails closed', () {
+      final decision = _resolve(
+        newMessage,
+        evidence: _advancedGenerationEvidence(selfVariantAccount: 'different-current-account'),
+      );
+      expect(decision.isQualified, isFalse);
+      expect(decision.reason, 'CURRENT_GENERATION_ACCOUNT_CONTRADICTION');
     });
 
     test('predecessor advancement newer than the current reproof invalidates stale authority', () {
@@ -790,6 +885,25 @@ void main() {
         _resolve(request, evidence: _evidence(logicalId: 'future-apparent-duplicate')).state,
         LogicalRouteState.routeNotProven,
       );
+    });
+
+    test('cross-chat reply retains its exact target as advancement evidence', () {
+      final decision = _resolve(request, evidence: _advancedGenerationEvidence(useReplyEdge: true));
+      expect(decision.isSingleTarget, isTrue);
+      expect(decision.physicalTargetRowIds, [_writableRow]);
+    });
+
+    test('natural outbound reply remains successful provenance and retains its target', () {
+      final reply = _message(
+        'natural-outbound-reply',
+        901,
+        10_000,
+        isFromMe: true,
+        replyToGuid: 'p:0/exact-historical-target',
+      );
+      expect(reply.isNormal, isTrue);
+      expect(reply.isSuccessfulOutbound, isTrue);
+      expect(reply.replyToGuid, 'p:0/exact-historical-target');
     });
 
     test('zero, missing, extra, or duplicate candidates remain unqualified', () {

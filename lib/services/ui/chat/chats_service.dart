@@ -483,6 +483,11 @@ class ChatsService {
         final itemType = (message['itemType'] as num?)?.toInt();
         final isFromMe = message['isFromMe'];
         final associatedMessageGuid = message['associatedMessageGuid']?.toString();
+        final replyToGuid =
+            message['threadOriginatorGuid']?.toString() ??
+            message['threadOriginatorGUID']?.toString() ??
+            message['replyToGuid']?.toString();
+        final account = message['account']?.toString() ?? '';
         if (rowId == null ||
             rowId <= 0 ||
             guid == null ||
@@ -503,6 +508,8 @@ class ChatsService {
             error: error,
             itemType: itemType,
             associatedMessageGuid: associatedMessageGuid,
+            replyToGuid: replyToGuid,
+            account: account,
           ),
         );
         if (message['isFromMe'] == true &&
@@ -531,11 +538,19 @@ class ChatsService {
       }
       final properties = _logicalChatGenerationProperties(chatData);
       final verificationProperties = _logicalChatGenerationProperties(verificationChatData);
+      final accountMessages = messages
+          .where((message) => message.isNormal && message.account.isNotEmpty)
+          .toList()
+        ..sort((left, right) {
+          final byTime = left.createdAtEpoch.compareTo(right.createdAtEpoch);
+          return byTime != 0 ? byTime : left.messageGuid.compareTo(right.messageGuid);
+        });
       candidates.add(
         LogicalRouteCandidateEvidence(
           sourceChatRowId: (chatData['originalROWID'] as num?)?.toInt() ?? -1,
           sourceChatGuid: chatData['guid']?.toString() ?? '',
           sourceService: _logicalChatService(chatData['guid']),
+          sourceAccount: accountMessages.lastOrNull?.account ?? '',
           chatIdentifier: chatData['chatIdentifier']?.toString() ?? '',
           style: (chatData['style'] as num?)?.toInt() ?? -1,
           lastAddressedHandle: LogicalAddressEvidence(address: chatData['lastAddressedHandle']?.toString() ?? ''),

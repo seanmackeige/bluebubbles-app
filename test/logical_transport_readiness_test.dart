@@ -14,6 +14,7 @@ LogicalRouteCandidateEvidence _smsCandidate({
   sourceChatRowId: 2156,
   sourceChatGuid: 'SMS;-;redacted-logical-target',
   sourceService: 'SMS',
+  sourceAccount: 'redacted-account',
   chatIdentifier: 'redacted',
   style: 43,
   lastAddressedHandle: const LogicalAddressEvidence(address: 'redacted-self'),

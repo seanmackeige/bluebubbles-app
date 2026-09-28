@@ -94,10 +94,166 @@ void main() {
       expect(LogicalConversationViewPolicy.resolveCertificate(invalidExtension, [2155, 2156, 9000]), isNull);
     });
 
+    test('new physical identity advances through evidence without hard-coded ROWID logic', () {
+      const candidate = LogicalConversationCandidateEvidence(
+        sourceChatRowId: 9107,
+        sourceChatGuidHmacSha256: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        admissionReceiptCommit: '5555555555555555555555555555555555555555',
+        appleBlueBubblesGuidParity: true,
+        stableCompleteSnapshots: true,
+        exactNormalizedExternalParticipants: true,
+        pairwiseComparedSourceRowIds: {2027, 2155, 2156},
+        directRelationshipPeerRowIds: {2156},
+        structuredRelationshipCount: 2,
+        passiveNaturalProduction: true,
+        groupIdentityContinuity: true,
+        historicalLineage: true,
+        explanation: 'Direct structured lineage and complete individual proof for a newly observed identity.',
+      );
+      final result = LogicalConversationViewPolicy.reconcileCertificate(
+        LogicalConversationViewPolicy.comcastNodeUpdates,
+        const [candidate],
+      );
+      expect(result.certificate.isValid, isTrue);
+      expect(result.certificate.sourceChatRowIds, {2027, 2155, 2156, 9107});
+      expect(
+        result.decisions.single.classification,
+        LogicalConversationCandidateClassification.certifiedCurrentOrHistoricalReadMember,
+      );
+      for (final member in result.certificate.members) {
+        expect(
+          member.pairwiseComparedSourceRowIds,
+          containsAll(result.certificate.sourceChatRowIds.difference({member.sourceChatRowId})),
+        );
+      }
+    });
+
+    test('candidate ordering cannot change evidence-driven read enrollment', () {
+      const first = LogicalConversationCandidateEvidence(
+        sourceChatRowId: 9108,
+        sourceChatGuidHmacSha256: 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+        admissionReceiptCommit: '6666666666666666666666666666666666666666',
+        appleBlueBubblesGuidParity: true,
+        stableCompleteSnapshots: true,
+        exactNormalizedExternalParticipants: true,
+        pairwiseComparedSourceRowIds: {2027, 2155, 2156, 9109},
+        directRelationshipPeerRowIds: {2155},
+        structuredRelationshipCount: 1,
+        passiveNaturalProduction: true,
+        groupIdentityContinuity: false,
+        historicalLineage: true,
+        explanation: 'First independently proven candidate.',
+      );
+      const second = LogicalConversationCandidateEvidence(
+        sourceChatRowId: 9109,
+        sourceChatGuidHmacSha256: 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+        admissionReceiptCommit: '7777777777777777777777777777777777777777',
+        appleBlueBubblesGuidParity: true,
+        stableCompleteSnapshots: true,
+        exactNormalizedExternalParticipants: true,
+        pairwiseComparedSourceRowIds: {2027, 2155, 2156, 9108},
+        directRelationshipPeerRowIds: {2027},
+        structuredRelationshipCount: 1,
+        passiveNaturalProduction: true,
+        groupIdentityContinuity: true,
+        historicalLineage: true,
+        explanation: 'Second independently proven candidate.',
+      );
+      final forward = LogicalConversationViewPolicy.reconcileCertificate(
+        LogicalConversationViewPolicy.comcastNodeUpdates,
+        const [first, second],
+      );
+      final reverse = LogicalConversationViewPolicy.reconcileCertificate(
+        LogicalConversationViewPolicy.comcastNodeUpdates,
+        const [second, first],
+      );
+      expect(forward.certificate.revision, reverse.certificate.revision);
+      expect(forward.certificate.sourceChatRowIds, reverse.certificate.sourceChatRowIds);
+    });
+
+    test('new unproven candidate remains ambiguous and cannot enter the read certificate', () {
+      const candidate = LogicalConversationCandidateEvidence(
+        sourceChatRowId: 9110,
+        sourceChatGuidHmacSha256: 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+        admissionReceiptCommit: '8888888888888888888888888888888888888888',
+        appleBlueBubblesGuidParity: true,
+        stableCompleteSnapshots: true,
+        exactNormalizedExternalParticipants: true,
+        pairwiseComparedSourceRowIds: {2156},
+        directRelationshipPeerRowIds: {2156},
+        structuredRelationshipCount: 1,
+        passiveNaturalProduction: true,
+        groupIdentityContinuity: true,
+        historicalLineage: true,
+        explanation: 'Incomplete pairwise proof must fail closed.',
+      );
+      final result = LogicalConversationViewPolicy.reconcileCertificate(
+        LogicalConversationViewPolicy.comcastNodeUpdates,
+        const [candidate],
+      );
+      expect(result.certificate, same(LogicalConversationViewPolicy.comcastNodeUpdates));
+      expect(result.decisions.single.classification, LogicalConversationCandidateClassification.ambiguousNotEnrolled);
+    });
+
+    test('duplicate candidate evidence aborts reconciliation atomically', () {
+      const candidate = LogicalConversationCandidateEvidence(
+        sourceChatRowId: 9111,
+        sourceChatGuidHmacSha256: 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
+        admissionReceiptCommit: '9999999999999999999999999999999999999999',
+        appleBlueBubblesGuidParity: true,
+        stableCompleteSnapshots: true,
+        exactNormalizedExternalParticipants: true,
+        pairwiseComparedSourceRowIds: {2027, 2155, 2156},
+        directRelationshipPeerRowIds: {2156},
+        structuredRelationshipCount: 1,
+        passiveNaturalProduction: true,
+        groupIdentityContinuity: true,
+        historicalLineage: true,
+        explanation: 'A duplicated universe must not partially advance.',
+      );
+      final result = LogicalConversationViewPolicy.reconcileCertificate(
+        LogicalConversationViewPolicy.comcastNodeUpdates,
+        const [candidate, candidate],
+      );
+      expect(result.certificate, same(LogicalConversationViewPolicy.comcastNodeUpdates));
+      expect(result.decisions, hasLength(2));
+      expect(result.decisions.map((decision) => decision.reason), everyElement('DUPLICATE_CANDIDATE_EVIDENCE'));
+    });
+
+    test('participant-set mismatch classifies historical lineage without enrollment', () {
+      const candidate = LogicalConversationCandidateEvidence(
+        sourceChatRowId: 1674,
+        sourceChatGuidHmacSha256: 'e0c906040606a28f6bd9c95abc257d31917977ff4962a451e04169cbe47859f4',
+        admissionReceiptCommit: '3432adfd6c7daa67d8d7521207a8d433b3339763',
+        appleBlueBubblesGuidParity: true,
+        stableCompleteSnapshots: true,
+        exactNormalizedExternalParticipants: false,
+        pairwiseComparedSourceRowIds: {2027, 2155, 2156},
+        directRelationshipPeerRowIds: {},
+        structuredRelationshipCount: 0,
+        passiveNaturalProduction: true,
+        groupIdentityContinuity: false,
+        historicalLineage: true,
+        explanation: 'Historical prior-participant-set identity.',
+      );
+      final result = LogicalConversationViewPolicy.reconcileCertificate(
+        LogicalConversationViewPolicy.comcastNodeUpdates,
+        const [candidate],
+      );
+      expect(result.certificate.sourceChatRowIds, {2027, 2155, 2156});
+      expect(
+        result.decisions.single.classification,
+        LogicalConversationCandidateClassification.historicalRelatedButNotSameParticipantSet,
+      );
+    });
+
     test('fourth candidate is independently historical and not enrolled', () {
       final fourth = LogicalConversationViewPolicy.excludedCandidateProofFor(1674);
       expect(fourth, isNotNull);
-      expect(fourth!.classification, LogicalConversationCandidateClassification.historicalInertRelatedIdentity);
+      expect(
+        fourth!.classification,
+        LogicalConversationCandidateClassification.historicalRelatedButNotSameParticipantSet,
+      );
       expect(LogicalConversationViewPolicy.isApprovedSourceRowId(1674), isFalse);
       expect(LogicalConversationViewPolicy.membershipProofFor(1674), isNull);
     });
@@ -198,10 +354,10 @@ void main() {
       expect(result.groupMetadataFingerprint, fixture.groupMetadataFingerprint);
     });
 
-    test('all 15 currently observed cross-chat reactions retain exact targets', () {
+    test('all 20 currently observed cross-chat reactions retain exact targets', () {
       final targets = <LogicalConversationEvent<_MessageFixture>>[];
       final edges = <LogicalConversationEvent<_MessageFixture>>[];
-      for (var index = 0; index < 13; index++) {
+      for (var index = 0; index < 18; index++) {
         final targetGuid = 'pair-target-$index';
         targets.add(_event(targetGuid, 2155, index * 2 + 1));
         edges.add(
@@ -231,7 +387,7 @@ void main() {
       final merged = LogicalConversationViewPolicy.mergePage([...targets, ...edges]);
       final byGuid = {for (final event in merged) event.guid: event};
       final relationshipEvents = merged.where((event) => event.value.relationshipTargetGuid != null).toList();
-      expect(relationshipEvents, hasLength(15));
+      expect(relationshipEvents, hasLength(20));
       for (final edge in relationshipEvents) {
         final target = byGuid[edge.value.relationshipTargetGuid];
         expect(target, isNotNull);
