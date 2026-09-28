@@ -1365,10 +1365,17 @@ class LogicalConversationOutboundRoutePolicy {
     for (final candidate in evidence.candidates) {
       if (evidence.certifiedSourceChatGuids[candidate.sourceChatRowId] != candidate.sourceChatGuid ||
           candidate.sourceChatGuid.isEmpty ||
-          candidate.sourceAccount.isEmpty ||
           candidate.chatIdentifier.isEmpty ||
           candidate.style != 43) {
         return const LogicalRouteDecision.notProven('CURRENT_SOURCE_BINDING_CONTRADICTION');
+      }
+      // BlueBubbles Server must expose a provider-backed account value for
+      // the physical source. Do not fold a missing provider fact into the
+      // generic source-identity contradiction: that made a routine source
+      // event look like Apple had changed the chat binding and obscured the
+      // actual fail-closed boundary.
+      if (candidate.sourceAccount.isEmpty) {
+        return const LogicalRouteDecision.notProven('PROVIDER_ROUTE_ACCOUNT_FACT_UNAVAILABLE');
       }
       final currentRoute = normalizeRoutableAddress(candidate.lastAddressedHandle);
       if (currentRoute == null || currentRoute != activeAlias) {

@@ -292,6 +292,7 @@ LogicalRouteEvidence _advancedGenerationEvidence({
   bool includePostAdvancementResponse = true,
   bool evidenceDrivenSuccession = false,
   bool terminalCurrentOutbound = true,
+  bool includeLiteralSiblingReaction = false,
 }) {
   final candidates = <int, LogicalRouteCandidateEvidence>{
     predecessorRow: _candidate(
@@ -364,13 +365,22 @@ LogicalRouteEvidence _advancedGenerationEvidence({
       participants:
           selfVariantParticipants ?? [...externalParticipants, const LogicalAddressEvidence(address: _otherSelf)],
       lastKnownHybridState: true,
-      lastSeenMessageGuid: 'self-variant-latest',
+      lastSeenMessageGuid: includeLiteralSiblingReaction ? 'literal-liked-current-outbound' : 'self-variant-latest',
       messages: [
         _message('self-variant-outbound', 201, 1500, isFromMe: true),
         _message('natural-response', 202, 2300),
         _message('self-variant-post-reactivation', 203, 6900, itemType: crossMemberTargetItemType),
         if (includePostAdvancementResponse) _message('post-reactivation-response', 204, 7200),
         _message('self-variant-latest', 205, 8000),
+        if (includeLiteralSiblingReaction)
+          _message(
+            'literal-liked-current-outbound',
+            206,
+            8500,
+            // SMS reaction interoperability can arrive as a normal quoted
+            // text with no provider GUID relationship to the outbound.
+            replyToGuid: 'p:0/unrelated-local-predecessor',
+          ),
       ],
       successfulOutbounds: const [
         LogicalSuccessfulOutboundEvidence(
@@ -634,6 +644,16 @@ void main() {
 
     test('production evidence-driven graph proves the current SMS successor', () {
       final decision = _resolve(newMessage, evidence: _advancedGenerationEvidence(evidenceDrivenSuccession: true));
+      expect(decision.isSingleTarget, isTrue, reason: decision.reason);
+      expect(decision.physicalTargetRowIds, [_writableRow]);
+      expect(decision.reason, 'EVIDENCE_DRIVEN_CURRENT_EXECUTION_GENERATION_PROVEN_UNIQUE_WRITABLE_SOURCE');
+    });
+
+    test('natural sibling SMS reaction cannot steal or invalidate the proven writer', () {
+      final decision = _resolve(
+        newMessage,
+        evidence: _advancedGenerationEvidence(evidenceDrivenSuccession: true, includeLiteralSiblingReaction: true),
+      );
       expect(decision.isSingleTarget, isTrue, reason: decision.reason);
       expect(decision.physicalTargetRowIds, [_writableRow]);
       expect(decision.reason, 'EVIDENCE_DRIVEN_CURRENT_EXECUTION_GENERATION_PROVEN_UNIQUE_WRITABLE_SOURCE');
@@ -1205,6 +1225,18 @@ void main() {
           evidence: _evidence(certifiedSourceChatGuids: const {_writableRow: 'wrong', _alternateRow: 'source-b-guid'}),
         ).reason,
         'CURRENT_SOURCE_BINDING_CONTRADICTION',
+      );
+      expect(
+        _resolve(
+          request,
+          evidence: _evidence(
+            candidates: [
+              _candidate(_writableRow, sourceAccount: ''),
+              _candidate(_alternateRow),
+            ],
+          ),
+        ).reason,
+        'PROVIDER_ROUTE_ACCOUNT_FACT_UNAVAILABLE',
       );
       expect(
         _resolve(
