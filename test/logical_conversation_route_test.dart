@@ -58,9 +58,20 @@ LogicalRouteCandidateEvidence _candidate(
   bool? shouldForceToSms = false,
   String? lastSeenMessageGuid = 'last-seen',
   String? groupPhotoGuid,
+  String? groupIdentifier = 'shared-group-identifier',
   List<LogicalRouteMessageEvidence> messages = const [],
 }) {
   final writable = rowId == _writableRow;
+  final outboundEvidence =
+      successfulOutbounds ??
+      [
+        LogicalSuccessfulOutboundEvidence(
+          messageGuid: writable ? 'source-a-outbound' : 'source-b-outbound',
+          messageRowId: writable ? 101 : 202,
+          createdAtEpoch: writable ? 2000 : 1000,
+          account: sourceAccount,
+        ),
+      ];
   return LogicalRouteCandidateEvidence(
     sourceChatRowId: rowId,
     sourceChatGuid: sourceGuid ?? (writable ? 'source-a-guid' : 'source-b-guid'),
@@ -76,16 +87,19 @@ LogicalRouteCandidateEvidence _candidate(
     shouldForceToSms: shouldForceToSms,
     lastSeenMessageGuid: lastSeenMessageGuid,
     groupPhotoGuid: groupPhotoGuid,
+    groupIdentifier: groupIdentifier,
     messages: messages,
-    successfulOutbounds:
-        successfulOutbounds ??
-        [
-          LogicalSuccessfulOutboundEvidence(
-            messageGuid: writable ? 'source-a-outbound' : 'source-b-outbound',
-            messageRowId: writable ? 101 : 202,
-            createdAtEpoch: writable ? 2000 : 1000,
+    successfulOutbounds: outboundEvidence
+        .map(
+          (outbound) => LogicalSuccessfulOutboundEvidence(
+            messageGuid: outbound.messageGuid,
+            messageRowId: outbound.messageRowId,
+            createdAtEpoch: outbound.createdAtEpoch,
+            terminalAcknowledgement: outbound.terminalAcknowledgement,
+            account: outbound.account.isEmpty ? sourceAccount : outbound.account,
           ),
-        ],
+        )
+        .toList(growable: false),
   );
 }
 
@@ -157,6 +171,7 @@ LogicalRouteMessageEvidence _message(
 LogicalExecutionGenerationCertificate _generationCertificate({
   List<LogicalAddressEvidence> externalParticipants = _writableParticipants,
   bool allowAdditionalCurrentMembers = false,
+  bool evidenceDrivenSuccession = false,
 }) => LogicalExecutionGenerationCertificate(
   schema: logicalExecutionGenerationCertificateSchema,
   logicalId: _logicalId,
@@ -177,6 +192,7 @@ LogicalExecutionGenerationCertificate _generationCertificate({
   maximumTransitionEdgeDelayMilliseconds: 60,
   maximumNaturalResponseDelayMilliseconds: 900,
   allowAdditionalCurrentMembers: allowAdditionalCurrentMembers,
+  evidenceDrivenSuccession: evidenceDrivenSuccession,
   explanation: 'Runtime-shaped generation proof fixture.',
 );
 
@@ -216,8 +232,12 @@ LogicalRouteEvidence _generationEvidence({
         _message('current-normal', 104, 3000),
         _message('current-last', 103, 5000, associatedMessageGuid: 'p:0/current-relationship-target'),
       ],
-      successfulOutbounds: const [
-        LogicalSuccessfulOutboundEvidence(messageGuid: 'authorized-anchor', messageRowId: 102, createdAtEpoch: 2000),
+      successfulOutbounds: [
+        const LogicalSuccessfulOutboundEvidence(
+          messageGuid: 'authorized-anchor',
+          messageRowId: 102,
+          createdAtEpoch: 2000,
+        ),
       ],
     ),
     _alternateRow: _candidate(
@@ -260,8 +280,8 @@ LogicalRouteEvidence _advancedGenerationEvidence({
   List<LogicalAddressEvidence>? certificateExternalParticipants,
   List<LogicalAddressEvidence>? writableParticipants,
   List<LogicalAddressEvidence>? selfVariantParticipants,
-  String writableAccount = 'current-account',
-  String selfVariantAccount = 'current-account',
+  String writableAccount = 'test-account',
+  String selfVariantAccount = 'test-account',
   String writableService = 'SMS',
   int predecessorReactivationAt = 6000,
   String crossMemberTarget = 'self-variant-post-reactivation',
@@ -270,6 +290,8 @@ LogicalRouteEvidence _advancedGenerationEvidence({
   int crossMemberTargetItemType = 0,
   bool useReplyEdge = false,
   bool includePostAdvancementResponse = true,
+  bool evidenceDrivenSuccession = false,
+  bool terminalCurrentOutbound = true,
 }) {
   final candidates = <int, LogicalRouteCandidateEvidence>{
     predecessorRow: _candidate(
@@ -320,12 +342,17 @@ LogicalRouteEvidence _advancedGenerationEvidence({
         ),
         _message('writable-latest', 106, 9000),
       ],
-      successfulOutbounds: const [
-        LogicalSuccessfulOutboundEvidence(messageGuid: 'authorized-anchor', messageRowId: 102, createdAtEpoch: 2000),
+      successfulOutbounds: [
+        const LogicalSuccessfulOutboundEvidence(
+          messageGuid: 'authorized-anchor',
+          messageRowId: 102,
+          createdAtEpoch: 2000,
+        ),
         LogicalSuccessfulOutboundEvidence(
           messageGuid: 'post-reactivation-outbound',
           messageRowId: 104,
           createdAtEpoch: 7000,
+          terminalAcknowledgement: terminalCurrentOutbound,
         ),
       ],
     ),
@@ -361,8 +388,138 @@ LogicalRouteEvidence _advancedGenerationEvidence({
     certifiedSourceChatGuids: {for (final candidate in ordered) candidate.sourceChatRowId: candidate.sourceChatGuid},
     executionGenerationCertificate: _generationCertificate(
       externalParticipants: certificateExternalParticipants ?? externalParticipants,
+      evidenceDrivenSuccession: evidenceDrivenSuccession,
     ),
     candidates: ordered,
+  );
+}
+
+LogicalRouteEvidence _futureIMessageSuccessorEvidence({bool reverse = false, String futureAccount = 'future-account'}) {
+  final base = _advancedGenerationEvidence(evidenceDrivenSuccession: true);
+  final futureWriter = _candidate(
+    50,
+    sourceGuid: 'future-imessage-writer-guid',
+    sourceService: 'iMessage',
+    sourceAccount: futureAccount,
+    participants: _writableParticipants,
+    lastKnownHybridState: null,
+    lastSeenMessageGuid: 'future-writer-last',
+    groupPhotoGuid: 'shared-group-photo',
+    messages: [
+      _message('future-successor-edge', 501, 9100, replyToGuid: 'p:0/writable-latest', account: futureAccount),
+      _message('future-account-bound-outbound', 502, 9200, isFromMe: true, account: futureAccount),
+      _message(
+        'future-cross-member-edge',
+        503,
+        9400,
+        associatedMessageGuid: 'p:0/future-self-natural',
+        account: futureAccount,
+      ),
+      _message('future-writer-last', 504, 9600, account: futureAccount),
+    ],
+    successfulOutbounds: [
+      LogicalSuccessfulOutboundEvidence(
+        messageGuid: 'future-account-bound-outbound',
+        messageRowId: 502,
+        createdAtEpoch: 9200,
+        terminalAcknowledgement: true,
+        account: futureAccount,
+      ),
+    ],
+  );
+  final futureSelfVariant = _candidate(
+    60,
+    sourceGuid: 'future-imessage-self-variant-guid',
+    sourceService: 'iMessage',
+    sourceAccount: futureAccount,
+    participants: _alternateParticipants,
+    lastKnownHybridState: null,
+    lastSeenMessageGuid: 'future-self-last',
+    messages: [
+      _message('future-self-natural', 601, 9150, account: futureAccount),
+      _message('future-natural-response', 602, 9300, account: futureAccount),
+      _message('future-self-last', 603, 9500, account: futureAccount),
+    ],
+  );
+  final candidates = <LogicalRouteCandidateEvidence>[
+    ...base.candidates,
+    if (reverse) futureSelfVariant else futureWriter,
+    if (reverse) futureWriter else futureSelfVariant,
+  ];
+  return _evidence(
+    certifiedSourceChatGuids: {for (final candidate in candidates) candidate.sourceChatRowId: candidate.sourceChatGuid},
+    executionGenerationCertificate: _generationCertificate(evidenceDrivenSuccession: true),
+    candidates: candidates,
+  );
+}
+
+LogicalRouteEvidence _singleWriterContinuationEvidence({required bool exactContinuation}) {
+  final predecessor = _candidate(
+    30,
+    sourceGuid: 'single-predecessor-guid',
+    sourceService: 'iMessage',
+    sourceAccount: 'historical-account',
+    participants: _writableParticipants,
+    lastSeenMessageGuid: 'single-predecessor-natural',
+    messages: [_message('single-predecessor-natural', 301, 1000, isFromMe: true, account: 'historical-account')],
+    successfulOutbounds: const [
+      LogicalSuccessfulOutboundEvidence(
+        messageGuid: 'single-predecessor-natural',
+        messageRowId: 301,
+        createdAtEpoch: 1000,
+        account: 'historical-account',
+      ),
+    ],
+  );
+  final writer = _candidate(
+    _writableRow,
+    sourceGuid: 'single-current-writer-guid',
+    sourceService: 'SMS',
+    sourceAccount: 'current-account',
+    participants: _writableParticipants,
+    lastSeenMessageGuid: 'single-exact-continuation',
+    messages: [
+      _message(
+        'single-successor-edge',
+        101,
+        1100,
+        replyToGuid: 'p:0/single-predecessor-natural',
+        account: 'current-account',
+      ),
+      _message('single-terminal-outbound', 102, 2000, isFromMe: true, account: 'current-account'),
+      _message(
+        'single-exact-continuation',
+        103,
+        2500,
+        isFromMe: true,
+        replyToGuid: exactContinuation ? 'p:0/single-terminal-outbound' : null,
+        account: 'current-account',
+      ),
+    ],
+    successfulOutbounds: const [
+      LogicalSuccessfulOutboundEvidence(
+        messageGuid: 'single-terminal-outbound',
+        messageRowId: 102,
+        createdAtEpoch: 2000,
+        terminalAcknowledgement: true,
+        account: 'current-account',
+      ),
+      LogicalSuccessfulOutboundEvidence(
+        messageGuid: 'single-exact-continuation',
+        messageRowId: 103,
+        createdAtEpoch: 2500,
+        terminalAcknowledgement: true,
+        account: 'current-account',
+      ),
+    ],
+  );
+  return _evidence(
+    certifiedSourceChatGuids: {
+      predecessor.sourceChatRowId: predecessor.sourceChatGuid,
+      writer.sourceChatRowId: writer.sourceChatGuid,
+    },
+    executionGenerationCertificate: _generationCertificate(evidenceDrivenSuccession: true),
+    candidates: [predecessor, writer],
   );
 }
 
@@ -372,7 +529,7 @@ void main() {
 
     test('runtime-shaped provider graph selects one current physical route', () {
       final decision = _resolve(newMessage, evidence: _generationEvidence());
-      expect(decision.isSingleTarget, isTrue);
+      expect(decision.isSingleTarget, isTrue, reason: decision.reason);
       expect(decision.physicalTargetRowIds, [_writableRow]);
       expect(decision.reason, 'CURRENT_EXECUTION_GENERATION_PROVEN_UNIQUE_WRITABLE_SOURCE');
     });
@@ -396,10 +553,7 @@ void main() {
         participants: _alternateParticipants,
         lastKnownHybridState: true,
         lastSeenMessageGuid: 'new-current-last',
-        messages: [
-          _message('new-current-natural', 401, 2400),
-          _message('new-current-last', 402, 4200),
-        ],
+        messages: [_message('new-current-natural', 401, 2400), _message('new-current-last', 402, 4200)],
         successfulOutbounds: const [
           LogicalSuccessfulOutboundEvidence(
             messageGuid: 'new-current-historical-outbound',
@@ -432,10 +586,7 @@ void main() {
         participants: _writableParticipants,
         lastKnownHybridState: true,
         lastSeenMessageGuid: 'new-writer-last',
-        messages: [
-          _message('new-writer-outbound', 401, 2400, isFromMe: true),
-          _message('new-writer-last', 402, 4200),
-        ],
+        messages: [_message('new-writer-outbound', 401, 2400, isFromMe: true), _message('new-writer-last', 402, 4200)],
         successfulOutbounds: const [
           LogicalSuccessfulOutboundEvidence(
             messageGuid: 'new-writer-outbound',
@@ -481,6 +632,46 @@ void main() {
       );
     });
 
+    test('production evidence-driven graph proves the current SMS successor', () {
+      final decision = _resolve(newMessage, evidence: _advancedGenerationEvidence(evidenceDrivenSuccession: true));
+      expect(decision.isSingleTarget, isTrue, reason: decision.reason);
+      expect(decision.physicalTargetRowIds, [_writableRow]);
+      expect(decision.reason, 'EVIDENCE_DRIVEN_CURRENT_EXECUTION_GENERATION_PROVEN_UNIQUE_WRITABLE_SOURCE');
+    });
+
+    test('evidence-driven generation does not merge peers or arm write without terminal outbound proof', () {
+      final decision = _resolve(
+        newMessage,
+        evidence: _advancedGenerationEvidence(evidenceDrivenSuccession: true, terminalCurrentOutbound: false),
+      );
+      expect(decision.isQualified, isFalse);
+      expect(decision.reason, 'CURRENT_WRITER_ACCOUNT_BOUND_OUTBOUND_MISSING');
+    });
+
+    test('future iMessage generation can succeed SMS through structured evidence', () {
+      final forward = _resolve(newMessage, evidence: _futureIMessageSuccessorEvidence());
+      final reverse = _resolve(newMessage, evidence: _futureIMessageSuccessorEvidence(reverse: true));
+      expect(forward.isSingleTarget, isTrue, reason: forward.reason);
+      expect(forward.physicalTargetRowIds, [50]);
+      expect(reverse.reason, forward.reason);
+      expect(reverse.physicalTargetRowIds, forward.physicalTargetRowIds);
+    });
+
+    test('future iMessage generation may reuse the historical iMessage account without a false cycle', () {
+      final decision = _resolve(newMessage, evidence: _futureIMessageSuccessorEvidence(futureAccount: 'test-account'));
+      expect(decision.isSingleTarget, isTrue, reason: decision.reason);
+      expect(decision.physicalTargetRowIds, [50]);
+    });
+
+    test('exact later outbound reply is natural continuation but arbitrary later outbound is not', () {
+      final exact = _resolve(newMessage, evidence: _singleWriterContinuationEvidence(exactContinuation: true));
+      final arbitrary = _resolve(newMessage, evidence: _singleWriterContinuationEvidence(exactContinuation: false));
+      expect(exact.isSingleTarget, isTrue, reason: exact.reason);
+      expect(exact.physicalTargetRowIds, [_writableRow]);
+      expect(arbitrary.isQualified, isFalse);
+      expect(arbitrary.reason, 'CURRENT_WRITER_NATURAL_RESPONSE_MISSING');
+    });
+
     test('current public-safe 2027 2155 2156 fixture preserves all 16 external identities', () {
       final evidence = _advancedGenerationEvidence(
         order: const [2155, 2027, 2156],
@@ -502,6 +693,35 @@ void main() {
         LogicalConversationOutboundRoutePolicy.comcastNodeUpdatesGeneration.expectedExternalParticipantSetSha256,
         '7c5deb71cf0ad257a7b708b25ed4c7aa0c0f0f3dfb2e1694ed4f32d60b71e8bc',
       );
+    });
+
+    test('candidate nomination protects exact external set and one self-alias variant only', () {
+      final normalized = _currentComcastExternalParticipants
+          .map(LogicalConversationOutboundRoutePolicy.normalizeRoutableAddress)
+          .whereType<String>()
+          .toSet();
+      final fingerprint = LogicalConversationOutboundRoutePolicy.externalParticipantSetFingerprint(normalized);
+      bool matches(List<LogicalAddressEvidence> participants) =>
+          LogicalConversationOutboundRoutePolicy.canMatchCertifiedExternalParticipantSet(
+            participants,
+            expectedExternalParticipantCount: 16,
+            expectedExternalParticipantSetSha256: fingerprint,
+          );
+
+      expect(matches(_currentComcastExternalParticipants), isTrue);
+      expect(
+        matches([..._currentComcastExternalParticipants, const LogicalAddressEvidence(address: _activeSelf)]),
+        isTrue,
+      );
+      expect(matches(_currentComcastExternalParticipants.sublist(0, 15)), isFalse);
+      expect(
+        matches([
+          ..._currentComcastExternalParticipants.sublist(0, 15),
+          const LogicalAddressEvidence(address: 'mailto:different@example.invalid'),
+        ]),
+        isFalse,
+      );
+      expect(matches([..._currentComcastExternalParticipants, _currentComcastExternalParticipants.first]), isFalse);
     });
 
     test('current natural Comcast-shaped advancement is input-order invariant', () {

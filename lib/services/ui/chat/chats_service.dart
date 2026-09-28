@@ -217,7 +217,7 @@ class ChatsService {
     }
     if (!kIsWeb) {
       final query = Database.chats
-          .query(Chat_.originalROWID.oneOf(LogicalConversationViewPolicy.comcastNodeUpdates.sourceChatRowIds.toList()))
+          .query(Chat_.originalROWID.oneOf(LogicalConversationViewPolicy.activeCertificate.sourceChatRowIds.toList()))
           .build();
       for (final chat in query.find()) {
         byGuid.putIfAbsent(chat.guid, () => chat);
@@ -242,6 +242,22 @@ class ChatsService {
   /// True for either protected source ROWID even while the second source is
   /// absent. Write guards intentionally fail closed before projection activates.
   bool isApprovedLogicalSource(Chat chat) => LogicalConversationViewPolicy.isApprovedSourceRowId(chat.originalROWID);
+
+  /// True for an admitted source or for a not-yet-admitted physical chat whose
+  /// normalized participant universe could be the certified Comcast set.
+  /// Potential sources are protected from ordinary-chat sends but gain no read
+  /// membership or write authority until provider reconciliation admits them.
+  bool isPotentialLogicalSource(Chat chat) {
+    if (isApprovedLogicalSource(chat)) return true;
+    if (chat.style != 43) return false;
+    final handles = chat.handles.isNotEmpty ? chat.handles.toList() : chat.participants;
+    const generation = LogicalConversationOutboundRoutePolicy.comcastNodeUpdatesGeneration;
+    return LogicalConversationOutboundRoutePolicy.canMatchCertifiedExternalParticipantSet(
+      handles.map((handle) => LogicalAddressEvidence(address: handle.address, country: handle.country)),
+      expectedExternalParticipantCount: generation.expectedExternalParticipantCount,
+      expectedExternalParticipantSetSha256: generation.expectedExternalParticipantSetSha256,
+    );
+  }
 
   bool isLogicalConversation(Chat chat) {
     final definition = _logicalDefinition;
@@ -522,6 +538,7 @@ class ChatsService {
               messageRowId: rowId,
               createdAtEpoch: createdAt,
               terminalAcknowledgement: message['isSent'] == true && message['isFinished'] == true,
+              account: account,
             ),
           );
         }
@@ -538,9 +555,7 @@ class ChatsService {
       }
       final properties = _logicalChatGenerationProperties(chatData);
       final verificationProperties = _logicalChatGenerationProperties(verificationChatData);
-      final accountMessages = messages
-          .where((message) => message.isNormal && message.account.isNotEmpty)
-          .toList()
+      final accountMessages = messages.where((message) => message.isNormal && message.account.isNotEmpty).toList()
         ..sort((left, right) {
           final byTime = left.createdAtEpoch.compareTo(right.createdAtEpoch);
           return byTime != 0 ? byTime : left.messageGuid.compareTo(right.messageGuid);
@@ -564,6 +579,7 @@ class ChatsService {
           shouldForceToSms: properties.shouldForceToSms,
           lastSeenMessageGuid: properties.lastSeenMessageGuid,
           groupPhotoGuid: properties.groupPhotoGuid,
+          groupIdentifier: chatData['groupId']?.toString(),
           messages: messages,
           successfulOutbounds: successfulOutbounds,
         ),
@@ -581,13 +597,25 @@ class ChatsService {
             accountBefore.vettedAliases.map((alias) => LogicalAddressEvidence(address: alias)).toList(),
           )
         : const <int, String>{};
+    if (unadmittedPotentialSources.isNotEmpty &&
+        await _advanceLogicalReadCertificate(
+          definition,
+          candidateScopeAfter.chats,
+          candidates,
+          unadmittedPotentialSources,
+          accountBefore.vettedAliases.map((alias) => LogicalAddressEvidence(address: alias)).toList(),
+        )) {
+      return _collectLogicalRouteEvidence(chat);
+    }
 
     return LogicalRouteEvidence(
       logicalId: definition.id,
       certificateId: '$logicalConversationOutboundRouteSchema:${definition.id}',
       certifiedSourceChatGuids: {
         for (final source in sources)
-          if (source.originalROWID != null) source.originalROWID!: source.guid,
+          if (source.originalROWID != null &&
+              LogicalConversationViewPolicy.sourceGuidMatchesActiveProof(source.originalROWID!, source.guid))
+            source.originalROWID!: source.guid,
       },
       backendComputerId: serverSnapshotStable ? serverBefore.computerId : '',
       detectedIMessage: serverSnapshotStable && serverBefore.detectedIMessage,
@@ -659,6 +687,7 @@ class ChatsService {
       'originalROWID': (chatData['originalROWID'] as num?)?.toInt(),
       'guid': chatData['guid']?.toString(),
       'chatIdentifier': chatData['chatIdentifier']?.toString(),
+      'groupId': chatData['groupId']?.toString(),
       'style': (chatData['style'] as num?)?.toInt(),
       'lastAddressedHandle': chatData['lastAddressedHandle']?.toString(),
       'participants': participants,
@@ -711,18 +740,6 @@ class ChatsService {
     final acceptedExternal = _logicalExternalParticipants(certified.first.participants, vetted);
     if (acceptedExternal == null) return const {};
 
-    final certifiedScope = scope.where((chat) => certifiedRows.contains((chat['originalROWID'] as num?)?.toInt()));
-    final certifiedGroupIds = certifiedScope
-        .map((chat) => chat['groupId']?.toString())
-        .whereType<String>()
-        .where((value) => value.isNotEmpty)
-        .toSet();
-    final certifiedGroupPhotoGuids = certified
-        .map((candidate) => candidate.groupPhotoGuid)
-        .whereType<String>()
-        .where((value) => value.isNotEmpty)
-        .toSet();
-
     final potential = <int, String>{};
     for (final chat in scope) {
       final rowId = (chat['originalROWID'] as num?)?.toInt();
@@ -741,17 +758,255 @@ class ChatsService {
         }
       }
       final external = _logicalExternalParticipants(participants, vetted);
-      final groupId = chat['groupId']?.toString();
-      final groupPhotoGuid = _logicalChatGenerationProperties(chat).groupPhotoGuid;
       final sameExternal = external != null && _logicalSameSet(external, acceptedExternal);
-      final sameGroupId = groupId != null && groupId.isNotEmpty && certifiedGroupIds.contains(groupId);
-      final sameGroupPhoto =
-          groupPhotoGuid != null && groupPhotoGuid.isNotEmpty && certifiedGroupPhotoGuids.contains(groupPhotoGuid);
-      if (sameExternal || sameGroupId || sameGroupPhoto) {
+      // A related group identity with a different external participant set is
+      // a classified historical/different-set candidate, not an unresolved
+      // execution route. Exact external-set parity is required before a new
+      // physical identity can block and enter evidence-driven admission.
+      if (sameExternal) {
         potential[rowId] = guid;
       }
     }
     return potential;
+  }
+
+  Future<bool> _advanceLogicalReadCertificate(
+    LogicalConversationReadCertificate definition,
+    List<Map<String, dynamic>> scope,
+    List<LogicalRouteCandidateEvidence> certified,
+    Map<int, String> unadmitted,
+    List<LogicalAddressEvidence> vettedAliases,
+  ) async {
+    if (definition.revision != LogicalConversationViewPolicy.activeCertificate.revision || certified.isEmpty) {
+      return false;
+    }
+    final vetted = vettedAliases
+        .map(LogicalConversationOutboundRoutePolicy.normalizeRoutableAddress)
+        .whereType<String>()
+        .toSet();
+    final acceptedExternal = _logicalExternalParticipants(certified.first.participants, vetted);
+    if (acceptedExternal == null) return false;
+    for (final candidate in certified.skip(1)) {
+      final candidateExternal = _logicalExternalParticipants(candidate.participants, vetted);
+      if (candidateExternal == null || !_logicalSameSet(candidateExternal, acceptedExternal)) {
+        return false;
+      }
+    }
+
+    final certifiedRows = definition.sourceChatRowIds;
+    final certifiedScope = scope.where((item) => certifiedRows.contains((item['originalROWID'] as num?)?.toInt()));
+    final certifiedGroupIds = certifiedScope
+        .map((item) => item['groupId']?.toString())
+        .whereType<String>()
+        .where((value) => value.isNotEmpty)
+        .toSet();
+    final certifiedPhotos = certified
+        .map((candidate) => candidate.groupPhotoGuid)
+        .whereType<String>()
+        .where((value) => value.isNotEmpty)
+        .toSet();
+    final certifiedMessageOwners = <String, List<({int rowId, LogicalRouteMessageEvidence message})>>{};
+    for (final candidate in certified) {
+      for (final message in candidate.messages) {
+        certifiedMessageOwners
+            .putIfAbsent(
+              message.messageGuid.toUpperCase(),
+              () => <({int rowId, LogicalRouteMessageEvidence message})>[],
+            )
+            .add((rowId: candidate.sourceChatRowId, message: message));
+      }
+    }
+
+    final evidence = <LogicalConversationCandidateEvidence>[];
+    final ordered = unadmitted.entries.toList()..sort((left, right) => left.key.compareTo(right.key));
+    final rawChatsToSync = <Map<String, dynamic>>[];
+    for (final entry in ordered) {
+      final scoped = scope
+          .where(
+            (item) => (item['originalROWID'] as num?)?.toInt() == entry.key && item['guid']?.toString() == entry.value,
+          )
+          .toList(growable: false);
+      if (scoped.length != 1) continue;
+      final firstResponse = await HttpSvc.chat.fetchOne(entry.value, withQuery: 'participants');
+      final secondResponse = await HttpSvc.chat.fetchOne(entry.value, withQuery: 'participants');
+      final firstRaw = firstResponse.data?['data'];
+      final secondRaw = secondResponse.data?['data'];
+      if (firstRaw is! Map || secondRaw is! Map) continue;
+      final first = Map<String, dynamic>.from(firstRaw.cast<String, dynamic>());
+      final second = Map<String, dynamic>.from(secondRaw.cast<String, dynamic>());
+      final snapshot = await _collectLogicalRouteMessageSnapshot(entry.value);
+      final identityStable =
+          snapshot.complete &&
+          (first['originalROWID'] as num?)?.toInt() == entry.key &&
+          first['guid']?.toString() == entry.value &&
+          first['groupId']?.toString() == scoped.single['groupId']?.toString() &&
+          _logicalChatRouteFingerprint(first) == _logicalChatRouteFingerprint(second);
+
+      final participants = <LogicalAddressEvidence>[];
+      final rawParticipants = first['participants'];
+      if (rawParticipants is List) {
+        for (final item in rawParticipants.whereType<Map>()) {
+          final address = item['address']?.toString();
+          if (address != null && address.isNotEmpty) {
+            participants.add(LogicalAddressEvidence(address: address, country: item['country']?.toString()));
+          }
+        }
+      }
+      final external = _logicalExternalParticipants(participants, vetted);
+      final exactExternal = external != null && _logicalSameSet(external, acceptedExternal);
+
+      final messages = <LogicalRouteMessageEvidence>[];
+      var messageSnapshotComplete = snapshot.complete;
+      for (final raw in snapshot.messages) {
+        final rowId = (raw['originalROWID'] as num?)?.toInt();
+        final guid = raw['guid']?.toString();
+        final createdAt = (raw['dateCreated'] as num?)?.toInt();
+        final error = (raw['error'] as num?)?.toInt();
+        final itemType = (raw['itemType'] as num?)?.toInt();
+        final isFromMe = raw['isFromMe'];
+        if (rowId == null ||
+            rowId <= 0 ||
+            guid == null ||
+            guid.isEmpty ||
+            createdAt == null ||
+            createdAt <= 0 ||
+            error == null ||
+            itemType == null ||
+            isFromMe is! bool) {
+          messageSnapshotComplete = false;
+          continue;
+        }
+        messages.add(
+          LogicalRouteMessageEvidence(
+            messageGuid: guid,
+            messageRowId: rowId,
+            createdAtEpoch: createdAt,
+            isFromMe: isFromMe,
+            error: error,
+            itemType: itemType,
+            associatedMessageGuid: raw['associatedMessageGuid']?.toString(),
+            replyToGuid:
+                raw['threadOriginatorGuid']?.toString() ??
+                raw['threadOriginatorGUID']?.toString() ??
+                raw['replyToGuid']?.toString(),
+            account: raw['account']?.toString() ?? '',
+          ),
+        );
+      }
+      if (messages.length != snapshot.messages.length) messageSnapshotComplete = false;
+
+      final candidateMessages = {for (final message in messages) message.messageGuid.toUpperCase(): message};
+      final relationshipPeers = <int>{};
+      final relationshipEdges = <String>{};
+      for (final message in messages) {
+        if (message.error != 0 || message.itemType != 0) continue;
+        for (final target in _logicalRelationshipTargets(message)) {
+          final owners = certifiedMessageOwners[target] ?? const [];
+          if (owners.length != 1) continue;
+          final owner = owners.single;
+          if ((!owner.message.isInboundNormal && !owner.message.isSuccessfulOutbound) ||
+              owner.message.createdAtEpoch > message.createdAtEpoch) {
+            continue;
+          }
+          relationshipPeers.add(owner.rowId);
+          relationshipEdges.add('${message.messageGuid.toUpperCase()}->$target');
+        }
+      }
+      for (final certifiedCandidate in certified) {
+        for (final message in certifiedCandidate.messages) {
+          if (message.error != 0 || message.itemType != 0) continue;
+          for (final target in _logicalRelationshipTargets(message)) {
+            final targetMessage = candidateMessages[target];
+            if (targetMessage == null ||
+                (!targetMessage.isInboundNormal && !targetMessage.isSuccessfulOutbound) ||
+                targetMessage.createdAtEpoch > message.createdAtEpoch) {
+              continue;
+            }
+            relationshipPeers.add(certifiedCandidate.sourceChatRowId);
+            relationshipEdges.add('${message.messageGuid.toUpperCase()}->$target');
+          }
+        }
+      }
+
+      final properties = _logicalChatGenerationProperties(first);
+      final groupId = scoped.single['groupId']?.toString();
+      final groupContinuity =
+          (groupId != null && groupId.isNotEmpty && certifiedGroupIds.contains(groupId)) ||
+          (properties.groupPhotoGuid != null && certifiedPhotos.contains(properties.groupPhotoGuid));
+      final passiveNatural = messages.any((message) => message.isInboundNormal || message.isSuccessfulOutbound);
+      final evidencePayload = <String, dynamic>{
+        'schema': logicalConversationEvidenceReconciliationSchema,
+        'rowId': entry.key,
+        'guidSha256': sha256.convert(utf8.encode('logical-provider-guid-v1\u0000${entry.value}')).toString(),
+        'certificateRevision': definition.revision,
+        'identityStable': identityStable,
+        'messageSnapshotComplete': messageSnapshotComplete,
+        'exactExternal': exactExternal,
+        'relationshipPeers': relationshipPeers.toList()..sort(),
+        'relationshipEdges': relationshipEdges.toList()..sort(),
+        'groupContinuity': groupContinuity,
+        'passiveNatural': passiveNatural,
+      };
+      evidence.add(
+        LogicalConversationCandidateEvidence(
+          sourceChatRowId: entry.key,
+          sourceChatGuidSha256: evidencePayload['guidSha256'] as String,
+          admissionEvidenceSha256: sha256.convert(utf8.encode(jsonEncode(evidencePayload))).toString(),
+          providerBackedAppleIdentity: identityStable,
+          stableCompleteSnapshots: identityStable && messageSnapshotComplete,
+          exactNormalizedExternalParticipants: exactExternal,
+          pairwiseComparedSourceRowIds: exactExternal ? certifiedRows : const <int>{},
+          directRelationshipPeerRowIds: relationshipPeers,
+          structuredRelationshipCount: relationshipEdges.length,
+          passiveNaturalProduction: passiveNatural,
+          groupIdentityContinuity: groupContinuity,
+          historicalLineage: groupContinuity || relationshipEdges.isNotEmpty,
+          explanation:
+              'Stable provider-backed Apple identity, complete snapshots, exact external participants, complete '
+              'pairwise comparison, and direct structured natural lineage independently admit this read member.',
+        ),
+      );
+      rawChatsToSync.add(scoped.single);
+    }
+    if (evidence.isEmpty) return false;
+
+    final reconciliation = LogicalConversationViewPolicy.reconcileCertificate(definition, evidence);
+    if (reconciliation.certificate.revision == definition.revision) {
+      return false;
+    }
+    final encodedCertificate = LogicalConversationViewPolicy.encodeRuntimeCertificate(reconciliation.certificate);
+    // Stop every receipt minted under the predecessor certificate before the
+    // first durable/isolate await. Certificate advancement is monotonic, so
+    // row/GUID membership alone cannot detect a stale in-flight receipt.
+    invalidateLogicalAuthority('LOGICAL_READ_CERTIFICATE_ADVANCING');
+    await PrefsSvc.messaging.saveLogicalReadCertificateJson(encodedCertificate);
+    if (!LogicalConversationViewPolicy.activateReconciledCertificate(
+      reconciliation,
+      expectedRevision: definition.revision,
+    )) {
+      return false;
+    }
+    if (!await ChatInterface.activateLogicalReadCertificate(certificate: encodedCertificate)) {
+      throw StateError('LOGICAL_READ_CERTIFICATE_ISOLATE_SYNC_FAILED');
+    }
+    final admittedRows = reconciliation.certificate.sourceChatRowIds.difference(definition.sourceChatRowIds);
+    final admittedChats = rawChatsToSync
+        .where((item) => admittedRows.contains((item['originalROWID'] as num?)?.toInt()))
+        .toList(growable: false);
+    if (admittedChats.isNotEmpty) {
+      await ChatInterface.bulkSyncChats(chatsData: admittedChats);
+    }
+    _scheduleListVersionUpdate(immediate: true);
+    return true;
+  }
+
+  Set<String> _logicalRelationshipTargets(LogicalRouteMessageEvidence message) {
+    final targets = <String>{};
+    for (final value in [message.associatedMessageGuid, message.replyToGuid]) {
+      if (value == null || value.isEmpty) continue;
+      targets.add(value.replaceAll('bp:', '').split('/').last.toUpperCase());
+    }
+    return targets;
   }
 
   Set<String>? _logicalExternalParticipants(List<LogicalAddressEvidence> participants, Set<String> vettedAliases) {
@@ -2158,11 +2413,11 @@ class ChatsService {
   Future<void> _backfillApprovedLogicalSourceRows() async {
     if (kIsWeb) return;
     final query = Database.chats
-        .query(Chat_.originalROWID.oneOf(LogicalConversationViewPolicy.comcastNodeUpdates.sourceChatRowIds.toList()))
+        .query(Chat_.originalROWID.oneOf(LogicalConversationViewPolicy.activeCertificate.sourceChatRowIds.toList()))
         .build();
     final existingCount = query.count();
     query.close();
-    if (existingCount == LogicalConversationViewPolicy.comcastNodeUpdates.sourceChatRowIds.length) {
+    if (existingCount == LogicalConversationViewPolicy.activeCertificate.sourceChatRowIds.length) {
       return;
     }
 
@@ -2188,13 +2443,11 @@ class ChatsService {
         }
 
         final refreshedQuery = Database.chats
-            .query(
-              Chat_.originalROWID.oneOf(LogicalConversationViewPolicy.comcastNodeUpdates.sourceChatRowIds.toList()),
-            )
+            .query(Chat_.originalROWID.oneOf(LogicalConversationViewPolicy.activeCertificate.sourceChatRowIds.toList()))
             .build();
         final refreshedCount = refreshedQuery.count();
         refreshedQuery.close();
-        if (refreshedCount == LogicalConversationViewPolicy.comcastNodeUpdates.sourceChatRowIds.length) {
+        if (refreshedCount == LogicalConversationViewPolicy.activeCertificate.sourceChatRowIds.length) {
           return;
         }
         if (rawPage.length < batchSize) return;

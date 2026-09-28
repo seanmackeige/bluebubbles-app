@@ -1,3 +1,7 @@
+import 'dart:async';
+import 'dart:io';
+import 'dart:typed_data';
+
 import 'package:bluebubbles/services/network/api/base_api.dart';
 import 'package:bluebubbles/services/network/api/message_api.dart';
 import 'package:bluebubbles/services/ui/chat/logical_draft.dart';
@@ -7,7 +11,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 class _RecordingApi implements BaseApi {
   @override
-  final Dio dio = Dio();
+  final Dio dio = Dio(BaseOptions(sendTimeout: const Duration(seconds: 1), receiveTimeout: const Duration(seconds: 1)));
 
   final List<bool> retryPolicies = <bool>[];
 
@@ -40,6 +44,41 @@ class _RecordingApi implements BaseApi {
       data: <String, dynamic>{'data': <String, dynamic>{}},
     );
   }
+}
+
+class _ExecutingApi extends _RecordingApi {
+  @override
+  Future<Response> runApiGuarded(
+    Future<Response> Function() operation, {
+    bool checkOrigin = true,
+    bool retryTransientMutation = true,
+  }) {
+    retryPolicies.add(retryTransientMutation);
+    return operation();
+  }
+}
+
+class _RecordingAdapter implements HttpClientAdapter {
+  bool transportStarted = false;
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    transportStarted = true;
+    return ResponseBody.fromString(
+      '{"data":{}}',
+      200,
+      headers: <String, List<String>>{
+        Headers.contentTypeHeader: <String>[Headers.jsonContentType],
+      },
+    );
+  }
+
+  @override
+  void close({bool force = false}) {}
 }
 
 LogicalSendAdmissionReceipt _receipt() => const LogicalSendAdmissionReceipt(
@@ -96,5 +135,34 @@ void main() {
     await api.sendTapback('chat', 'message', 'target', 'love');
 
     expect(service.retryPolicies, <bool>[true, true]);
+  });
+
+  test('attachment awaits a fresh admission check after file materialization and before transport', () async {
+    final directory = await Directory.systemTemp.createTemp('logical-attachment-gate-');
+    addTearDown(() => directory.delete(recursive: true));
+    final file = File('${directory.path}/attachment.bin');
+    await file.writeAsBytes(const <int>[1, 2, 3], flush: true);
+
+    final service = _ExecutingApi();
+    final adapter = _RecordingAdapter();
+    service.dio.httpClientAdapter = adapter;
+    final validationReached = Completer<void>();
+    final releaseValidation = Completer<void>();
+    final sending = MessageApi(service).sendAttachment(
+      'chat',
+      'temp-attachment',
+      PlatformFile(name: 'attachment.bin', size: 3, path: file.path),
+      allowTransientRetry: false,
+      validateBeforeTransport: () async {
+        validationReached.complete();
+        await releaseValidation.future;
+      },
+    );
+
+    await validationReached.future.timeout(const Duration(seconds: 5));
+    expect(adapter.transportStarted, isFalse);
+    releaseValidation.complete();
+    await sending;
+    expect(adapter.transportStarted, isTrue);
   });
 }

@@ -25,6 +25,7 @@ LogicalRouteCandidateEvidence _smsCandidate({
   shouldForceToSms: true,
   lastSeenMessageGuid: 'last-seen',
   groupPhotoGuid: null,
+  groupIdentifier: null,
   messages: messages,
   successfulOutbounds: successful,
 );

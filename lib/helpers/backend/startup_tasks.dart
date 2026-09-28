@@ -9,6 +9,7 @@ import 'package:bluebubbles/database/database.dart';
 import 'package:bluebubbles/services/isolates/global_isolate.dart';
 import 'package:bluebubbles/services/isolates/incremental_sync_isolate.dart';
 import 'package:bluebubbles/services/services.dart';
+import 'package:bluebubbles/services/ui/chat/logical_conversation_view.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
@@ -93,6 +94,15 @@ class StartupTasks {
     });
     await GetIt.I.isReady<SharedPreferencesService>();
     debugPrint("SharedPreferencesService ready");
+
+    final logicalCertificateHydrated = LogicalConversationViewPolicy.hydrateRuntimeCertificate(
+      PrefsSvc.messaging.loadLogicalReadCertificateJson(),
+    );
+    debugPrint(
+      logicalCertificateHydrated
+          ? "Logical conversation certificate ready"
+          : "Logical conversation certificate unavailable; writes fail closed",
+    );
 
     debugPrint("Registering SettingsService...");
     GetIt.I.registerSingletonAsync<SettingsService>(() async {

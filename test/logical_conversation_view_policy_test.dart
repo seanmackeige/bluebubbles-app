@@ -1,7 +1,12 @@
+import 'dart:convert';
+
 import 'package:bluebubbles/services/ui/chat/logical_conversation_view.dart';
+import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  tearDown(LogicalConversationViewPolicy.resetRuntimeCertificateForTesting);
+
   group('N-member read certificate admission', () {
     test('all three physical members retain independent admission proof', () {
       const certificate = LogicalConversationViewPolicy.comcastNodeUpdates;
@@ -97,9 +102,9 @@ void main() {
     test('new physical identity advances through evidence without hard-coded ROWID logic', () {
       const candidate = LogicalConversationCandidateEvidence(
         sourceChatRowId: 9107,
-        sourceChatGuidHmacSha256: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-        admissionReceiptCommit: '5555555555555555555555555555555555555555',
-        appleBlueBubblesGuidParity: true,
+        sourceChatGuidSha256: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        admissionEvidenceSha256: '5555555555555555555555555555555555555555555555555555555555555555',
+        providerBackedAppleIdentity: true,
         stableCompleteSnapshots: true,
         exactNormalizedExternalParticipants: true,
         pairwiseComparedSourceRowIds: {2027, 2155, 2156},
@@ -128,12 +133,130 @@ void main() {
       }
     });
 
+    test('reconciled certificate atomically activates projection and mutation guards', () {
+      const candidate = LogicalConversationCandidateEvidence(
+        sourceChatRowId: 9120,
+        sourceChatGuidSha256: 'abababababababababababababababababababababababababababababababab',
+        admissionEvidenceSha256: 'cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd',
+        providerBackedAppleIdentity: true,
+        stableCompleteSnapshots: true,
+        exactNormalizedExternalParticipants: true,
+        pairwiseComparedSourceRowIds: {2027, 2155, 2156},
+        directRelationshipPeerRowIds: {2156},
+        structuredRelationshipCount: 1,
+        passiveNaturalProduction: true,
+        groupIdentityContinuity: true,
+        historicalLineage: true,
+        explanation: 'Runtime activation fixture.',
+      );
+      final before = LogicalConversationViewPolicy.activeCertificate.revision;
+      final reconciliation = LogicalConversationViewPolicy.reconcileCertificate(
+        LogicalConversationViewPolicy.activeCertificate,
+        const [candidate],
+      );
+      expect(
+        LogicalConversationViewPolicy.activateReconciledCertificate(reconciliation, expectedRevision: before),
+        isTrue,
+      );
+      expect(LogicalConversationViewPolicy.isApprovedSourceRowId(9120), isTrue);
+      expect(LogicalConversationViewPolicy.membershipProofFor(9120), isNotNull);
+      final projected = LogicalConversationViewPolicy.projectConversationList(const [
+        _ChatFixture(2027),
+        _ChatFixture(2155),
+        _ChatFixture(2156),
+        _ChatFixture(9120),
+      ], (chat) => chat.rowId);
+      expect(projected.map((chat) => chat.rowId), [2156]);
+      expect(
+        LogicalConversationViewPolicy.activateReconciledCertificate(reconciliation, expectedRevision: before),
+        isFalse,
+        reason: 'stale authority revision must not reactivate',
+      );
+    });
+
+    test('durable runtime certificate survives restart and retains exact GUID custody', () {
+      final sourceGuidSha256 = sha256.convert(utf8.encode('logical-provider-guid-v1\u0000future-guid')).toString();
+      final candidate = LogicalConversationCandidateEvidence(
+        sourceChatRowId: 9121,
+        sourceChatGuidSha256: sourceGuidSha256,
+        admissionEvidenceSha256: 'dededededededededededededededededededededededededededededededede',
+        providerBackedAppleIdentity: true,
+        stableCompleteSnapshots: true,
+        exactNormalizedExternalParticipants: true,
+        pairwiseComparedSourceRowIds: const {2027, 2155, 2156},
+        directRelationshipPeerRowIds: const {2156},
+        structuredRelationshipCount: 1,
+        passiveNaturalProduction: true,
+        groupIdentityContinuity: true,
+        historicalLineage: true,
+        explanation: 'Durable runtime certificate fixture.',
+      );
+      final before = LogicalConversationViewPolicy.activeCertificate.revision;
+      final reconciliation = LogicalConversationViewPolicy.reconcileCertificate(
+        LogicalConversationViewPolicy.activeCertificate,
+        [candidate],
+      );
+      expect(
+        LogicalConversationViewPolicy.activateReconciledCertificate(reconciliation, expectedRevision: before),
+        isTrue,
+      );
+      final advancedRevision = LogicalConversationViewPolicy.activeCertificate.revision;
+      expect(
+        LogicalConversationViewPolicy.matchesTransportCertificateBinding(
+          expectedCertificateRevision: before,
+          sourceChatRowId: 9121,
+          sourceChatGuid: 'future-guid',
+        ),
+        isFalse,
+        reason: 'predecessor-certificate receipt must not cross an advancement boundary',
+      );
+      expect(
+        LogicalConversationViewPolicy.matchesTransportCertificateBinding(
+          expectedCertificateRevision: advancedRevision,
+          sourceChatRowId: 9121,
+          sourceChatGuid: 'future-guid',
+        ),
+        isTrue,
+      );
+      final persisted = LogicalConversationViewPolicy.encodeRuntimeCertificate(
+        LogicalConversationViewPolicy.activeCertificate,
+      );
+
+      LogicalConversationViewPolicy.resetRuntimeCertificateForTesting();
+      expect(LogicalConversationViewPolicy.isApprovedSourceRowId(9121), isFalse);
+      expect(LogicalConversationViewPolicy.hydrateRuntimeCertificate(persisted), isTrue);
+      expect(LogicalConversationViewPolicy.runtimeCertificateAvailable, isTrue);
+      expect(LogicalConversationViewPolicy.isApprovedSourceRowId(9121), isTrue);
+      expect(LogicalConversationViewPolicy.sourceGuidMatchesActiveProof(9121, 'future-guid'), isTrue);
+      expect(LogicalConversationViewPolicy.sourceGuidMatchesActiveProof(9121, 'wrong-guid'), isFalse);
+    });
+
+    test('corrupt or regressed runtime certificate fails closed to the banked root', () {
+      expect(LogicalConversationViewPolicy.hydrateRuntimeCertificate('{not-json'), isFalse);
+      expect(LogicalConversationViewPolicy.runtimeCertificateAvailable, isFalse);
+      expect(LogicalConversationViewPolicy.activeCertificate.sourceChatRowIds, {2027, 2155, 2156});
+
+      final decoded =
+          jsonDecode(
+                LogicalConversationViewPolicy.encodeRuntimeCertificate(
+                  LogicalConversationViewPolicy.comcastNodeUpdates,
+                ),
+              )
+              as Map<String, dynamic>;
+      final payload = (decoded['certificate'] as Map).cast<String, dynamic>();
+      final members = payload['members'] as List;
+      (members.first as Map)['sourceChatGuidHmacSha256'] = List.filled(64, '0').join();
+      expect(LogicalConversationViewPolicy.hydrateRuntimeCertificate(jsonEncode(decoded)), isFalse);
+      expect(LogicalConversationViewPolicy.runtimeCertificateAvailable, isFalse);
+      expect(LogicalConversationViewPolicy.activeCertificate.sourceChatRowIds, {2027, 2155, 2156});
+    });
+
     test('candidate ordering cannot change evidence-driven read enrollment', () {
       const first = LogicalConversationCandidateEvidence(
         sourceChatRowId: 9108,
-        sourceChatGuidHmacSha256: 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
-        admissionReceiptCommit: '6666666666666666666666666666666666666666',
-        appleBlueBubblesGuidParity: true,
+        sourceChatGuidSha256: 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+        admissionEvidenceSha256: '6666666666666666666666666666666666666666666666666666666666666666',
+        providerBackedAppleIdentity: true,
         stableCompleteSnapshots: true,
         exactNormalizedExternalParticipants: true,
         pairwiseComparedSourceRowIds: {2027, 2155, 2156, 9109},
@@ -146,9 +269,9 @@ void main() {
       );
       const second = LogicalConversationCandidateEvidence(
         sourceChatRowId: 9109,
-        sourceChatGuidHmacSha256: 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
-        admissionReceiptCommit: '7777777777777777777777777777777777777777',
-        appleBlueBubblesGuidParity: true,
+        sourceChatGuidSha256: 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+        admissionEvidenceSha256: '7777777777777777777777777777777777777777777777777777777777777777',
+        providerBackedAppleIdentity: true,
         stableCompleteSnapshots: true,
         exactNormalizedExternalParticipants: true,
         pairwiseComparedSourceRowIds: {2027, 2155, 2156, 9108},
@@ -174,9 +297,9 @@ void main() {
     test('new unproven candidate remains ambiguous and cannot enter the read certificate', () {
       const candidate = LogicalConversationCandidateEvidence(
         sourceChatRowId: 9110,
-        sourceChatGuidHmacSha256: 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
-        admissionReceiptCommit: '8888888888888888888888888888888888888888',
-        appleBlueBubblesGuidParity: true,
+        sourceChatGuidSha256: 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+        admissionEvidenceSha256: '8888888888888888888888888888888888888888888888888888888888888888',
+        providerBackedAppleIdentity: true,
         stableCompleteSnapshots: true,
         exactNormalizedExternalParticipants: true,
         pairwiseComparedSourceRowIds: {2156},
@@ -198,9 +321,9 @@ void main() {
     test('duplicate candidate evidence aborts reconciliation atomically', () {
       const candidate = LogicalConversationCandidateEvidence(
         sourceChatRowId: 9111,
-        sourceChatGuidHmacSha256: 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
-        admissionReceiptCommit: '9999999999999999999999999999999999999999',
-        appleBlueBubblesGuidParity: true,
+        sourceChatGuidSha256: 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
+        admissionEvidenceSha256: '9999999999999999999999999999999999999999999999999999999999999999',
+        providerBackedAppleIdentity: true,
         stableCompleteSnapshots: true,
         exactNormalizedExternalParticipants: true,
         pairwiseComparedSourceRowIds: {2027, 2155, 2156},
@@ -223,9 +346,9 @@ void main() {
     test('participant-set mismatch classifies historical lineage without enrollment', () {
       const candidate = LogicalConversationCandidateEvidence(
         sourceChatRowId: 1674,
-        sourceChatGuidHmacSha256: 'e0c906040606a28f6bd9c95abc257d31917977ff4962a451e04169cbe47859f4',
-        admissionReceiptCommit: '3432adfd6c7daa67d8d7521207a8d433b3339763',
-        appleBlueBubblesGuidParity: true,
+        sourceChatGuidSha256: 'e0c906040606a28f6bd9c95abc257d31917977ff4962a451e04169cbe47859f4',
+        admissionEvidenceSha256: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        providerBackedAppleIdentity: true,
         stableCompleteSnapshots: true,
         exactNormalizedExternalParticipants: false,
         pairwiseComparedSourceRowIds: {2027, 2155, 2156},

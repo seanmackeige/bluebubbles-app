@@ -9,6 +9,11 @@ import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart';
 
 class ChatActions {
+  static Future<bool> activateLogicalReadCertificate(dynamic data) async {
+    final raw = (data as Map<String, dynamic>)['certificate'] as String?;
+    return LogicalConversationViewPolicy.hydrateRuntimeCertificate(raw);
+  }
+
   static Future<void> clearNotificationForChat(dynamic data) async {
     if (kIsDesktop || kIsWeb) return;
     final chatId = data['chatId'] as int;

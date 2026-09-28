@@ -223,13 +223,22 @@ class OutgoingMessageHandler {
   /// stages carry that receipt and may not select another chat.
   Future<void> queueBatch(List<OutgoingQueueItem> items) async {
     if (items.isEmpty) return;
+    final runtimeCertificateAvailable = LogicalConversationViewPolicy.hydrateRuntimeCertificate(
+      await PrefsSvc.messaging.loadLogicalReadCertificateJsonFresh(),
+    );
     for (final item in items) {
       _ensureTempGuid(item);
     }
 
-    final logical = items.any((item) => LogicalConversationViewPolicy.isApprovedSourceRowId(item.chat.originalROWID));
+    final logical = items.any((item) => ChatsSvc.isPotentialLogicalSource(item.chat));
     if (logical) {
-      if (items.any((item) => !LogicalConversationViewPolicy.isApprovedSourceRowId(item.chat.originalROWID))) {
+      if (!runtimeCertificateAvailable) {
+        throw const LogicalSendAdmissionException(
+          LogicalSendAdmissionState.providerEvidenceUnavailable,
+          'SEND_BLOCKED_LOGICAL_RUNTIME_CERTIFICATE_UNAVAILABLE',
+        );
+      }
+      if (items.any((item) => !ChatsSvc.isPotentialLogicalSource(item.chat))) {
         throw const LogicalSendAdmissionException(
           LogicalSendAdmissionState.targetBindingInvalid,
           'SEND_BLOCKED_MIXED_LOGICAL_AND_PHYSICAL_BATCH',
@@ -1071,6 +1080,7 @@ class OutgoingMessageHandler {
           transportMethod: typed.logicalTransportMethod,
           ddScan: typed.logicalDdScan,
           expectedProviderContextFingerprint: typed.logicalAdmissionReceipt?.providerContextFingerprint,
+          expectedCertificateRevision: typed.logicalAdmissionReceipt?.certificateRevision,
           allowTransientRetry: logicalTransportMayRetry(typed.logicalAdmissionReceipt),
           allowSocketCompletion: logicalSocketEchoMayComplete(typed.logicalAdmissionReceipt),
         );
@@ -1083,6 +1093,7 @@ class OutgoingMessageHandler {
           typed.reaction,
           transportMethod: typed.logicalTransportMethod,
           expectedProviderContextFingerprint: typed.logicalAdmissionReceipt?.providerContextFingerprint,
+          expectedCertificateRevision: typed.logicalAdmissionReceipt?.certificateRevision,
           allowTransientRetry: logicalTransportMayRetry(typed.logicalAdmissionReceipt),
           allowSocketCompletion: logicalSocketEchoMayComplete(typed.logicalAdmissionReceipt),
         );
@@ -1096,6 +1107,7 @@ class OutgoingMessageHandler {
           transportMethod: typed.logicalTransportMethod,
           ddScan: typed.logicalDdScan,
           expectedProviderContextFingerprint: typed.logicalAdmissionReceipt?.providerContextFingerprint,
+          expectedCertificateRevision: typed.logicalAdmissionReceipt?.certificateRevision,
           allowTransientRetry: logicalTransportMayRetry(typed.logicalAdmissionReceipt),
           allowSocketCompletion: logicalSocketEchoMayComplete(typed.logicalAdmissionReceipt),
         );
@@ -1108,6 +1120,7 @@ class OutgoingMessageHandler {
           typed.attachment,
           transportMethod: typed.logicalTransportMethod,
           expectedProviderContextFingerprint: typed.logicalAdmissionReceipt?.providerContextFingerprint,
+          expectedCertificateRevision: typed.logicalAdmissionReceipt?.certificateRevision,
           allowTransientRetry: logicalTransportMayRetry(typed.logicalAdmissionReceipt),
           allowSocketCompletion: logicalSocketEchoMayComplete(typed.logicalAdmissionReceipt),
         );
@@ -1428,6 +1441,7 @@ class OutgoingMessageHandler {
     String? transportMethod,
     bool? ddScan,
     String? expectedProviderContextFingerprint,
+    String? expectedCertificateRevision,
     bool allowTransientRetry = true,
     bool allowSocketCompletion = true,
   }) {
@@ -1456,6 +1470,7 @@ class OutgoingMessageHandler {
               partIndex: int.tryParse(m.threadOriginatorPart?.split(':').firstOrNull ?? ''),
               ddScan: ddScan ?? (!SettingsSvc.serverDetails.isMinSonoma && m.text!.hasUrl),
               expectedProviderContextFingerprint: expectedProviderContextFingerprint,
+              expectedCertificateRevision: expectedCertificateRevision,
               allowTransientRetry: allowTransientRetry,
             )
           : SendMessageInterface.sendTapback(
@@ -1465,6 +1480,7 @@ class OutgoingMessageHandler {
               reaction: r,
               partIndex: m.associatedMessagePart,
               expectedProviderContextFingerprint: expectedProviderContextFingerprint,
+              expectedCertificateRevision: expectedCertificateRevision,
               allowTransientRetry: allowTransientRetry,
             ),
       onSuccess: (data) => _finalizeOutgoingSuccess(
@@ -1524,6 +1540,7 @@ class OutgoingMessageHandler {
     String? transportMethod,
     bool? ddScan,
     String? expectedProviderContextFingerprint,
+    String? expectedCertificateRevision,
     bool allowTransientRetry = true,
     bool allowSocketCompletion = true,
   }) {
@@ -1559,6 +1576,7 @@ class OutgoingMessageHandler {
         partIndex: int.tryParse(m.threadOriginatorPart?.split(':').firstOrNull ?? ''),
         ddScan: ddScan ?? (!SettingsSvc.serverDetails.isMinSonoma && parts.any((e) => e['text'].toString().hasUrl)),
         expectedProviderContextFingerprint: expectedProviderContextFingerprint,
+        expectedCertificateRevision: expectedCertificateRevision,
         allowTransientRetry: allowTransientRetry,
       ),
       onSuccess: (data) => _finalizeOutgoingSuccess(c, tempGuid, data),
@@ -1582,6 +1600,7 @@ class OutgoingMessageHandler {
     Attachment? attachment, {
     String? transportMethod,
     String? expectedProviderContextFingerprint,
+    String? expectedCertificateRevision,
     bool allowTransientRetry = true,
     bool allowSocketCompletion = true,
   }) async {
@@ -1625,6 +1644,7 @@ class OutgoingMessageHandler {
         partIndex: int.tryParse(m.threadOriginatorPart?.split(':').firstOrNull ?? ''),
         isAudioMessage: isAudioMessage,
         expectedProviderContextFingerprint: expectedProviderContextFingerprint,
+        expectedCertificateRevision: expectedCertificateRevision,
         allowTransientRetry: allowTransientRetry,
       ),
       onSuccess: (Map<String, dynamic> data) async {

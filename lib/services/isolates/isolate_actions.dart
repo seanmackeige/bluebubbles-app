@@ -75,6 +75,7 @@ class IsolateActons {
     IsolateRequestType.getParticipantsAsync: ChatActions.getParticipantsAsync,
     IsolateRequestType.clearTranscriptAsync: ChatActions.clearTranscriptAsync,
     IsolateRequestType.getChatsAsync: ChatActions.getChatsAsync,
+    IsolateRequestType.activateLogicalReadCertificate: ChatActions.activateLogicalReadCertificate,
 
     // Handle
     IsolateRequestType.saveHandleAsync: HandleActions.saveHandleAsync,

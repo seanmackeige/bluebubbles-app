@@ -676,6 +676,7 @@ enum IsolateRequestType {
   getParticipantsAsync,
   clearTranscriptAsync,
   getChatsAsync,
+  activateLogicalReadCertificate,
 
   // Handle actions
   saveHandleAsync,

@@ -1,4 +1,5 @@
 import 'package:bluebubbles/database/models.dart';
+import 'package:bluebubbles/services/ui/chat/logical_conversation_view.dart';
 import 'package:bluebubbles/services/isolates/global_isolate.dart';
 import 'package:bluebubbles/services/services.dart';
 
@@ -9,8 +10,39 @@ import 'package:bluebubbles/services/services.dart';
 /// hydrate a [Message] via `Message.fromMap(result['data'])`.
 ///
 class SendMessageActions {
+  static Future<bool> _refreshLogicalCertificate() async {
+    final raw = await PrefsSvc.messaging.loadLogicalReadCertificateJsonFresh();
+    return LogicalConversationViewPolicy.hydrateRuntimeCertificate(raw);
+  }
+
+  static Future<void> _refreshLogicalCertificateForRequest(Map<String, dynamic> map) async {
+    final available = await _refreshLogicalCertificate();
+    final logicalRequest =
+        map['expectedProviderContextFingerprint'] != null || map['expectedCertificateRevision'] != null;
+    if (!available && logicalRequest) {
+      throw StateError('LOGICAL_RUNTIME_CERTIFICATE_UNAVAILABLE');
+    }
+  }
+
   static void _validateProviderContext(Map<String, dynamic> map) {
     final expected = map['expectedProviderContextFingerprint'] as String?;
+    final expectedCertificateRevision = map['expectedCertificateRevision'] as String?;
+    final chatGuid = map['chatGuid'] as String?;
+    final chat = chatGuid == null ? null : Chat.findOne(guid: chatGuid);
+    if (expected != null &&
+        !LogicalConversationViewPolicy.matchesTransportCertificateBinding(
+          expectedCertificateRevision: expectedCertificateRevision,
+          sourceChatRowId: chat?.originalROWID,
+          sourceChatGuid: chat?.guid,
+        )) {
+      throw StateError('LOGICAL_TRANSPORT_CERTIFICATE_BINDING_CHANGED');
+    }
+    if (expected == null && expectedCertificateRevision != null) {
+      throw StateError('LOGICAL_TRANSPORT_ADMISSION_BINDING_INCOMPLETE');
+    }
+    if (chat != null && LogicalConversationViewPolicy.isApprovedSourceRowId(chat.originalROWID) && expected == null) {
+      throw StateError('LOGICAL_TRANSPORT_ADMISSION_REQUIRED');
+    }
     if (expected == null) return;
     final current = logicalProviderContextFingerprint(
       origin: HttpSvc.origin,
@@ -30,6 +62,7 @@ class SendMessageActions {
   /// Sends a text message via HTTP.
   static Future<Map<String, dynamic>> sendTextMessage(dynamic data) async {
     final map = data as Map<String, dynamic>;
+    await _refreshLogicalCertificateForRequest(map);
     _validateProviderContext(map);
     final chatGuid = map['chatGuid'] as String;
     final tempGuid = map['tempGuid'] as String;
@@ -60,6 +93,7 @@ class SendMessageActions {
   /// Sends a tapback via HTTP.
   static Future<Map<String, dynamic>> sendTapback(dynamic data) async {
     final map = data as Map<String, dynamic>;
+    await _refreshLogicalCertificateForRequest(map);
     _validateProviderContext(map);
     final chatGuid = map['chatGuid'] as String;
     final selectedMessageText = map['selectedMessageText'] as String;
@@ -82,6 +116,7 @@ class SendMessageActions {
   /// Sends a multipart (mention / mixed-content) message via HTTP.
   static Future<Map<String, dynamic>> sendMultipartMessage(dynamic data) async {
     final map = data as Map<String, dynamic>;
+    await _refreshLogicalCertificateForRequest(map);
     _validateProviderContext(map);
     final chatGuid = map['chatGuid'] as String;
     final tempGuid = map['tempGuid'] as String;
@@ -113,6 +148,7 @@ class SendMessageActions {
   /// [FormData] locally, avoiding cross-isolate byte transfer.
   static Future<Map<String, dynamic>> sendAttachmentMessage(dynamic data) async {
     final map = data as Map<String, dynamic>;
+    await _refreshLogicalCertificateForRequest(map);
     _validateProviderContext(map);
     final chatGuid = map['chatGuid'] as String;
     final tempGuid = map['tempGuid'] as String;
@@ -138,7 +174,10 @@ class SendMessageActions {
       partIndex: partIndex,
       isAudioMessage: isAudioMessage,
       allowTransientRetry: allowTransientRetry,
-      validateBeforeTransport: () => _validateProviderContext(map),
+      validateBeforeTransport: () async {
+        await _refreshLogicalCertificateForRequest(map);
+        _validateProviderContext(map);
+      },
       onSendProgress: (count, total) {
         if (total <= 0) return;
         IsolateEventEmitter.emit(IsolateEvent.attachmentUploadProgress, {

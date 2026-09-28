@@ -10,6 +10,14 @@ import 'package:get_it/get_it.dart';
 import 'package:bluebubbles/services/isolates/global_isolate.dart';
 
 class ChatInterface {
+  static Future<bool> activateLogicalReadCertificate({required String certificate}) async {
+    final data = <String, dynamic>{'certificate': certificate};
+    if (isIsolate) {
+      return ChatActions.activateLogicalReadCertificate(data);
+    }
+    return GetIt.I<GlobalIsolate>().send<bool>(IsolateRequestType.activateLogicalReadCertificate, input: data);
+  }
+
   static Future<void> clearNotificationForChat({required int chatId, required String chatGuid}) async {
     final data = {'chatId': chatId, 'chatGuid': chatGuid};
 

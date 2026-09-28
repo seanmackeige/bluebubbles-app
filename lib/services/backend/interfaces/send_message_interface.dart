@@ -21,6 +21,7 @@ class SendMessageInterface {
     int? partIndex,
     bool? ddScan,
     String? expectedProviderContextFingerprint,
+    String? expectedCertificateRevision,
     bool allowTransientRetry = true,
   }) async {
     final data = {
@@ -34,6 +35,7 @@ class SendMessageInterface {
       'partIndex': partIndex,
       'ddScan': ddScan,
       'expectedProviderContextFingerprint': expectedProviderContextFingerprint,
+      'expectedCertificateRevision': expectedCertificateRevision,
       'allowTransientRetry': allowTransientRetry,
     };
     if (isIsolate) {
@@ -50,6 +52,7 @@ class SendMessageInterface {
     required String reaction,
     int? partIndex,
     String? expectedProviderContextFingerprint,
+    String? expectedCertificateRevision,
     bool allowTransientRetry = true,
   }) async {
     final data = {
@@ -59,6 +62,7 @@ class SendMessageInterface {
       'reaction': reaction,
       'partIndex': partIndex,
       'expectedProviderContextFingerprint': expectedProviderContextFingerprint,
+      'expectedCertificateRevision': expectedCertificateRevision,
       'allowTransientRetry': allowTransientRetry,
     };
     if (isIsolate) {
@@ -79,6 +83,7 @@ class SendMessageInterface {
     int? partIndex,
     bool? ddScan,
     String? expectedProviderContextFingerprint,
+    String? expectedCertificateRevision,
     bool allowTransientRetry = true,
   }) async {
     final data = {
@@ -91,6 +96,7 @@ class SendMessageInterface {
       'partIndex': partIndex,
       'ddScan': ddScan,
       'expectedProviderContextFingerprint': expectedProviderContextFingerprint,
+      'expectedCertificateRevision': expectedCertificateRevision,
       'allowTransientRetry': allowTransientRetry,
     };
     if (isIsolate) {
@@ -119,6 +125,7 @@ class SendMessageInterface {
     int? partIndex,
     bool? isAudioMessage,
     String? expectedProviderContextFingerprint,
+    String? expectedCertificateRevision,
     bool allowTransientRetry = true,
   }) async {
     final data = {
@@ -134,6 +141,7 @@ class SendMessageInterface {
       'partIndex': partIndex,
       'isAudioMessage': isAudioMessage ?? false,
       'expectedProviderContextFingerprint': expectedProviderContextFingerprint,
+      'expectedCertificateRevision': expectedCertificateRevision,
       'allowTransientRetry': allowTransientRetry,
     };
     if (isIsolate) {

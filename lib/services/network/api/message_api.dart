@@ -177,7 +177,7 @@ class MessageApi {
     int? partIndex,
     bool? isAudioMessage,
     bool allowTransientRetry = true,
-    void Function()? validateBeforeTransport,
+    Future<void> Function()? validateBeforeTransport,
     CancelToken? cancelToken,
   }) async {
     return _svc.runApiGuarded(() async {
@@ -208,7 +208,7 @@ class MessageApi {
       // File materialization above yields. Revalidate the admitted provider
       // context after that yield and immediately before the transport captures
       // its URL, auth query, and headers.
-      validateBeforeTransport?.call();
+      await validateBeforeTransport?.call();
       final response = await _svc.dio.post(
         "${_svc.apiRoot}/message/attachment",
         queryParameters: _svc.buildQueryParams(),
