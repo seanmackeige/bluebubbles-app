@@ -345,7 +345,15 @@ class OutgoingMessageHandler {
     );
     final revision = result.revision;
     final observationEpoch = result.observationEpoch;
-    if (revision == null || observationEpoch == null || result.transportReadiness.length != items.length) {
+    final providerAccountSnapshotSha256 = result.providerAccountSnapshotSha256;
+    final providerFactContractRevision = result.providerFactContractRevision;
+    if (revision == null ||
+        observationEpoch == null ||
+        providerAccountSnapshotSha256 == null ||
+        !RegExp(r'^[0-9a-f]{64}$').hasMatch(providerAccountSnapshotSha256) ||
+        providerFactContractRevision == null ||
+        !RegExp(r'^[0-9a-f]{64}$').hasMatch(providerFactContractRevision) ||
+        result.transportReadiness.length != items.length) {
       _failLogicalAdmission(items, 'SEND_BLOCKED_PROVIDER_EVIDENCE_UNAVAILABLE');
     }
     if (_currentLogicalProviderContextFingerprint() != providerContextAtObservationStart) {
@@ -445,6 +453,7 @@ class OutgoingMessageHandler {
         '$logicalSendAdmissionSchema\u0000${admissionKeys[index]}\u0000${revision.authorityRevision}'
         '\u0000${target.originalROWID}\u0000${target.guid}\u0000$payloadFingerprint'
         '\u0000$providerContextFingerprint\u0000${transportReadiness.revision}'
+        '\u0000$providerAccountSnapshotSha256\u0000$providerFactContractRevision'
         '\u0000${transportDisposition[index].name}',
       );
       receipts.add(
@@ -462,6 +471,8 @@ class OutgoingMessageHandler {
           payloadFingerprint: payloadFingerprint,
           intentFingerprint: intentFingerprint,
           providerContextFingerprint: providerContextFingerprint,
+          providerAccountSnapshotSha256: providerAccountSnapshotSha256,
+          providerFactContractRevision: providerFactContractRevision,
           transportReadinessRevision: transportReadiness.revision,
           transportSendDisposition: transportDisposition[index].name,
           committedAtEpochMilliseconds: now,
@@ -1081,6 +1092,8 @@ class OutgoingMessageHandler {
           ddScan: typed.logicalDdScan,
           expectedProviderContextFingerprint: typed.logicalAdmissionReceipt?.providerContextFingerprint,
           expectedCertificateRevision: typed.logicalAdmissionReceipt?.certificateRevision,
+          expectedProviderAccountSnapshotSha256: typed.logicalAdmissionReceipt?.providerAccountSnapshotSha256,
+          expectedProviderFactContractRevision: typed.logicalAdmissionReceipt?.providerFactContractRevision,
           allowTransientRetry: logicalTransportMayRetry(typed.logicalAdmissionReceipt),
           allowSocketCompletion: logicalSocketEchoMayComplete(typed.logicalAdmissionReceipt),
         );
@@ -1094,6 +1107,8 @@ class OutgoingMessageHandler {
           transportMethod: typed.logicalTransportMethod,
           expectedProviderContextFingerprint: typed.logicalAdmissionReceipt?.providerContextFingerprint,
           expectedCertificateRevision: typed.logicalAdmissionReceipt?.certificateRevision,
+          expectedProviderAccountSnapshotSha256: typed.logicalAdmissionReceipt?.providerAccountSnapshotSha256,
+          expectedProviderFactContractRevision: typed.logicalAdmissionReceipt?.providerFactContractRevision,
           allowTransientRetry: logicalTransportMayRetry(typed.logicalAdmissionReceipt),
           allowSocketCompletion: logicalSocketEchoMayComplete(typed.logicalAdmissionReceipt),
         );
@@ -1108,6 +1123,8 @@ class OutgoingMessageHandler {
           ddScan: typed.logicalDdScan,
           expectedProviderContextFingerprint: typed.logicalAdmissionReceipt?.providerContextFingerprint,
           expectedCertificateRevision: typed.logicalAdmissionReceipt?.certificateRevision,
+          expectedProviderAccountSnapshotSha256: typed.logicalAdmissionReceipt?.providerAccountSnapshotSha256,
+          expectedProviderFactContractRevision: typed.logicalAdmissionReceipt?.providerFactContractRevision,
           allowTransientRetry: logicalTransportMayRetry(typed.logicalAdmissionReceipt),
           allowSocketCompletion: logicalSocketEchoMayComplete(typed.logicalAdmissionReceipt),
         );
@@ -1121,6 +1138,8 @@ class OutgoingMessageHandler {
           transportMethod: typed.logicalTransportMethod,
           expectedProviderContextFingerprint: typed.logicalAdmissionReceipt?.providerContextFingerprint,
           expectedCertificateRevision: typed.logicalAdmissionReceipt?.certificateRevision,
+          expectedProviderAccountSnapshotSha256: typed.logicalAdmissionReceipt?.providerAccountSnapshotSha256,
+          expectedProviderFactContractRevision: typed.logicalAdmissionReceipt?.providerFactContractRevision,
           allowTransientRetry: logicalTransportMayRetry(typed.logicalAdmissionReceipt),
           allowSocketCompletion: logicalSocketEchoMayComplete(typed.logicalAdmissionReceipt),
         );
@@ -1154,6 +1173,9 @@ class OutgoingMessageHandler {
         item.chat.originalROWID != receipt.targetSourceChatRowId ||
         item.chat.guid != receipt.targetSourceChatGuid ||
         _currentLogicalProviderContextFingerprint() != receipt.providerContextFingerprint ||
+        !RegExp(r'^[0-9a-f]{64}$').hasMatch(receipt.providerAccountSnapshotSha256) ||
+        receipt.providerFactContractRevision !=
+            LogicalConversationOutboundRoutePolicy.comcastNodeUpdatesGeneration.providerFactContractRevision ||
         _logicalPayloadFingerprint(item) != receipt.payloadFingerprint) {
       throw StateError('LOGICAL_ADMISSION_RECEIPT_BINDING_CONTRADICTION');
     }
@@ -1442,6 +1464,8 @@ class OutgoingMessageHandler {
     bool? ddScan,
     String? expectedProviderContextFingerprint,
     String? expectedCertificateRevision,
+    String? expectedProviderAccountSnapshotSha256,
+    String? expectedProviderFactContractRevision,
     bool allowTransientRetry = true,
     bool allowSocketCompletion = true,
   }) {
@@ -1471,6 +1495,8 @@ class OutgoingMessageHandler {
               ddScan: ddScan ?? (!SettingsSvc.serverDetails.isMinSonoma && m.text!.hasUrl),
               expectedProviderContextFingerprint: expectedProviderContextFingerprint,
               expectedCertificateRevision: expectedCertificateRevision,
+              expectedProviderAccountSnapshotSha256: expectedProviderAccountSnapshotSha256,
+              expectedProviderFactContractRevision: expectedProviderFactContractRevision,
               allowTransientRetry: allowTransientRetry,
             )
           : SendMessageInterface.sendTapback(
@@ -1481,6 +1507,8 @@ class OutgoingMessageHandler {
               partIndex: m.associatedMessagePart,
               expectedProviderContextFingerprint: expectedProviderContextFingerprint,
               expectedCertificateRevision: expectedCertificateRevision,
+              expectedProviderAccountSnapshotSha256: expectedProviderAccountSnapshotSha256,
+              expectedProviderFactContractRevision: expectedProviderFactContractRevision,
               allowTransientRetry: allowTransientRetry,
             ),
       onSuccess: (data) => _finalizeOutgoingSuccess(
@@ -1541,6 +1569,8 @@ class OutgoingMessageHandler {
     bool? ddScan,
     String? expectedProviderContextFingerprint,
     String? expectedCertificateRevision,
+    String? expectedProviderAccountSnapshotSha256,
+    String? expectedProviderFactContractRevision,
     bool allowTransientRetry = true,
     bool allowSocketCompletion = true,
   }) {
@@ -1577,6 +1607,8 @@ class OutgoingMessageHandler {
         ddScan: ddScan ?? (!SettingsSvc.serverDetails.isMinSonoma && parts.any((e) => e['text'].toString().hasUrl)),
         expectedProviderContextFingerprint: expectedProviderContextFingerprint,
         expectedCertificateRevision: expectedCertificateRevision,
+        expectedProviderAccountSnapshotSha256: expectedProviderAccountSnapshotSha256,
+        expectedProviderFactContractRevision: expectedProviderFactContractRevision,
         allowTransientRetry: allowTransientRetry,
       ),
       onSuccess: (data) => _finalizeOutgoingSuccess(c, tempGuid, data),
@@ -1601,6 +1633,8 @@ class OutgoingMessageHandler {
     String? transportMethod,
     String? expectedProviderContextFingerprint,
     String? expectedCertificateRevision,
+    String? expectedProviderAccountSnapshotSha256,
+    String? expectedProviderFactContractRevision,
     bool allowTransientRetry = true,
     bool allowSocketCompletion = true,
   }) async {
@@ -1645,6 +1679,8 @@ class OutgoingMessageHandler {
         isAudioMessage: isAudioMessage,
         expectedProviderContextFingerprint: expectedProviderContextFingerprint,
         expectedCertificateRevision: expectedCertificateRevision,
+        expectedProviderAccountSnapshotSha256: expectedProviderAccountSnapshotSha256,
+        expectedProviderFactContractRevision: expectedProviderFactContractRevision,
         allowTransientRetry: allowTransientRetry,
       ),
       onSuccess: (Map<String, dynamic> data) async {

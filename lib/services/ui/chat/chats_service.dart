@@ -480,6 +480,11 @@ class ChatsService {
     final serverSnapshotStable = serverBefore.fingerprint == serverAfter.fingerprint;
     final accountBefore = _logicalAccountProjection(accountBeforeResponse.data['data']);
     final accountAfter = _logicalAccountProjection(accountAfterResponse.data['data']);
+    const generation = LogicalConversationOutboundRoutePolicy.comcastNodeUpdatesGeneration;
+    final authoritativeAccountSnapshotStable =
+        accountBefore.fingerprint.isNotEmpty &&
+        accountBefore.fingerprint == accountAfter.fingerprint &&
+        accountBefore.fingerprint == generation.expectedAccountSnapshotSha256;
 
     final candidates = <LogicalRouteCandidateEvidence>[];
     for (var index = 0; index < sources.length; index++) {
@@ -489,8 +494,19 @@ class ChatsService {
       );
       final snapshot = snapshots[index];
       final rawMessages = snapshot.messages;
+      final sourceChatGuid = chatData['guid']?.toString() ?? '';
+      final sourceService = _logicalChatService(sourceChatGuid);
+      final authoritativeAccount = LogicalConversationOutboundRoutePolicy.authoritativeAccountFactFor(
+        certificate: generation,
+        sourceChatGuid: sourceChatGuid,
+        service: sourceService,
+      );
+      final authoritativeAccountFallbackAvailable = authoritativeAccountSnapshotStable && authoritativeAccount != null;
       final successfulOutbounds = <LogicalSuccessfulOutboundEvidence>[];
       final messages = <LogicalRouteMessageEvidence>[];
+      var sawAccountFactPresentAndMatching = false;
+      var sawAccountFactContradiction = false;
+      final observedAccountBindings = <String>{};
       for (final message in rawMessages) {
         final rowId = (message['originalROWID'] as num?)?.toInt();
         final guid = message['guid']?.toString();
@@ -503,7 +519,6 @@ class ChatsService {
             message['threadOriginatorGuid']?.toString() ??
             message['threadOriginatorGUID']?.toString() ??
             message['replyToGuid']?.toString();
-        final account = message['account']?.toString() ?? '';
         if (rowId == null ||
             rowId <= 0 ||
             guid == null ||
@@ -515,6 +530,22 @@ class ChatsService {
             isFromMe is! bool) {
           continue;
         }
+        final accountFact = LogicalConversationOutboundRoutePolicy.resolveAccountFact(
+          providerFieldPresent: message.containsKey('account'),
+          providerValue: message['account'],
+          expectedAccountSha256: authoritativeAccount?.accountSha256 ?? '',
+          authoritativeFallbackAvailable: authoritativeAccountFallbackAvailable,
+        );
+        sawAccountFactPresentAndMatching |= accountFact.state == LogicalProviderFactState.presentAndMatches;
+        sawAccountFactContradiction |= accountFact.state == LogicalProviderFactState.presentAndContradicts;
+        final providerAccountValue = message['account'];
+        final account = accountFact.invariantSatisfied
+            ? authoritativeAccount?.accountSha256 ??
+                  (providerAccountValue is String && providerAccountValue.isNotEmpty
+                      ? LogicalConversationOutboundRoutePolicy.providerValueFingerprint(providerAccountValue)
+                      : '')
+            : '';
+        if (account.isNotEmpty) observedAccountBindings.add(account);
         messages.add(
           LogicalRouteMessageEvidence(
             messageGuid: guid,
@@ -526,19 +557,43 @@ class ChatsService {
             associatedMessageGuid: associatedMessageGuid,
             replyToGuid: replyToGuid,
             account: account,
+            accountFact: accountFact,
           ),
         );
         if (message['isFromMe'] == true &&
             error == 0 &&
             itemType == 0 &&
             (associatedMessageGuid == null || associatedMessageGuid.isEmpty)) {
+          final authoritativeTerminal = account.isEmpty
+              ? null
+              : LogicalConversationOutboundRoutePolicy.authoritativeTerminalFactFor(
+                  certificate: generation,
+                  sourceChatGuid: sourceChatGuid,
+                  service: sourceService,
+                  accountSha256: account,
+                  messageGuid: guid,
+                  messageRowId: rowId,
+                );
+          final isSentFact = LogicalConversationOutboundRoutePolicy.resolveTerminalFact(
+            providerFieldPresent: message.containsKey('isSent'),
+            providerValue: message['isSent'],
+            authoritativeFallbackValue: authoritativeAccountSnapshotStable && authoritativeTerminal?.isSent == true,
+          );
+          final isFinishedFact = LogicalConversationOutboundRoutePolicy.resolveTerminalFact(
+            providerFieldPresent: message.containsKey('isFinished'),
+            providerValue: message['isFinished'],
+            authoritativeFallbackValue: authoritativeAccountSnapshotStable && authoritativeTerminal?.isFinished == true,
+          );
           successfulOutbounds.add(
             LogicalSuccessfulOutboundEvidence(
               messageGuid: guid,
               messageRowId: rowId,
               createdAtEpoch: createdAt,
-              terminalAcknowledgement: message['isSent'] == true && message['isFinished'] == true,
+              terminalAcknowledgement: isSentFact.invariantSatisfied && isFinishedFact.invariantSatisfied,
               account: account,
+              accountFact: accountFact,
+              isSentFact: isSentFact,
+              isFinishedFact: isFinishedFact,
             ),
           );
         }
@@ -555,17 +610,23 @@ class ChatsService {
       }
       final properties = _logicalChatGenerationProperties(chatData);
       final verificationProperties = _logicalChatGenerationProperties(verificationChatData);
-      final accountMessages = messages.where((message) => message.isNormal && message.account.isNotEmpty).toList()
-        ..sort((left, right) {
-          final byTime = left.createdAtEpoch.compareTo(right.createdAtEpoch);
-          return byTime != 0 ? byTime : left.messageGuid.compareTo(right.messageGuid);
-        });
+      sawAccountFactContradiction |= observedAccountBindings.length > 1;
+      final sourceAccountFact = sawAccountFactContradiction
+          ? const LogicalProviderFactEvidence(state: LogicalProviderFactState.presentAndContradicts)
+          : sawAccountFactPresentAndMatching
+          ? const LogicalProviderFactEvidence(state: LogicalProviderFactState.presentAndMatches)
+          : LogicalProviderFactEvidence(
+              state: LogicalProviderFactState.unavailable,
+              satisfiedByAuthoritativeFallback: authoritativeAccountFallbackAvailable,
+            );
       candidates.add(
         LogicalRouteCandidateEvidence(
           sourceChatRowId: (chatData['originalROWID'] as num?)?.toInt() ?? -1,
-          sourceChatGuid: chatData['guid']?.toString() ?? '',
-          sourceService: _logicalChatService(chatData['guid']),
-          sourceAccount: accountMessages.lastOrNull?.account ?? '',
+          sourceChatGuid: sourceChatGuid,
+          sourceService: sourceService,
+          sourceAccount: sourceAccountFact.invariantSatisfied
+              ? observedAccountBindings.singleOrNull ?? authoritativeAccount?.accountSha256 ?? ''
+              : '',
           chatIdentifier: chatData['chatIdentifier']?.toString() ?? '',
           style: (chatData['style'] as num?)?.toInt() ?? -1,
           lastAddressedHandle: LogicalAddressEvidence(address: chatData['lastAddressedHandle']?.toString() ?? ''),
@@ -582,6 +643,7 @@ class ChatsService {
           groupIdentifier: chatData['groupId']?.toString(),
           messages: messages,
           successfulOutbounds: successfulOutbounds,
+          sourceAccountFact: sourceAccountFact,
         ),
       );
     }
@@ -625,7 +687,7 @@ class ChatsService {
       accountSnapshotAfterSha256: accountAfter.fingerprint,
       activeSelfAlias: LogicalAddressEvidence(address: accountBefore.activeAlias),
       vettedSelfAliases: accountBefore.vettedAliases.map((alias) => LogicalAddressEvidence(address: alias)).toList(),
-      executionGenerationCertificate: LogicalConversationOutboundRoutePolicy.comcastNodeUpdatesGeneration,
+      executionGenerationCertificate: generation,
       candidateScopeSnapshotComplete: candidateScopeSnapshotComplete,
       unadmittedPotentialSourceChatGuids: unadmittedPotentialSources,
       candidates: candidates,
@@ -1084,9 +1146,8 @@ class ChatsService {
         appleId.isEmpty) {
       return (fingerprint: '', activeAlias: '', vettedAliases: const []);
     }
-    final projection = {'aliases': aliases, 'vetted_aliases': vetted, 'active_alias': activeAlias, 'apple_id': appleId};
     return (
-      fingerprint: sha256.convert(utf8.encode(jsonEncode(projection))).toString(),
+      fingerprint: LogicalConversationOutboundRoutePolicy.providerAccountSnapshotFingerprint(account),
       activeAlias: activeAlias,
       vettedAliases: vetted.map((item) => item['alias'] as String).toList(),
     );
@@ -1135,6 +1196,8 @@ class ChatsService {
       List<LogicalTransportReadinessEvidence> transportReadiness,
       LogicalAuthorityRevision? revision,
       int? observationEpoch,
+      String? providerAccountSnapshotSha256,
+      String? providerFactContractRevision,
     })
   >
   resolveLogicalMutationBatch(Chat chat, List<LogicalMutationRequest> requests, {bool force = false}) async {
@@ -1160,6 +1223,8 @@ class ChatsService {
         transportReadiness: [for (final _ in requests) unavailableEvidence('TRANSPORT_ROUTE_NOT_QUALIFIED')],
         revision: null,
         observationEpoch: null,
+        providerAccountSnapshotSha256: null,
+        providerFactContractRevision: null,
       );
     }
     if (requests.any((request) => request.mutationClass == LogicalMutationClass.newMessage)) {
@@ -1178,6 +1243,8 @@ class ChatsService {
           transportReadiness: [for (final _ in requests) unavailableEvidence('TRANSPORT_ROUTE_NOT_QUALIFIED')],
           revision: null,
           observationEpoch: observation.observationEpoch,
+          providerAccountSnapshotSha256: null,
+          providerFactContractRevision: null,
         );
       }
       final authorityDecision = LogicalConversationOutboundRoutePolicy.resolve(
@@ -1242,6 +1309,8 @@ class ChatsService {
         transportReadiness: transportReadiness,
         revision: revision,
         observationEpoch: observation.observationEpoch,
+        providerAccountSnapshotSha256: evidence.accountSnapshotAfterSha256,
+        providerFactContractRevision: evidence.executionGenerationCertificate?.providerFactContractRevision,
       );
     } catch (_) {
       Logger.warn('Logical route evidence unavailable; mutation remains fail closed', tag: 'LogicalConversationRoute');
@@ -1259,6 +1328,8 @@ class ChatsService {
         transportReadiness: [for (final _ in requests) unavailableEvidence('TRANSPORT_PROVIDER_EVIDENCE_UNAVAILABLE')],
         revision: null,
         observationEpoch: null,
+        providerAccountSnapshotSha256: null,
+        providerFactContractRevision: null,
       );
     }
   }

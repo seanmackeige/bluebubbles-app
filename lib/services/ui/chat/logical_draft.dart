@@ -501,6 +501,8 @@ class LogicalSendAdmissionReceipt {
     required this.transportReadinessRevision,
     required this.transportSendDisposition,
     required this.committedAtEpochMilliseconds,
+    this.providerAccountSnapshotSha256 = '',
+    this.providerFactContractRevision = '',
   });
 
   final String admissionId;
@@ -516,6 +518,8 @@ class LogicalSendAdmissionReceipt {
   final String payloadFingerprint;
   final String intentFingerprint;
   final String providerContextFingerprint;
+  final String providerAccountSnapshotSha256;
+  final String providerFactContractRevision;
   final String transportReadinessRevision;
   final String transportSendDisposition;
   final int committedAtEpochMilliseconds;
@@ -534,6 +538,9 @@ class LogicalSendAdmissionReceipt {
       RegExp(r'^[0-9a-f]{64}$').hasMatch(payloadFingerprint) &&
       RegExp(r'^[0-9a-f]{64}$').hasMatch(intentFingerprint) &&
       RegExp(r'^[0-9a-f]{64}$').hasMatch(providerContextFingerprint) &&
+      ((providerAccountSnapshotSha256.isEmpty && providerFactContractRevision.isEmpty) ||
+          (RegExp(r'^[0-9a-f]{64}$').hasMatch(providerAccountSnapshotSha256) &&
+              RegExp(r'^[0-9a-f]{64}$').hasMatch(providerFactContractRevision))) &&
       RegExp(r'^[0-9a-f]{64}$').hasMatch(transportReadinessRevision) &&
       <String>{'ready', 'allowedWithReachabilityUnknown'}.contains(transportSendDisposition) &&
       committedAtEpochMilliseconds > 0;
@@ -553,6 +560,8 @@ class LogicalSendAdmissionReceipt {
     'payloadFingerprint': payloadFingerprint,
     'intentFingerprint': intentFingerprint,
     'providerContextFingerprint': providerContextFingerprint,
+    if (providerAccountSnapshotSha256.isNotEmpty) 'providerAccountSnapshotSha256': providerAccountSnapshotSha256,
+    if (providerFactContractRevision.isNotEmpty) 'providerFactContractRevision': providerFactContractRevision,
     'transportReadinessRevision': transportReadinessRevision,
     'transportSendDisposition': transportSendDisposition,
     'committedAtEpochMilliseconds': committedAtEpochMilliseconds,
@@ -576,6 +585,8 @@ class LogicalSendAdmissionReceipt {
       payloadFingerprint: json['payloadFingerprint'] as String,
       intentFingerprint: json['intentFingerprint'] as String,
       providerContextFingerprint: json['providerContextFingerprint'] as String,
+      providerAccountSnapshotSha256: json['providerAccountSnapshotSha256'] as String? ?? '',
+      providerFactContractRevision: json['providerFactContractRevision'] as String? ?? '',
       transportReadinessRevision: json['transportReadinessRevision'] as String,
       transportSendDisposition: json['transportSendDisposition'] as String,
       committedAtEpochMilliseconds: (json['committedAtEpochMilliseconds'] as num).toInt(),

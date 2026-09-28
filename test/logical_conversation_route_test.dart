@@ -7,7 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 const _logicalId = 'test-certified-logical-conversation';
 const _certificateId = '$logicalConversationOutboundRouteSchema:$_logicalId';
 const _backend = 'current-backend';
-const _accountSnapshot = 'stable-account-projection';
+const _accountSnapshot = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const _activeSelf = 'sender@example.invalid';
 const _otherSelf = 'owner@example.invalid';
 const _writableRow = 10;
@@ -97,9 +97,21 @@ LogicalRouteCandidateEvidence _candidate(
             createdAtEpoch: outbound.createdAtEpoch,
             terminalAcknowledgement: outbound.terminalAcknowledgement,
             account: outbound.account.isEmpty ? sourceAccount : outbound.account,
+            accountFact: const LogicalProviderFactEvidence(state: LogicalProviderFactState.presentAndMatches),
+            isSentFact: LogicalProviderFactEvidence(
+              state: outbound.terminalAcknowledgement
+                  ? LogicalProviderFactState.presentAndMatches
+                  : LogicalProviderFactState.unavailable,
+            ),
+            isFinishedFact: LogicalProviderFactEvidence(
+              state: outbound.terminalAcknowledgement
+                  ? LogicalProviderFactState.presentAndMatches
+                  : LogicalProviderFactState.unavailable,
+            ),
           ),
         )
         .toList(growable: false),
+    sourceAccountFact: const LogicalProviderFactEvidence(state: LogicalProviderFactState.presentAndMatches),
   );
 }
 
@@ -166,12 +178,16 @@ LogicalRouteMessageEvidence _message(
   associatedMessageGuid: associatedMessageGuid,
   replyToGuid: replyToGuid,
   account: account,
+  accountFact: const LogicalProviderFactEvidence(state: LogicalProviderFactState.presentAndMatches),
 );
 
 LogicalExecutionGenerationCertificate _generationCertificate({
   List<LogicalAddressEvidence> externalParticipants = _writableParticipants,
   bool allowAdditionalCurrentMembers = false,
   bool evidenceDrivenSuccession = false,
+  String expectedAccountSnapshotSha256 = '',
+  List<LogicalAuthoritativeAccountFact> authoritativeAccountFacts = const [],
+  List<LogicalAuthoritativeTerminalFact> authoritativeTerminalFacts = const [],
 }) => LogicalExecutionGenerationCertificate(
   schema: logicalExecutionGenerationCertificateSchema,
   logicalId: _logicalId,
@@ -193,6 +209,9 @@ LogicalExecutionGenerationCertificate _generationCertificate({
   maximumNaturalResponseDelayMilliseconds: 900,
   allowAdditionalCurrentMembers: allowAdditionalCurrentMembers,
   evidenceDrivenSuccession: evidenceDrivenSuccession,
+  expectedAccountSnapshotSha256: expectedAccountSnapshotSha256,
+  authoritativeAccountFacts: authoritativeAccountFacts,
+  authoritativeTerminalFacts: authoritativeTerminalFacts,
   explanation: 'Runtime-shaped generation proof fixture.',
 );
 
@@ -463,6 +482,144 @@ LogicalRouteEvidence _futureIMessageSuccessorEvidence({bool reverse = false, Str
   );
 }
 
+LogicalRouteEvidence _withProviderFactContract(
+  LogicalRouteEvidence base, {
+  Set<int> preservePresentProviderRows = const <int>{},
+}) {
+  final baseCertificate = base.executionGenerationCertificate!;
+  final pinned = base.candidates
+      .where((candidate) => !preservePresentProviderRows.contains(candidate.sourceChatRowId))
+      .toList(growable: false);
+  final accountFacts = <LogicalAuthoritativeAccountFact>[
+    for (final candidate in pinned)
+      LogicalAuthoritativeAccountFact(
+        sourceChatGuidSha256: LogicalConversationOutboundRoutePolicy.providerValueFingerprint(candidate.sourceChatGuid),
+        service: candidate.sourceService,
+        accountSha256: LogicalConversationOutboundRoutePolicy.providerValueFingerprint(candidate.sourceAccount),
+      ),
+  ];
+  final terminalFacts = <LogicalAuthoritativeTerminalFact>[
+    for (final candidate in pinned)
+      for (final outbound in candidate.successfulOutbounds.where((outbound) => outbound.terminalAcknowledgement))
+        LogicalAuthoritativeTerminalFact(
+          sourceChatGuidSha256: LogicalConversationOutboundRoutePolicy.providerValueFingerprint(
+            candidate.sourceChatGuid,
+          ),
+          service: candidate.sourceService,
+          accountSha256: LogicalConversationOutboundRoutePolicy.providerValueFingerprint(candidate.sourceAccount),
+          messageGuidSha256: LogicalConversationOutboundRoutePolicy.providerValueFingerprint(outbound.messageGuid),
+          messageRowId: outbound.messageRowId,
+          isSent: true,
+          isFinished: true,
+        ),
+  ];
+  final certificate = LogicalExecutionGenerationCertificate(
+    schema: logicalExecutionGenerationCertificateSchema,
+    logicalId: baseCertificate.logicalId,
+    evidenceReceiptCommit: baseCertificate.evidenceReceiptCommit,
+    currentService: baseCertificate.currentService,
+    predecessorService: baseCertificate.predecessorService,
+    expectedCurrentMemberCount: baseCertificate.expectedCurrentMemberCount,
+    expectedPredecessorMemberCount: baseCertificate.expectedPredecessorMemberCount,
+    expectedExternalParticipantCount: baseCertificate.expectedExternalParticipantCount,
+    expectedExternalParticipantSetSha256: baseCertificate.expectedExternalParticipantSetSha256,
+    predecessorHandoffGuidSha256: baseCertificate.predecessorHandoffGuidSha256,
+    authorizedOutboundGuidSha256: baseCertificate.authorizedOutboundGuidSha256,
+    maximumTransitionEdgeDelayMilliseconds: baseCertificate.maximumTransitionEdgeDelayMilliseconds,
+    maximumNaturalResponseDelayMilliseconds: baseCertificate.maximumNaturalResponseDelayMilliseconds,
+    explanation: 'Production-shaped Server 1.9.7 provider fact contract fixture.',
+    allowAdditionalCurrentMembers: baseCertificate.allowAdditionalCurrentMembers,
+    evidenceDrivenSuccession: baseCertificate.evidenceDrivenSuccession,
+    expectedAccountSnapshotSha256: _accountSnapshot,
+    authoritativeAccountFacts: accountFacts,
+    authoritativeTerminalFacts: terminalFacts,
+  );
+  final candidates = <LogicalRouteCandidateEvidence>[
+    for (final candidate in base.candidates)
+      if (preservePresentProviderRows.contains(candidate.sourceChatRowId))
+        candidate
+      else
+        LogicalRouteCandidateEvidence(
+          sourceChatRowId: candidate.sourceChatRowId,
+          sourceChatGuid: candidate.sourceChatGuid,
+          sourceService: candidate.sourceService,
+          sourceAccount: LogicalConversationOutboundRoutePolicy.providerValueFingerprint(candidate.sourceAccount),
+          chatIdentifier: candidate.chatIdentifier,
+          style: candidate.style,
+          lastAddressedHandle: candidate.lastAddressedHandle,
+          participants: candidate.participants,
+          chatSnapshotComplete: candidate.chatSnapshotComplete,
+          messageSnapshotComplete: candidate.messageSnapshotComplete,
+          lastKnownHybridState: candidate.lastKnownHybridState,
+          shouldForceToSms: candidate.shouldForceToSms,
+          lastSeenMessageGuid: candidate.lastSeenMessageGuid,
+          groupPhotoGuid: candidate.groupPhotoGuid,
+          groupIdentifier: candidate.groupIdentifier,
+          messages: [
+            for (final message in candidate.messages)
+              LogicalRouteMessageEvidence(
+                messageGuid: message.messageGuid,
+                messageRowId: message.messageRowId,
+                createdAtEpoch: message.createdAtEpoch,
+                isFromMe: message.isFromMe,
+                error: message.error,
+                itemType: message.itemType,
+                associatedMessageGuid: message.associatedMessageGuid,
+                replyToGuid: message.replyToGuid,
+                account: LogicalConversationOutboundRoutePolicy.providerValueFingerprint(candidate.sourceAccount),
+                accountFact: const LogicalProviderFactEvidence(
+                  state: LogicalProviderFactState.unavailable,
+                  satisfiedByAuthoritativeFallback: true,
+                ),
+              ),
+          ],
+          successfulOutbounds: [
+            for (final outbound in candidate.successfulOutbounds)
+              LogicalSuccessfulOutboundEvidence(
+                messageGuid: outbound.messageGuid,
+                messageRowId: outbound.messageRowId,
+                createdAtEpoch: outbound.createdAtEpoch,
+                terminalAcknowledgement: outbound.terminalAcknowledgement,
+                account: LogicalConversationOutboundRoutePolicy.providerValueFingerprint(candidate.sourceAccount),
+                accountFact: const LogicalProviderFactEvidence(
+                  state: LogicalProviderFactState.unavailable,
+                  satisfiedByAuthoritativeFallback: true,
+                ),
+                isSentFact: LogicalProviderFactEvidence(
+                  state: LogicalProviderFactState.unavailable,
+                  satisfiedByAuthoritativeFallback: outbound.terminalAcknowledgement,
+                ),
+                isFinishedFact: LogicalProviderFactEvidence(
+                  state: LogicalProviderFactState.unavailable,
+                  satisfiedByAuthoritativeFallback: outbound.terminalAcknowledgement,
+                ),
+              ),
+          ],
+          sourceAccountFact: const LogicalProviderFactEvidence(
+            state: LogicalProviderFactState.unavailable,
+            satisfiedByAuthoritativeFallback: true,
+          ),
+        ),
+  ];
+  return LogicalRouteEvidence(
+    logicalId: base.logicalId,
+    certificateId: base.certificateId,
+    certifiedSourceChatGuids: base.certifiedSourceChatGuids,
+    backendComputerId: base.backendComputerId,
+    detectedIMessage: base.detectedIMessage,
+    privateApiConnected: base.privateApiConnected,
+    helperConnected: base.helperConnected,
+    accountSnapshotBeforeSha256: _accountSnapshot,
+    accountSnapshotAfterSha256: _accountSnapshot,
+    activeSelfAlias: base.activeSelfAlias,
+    vettedSelfAliases: base.vettedSelfAliases,
+    executionGenerationCertificate: certificate,
+    candidateScopeSnapshotComplete: base.candidateScopeSnapshotComplete,
+    unadmittedPotentialSourceChatGuids: base.unadmittedPotentialSourceChatGuids,
+    candidates: candidates,
+  );
+}
+
 LogicalRouteEvidence _singleWriterContinuationEvidence({required bool exactContinuation}) {
   final predecessor = _candidate(
     30,
@@ -659,13 +816,138 @@ void main() {
       expect(decision.reason, 'EVIDENCE_DRIVEN_CURRENT_EXECUTION_GENERATION_PROVEN_UNIQUE_WRITABLE_SOURCE');
     });
 
+    test('Server 1.9.7 omissions remain unavailable while exact authoritative fallbacks preserve writer', () {
+      final evidence = _withProviderFactContract(
+        _advancedGenerationEvidence(evidenceDrivenSuccession: true, includeLiteralSiblingReaction: true),
+      );
+      final decision = _resolve(newMessage, evidence: evidence);
+      expect(evidence.executionGenerationCertificate!.isValid, isTrue);
+      expect(
+        evidence.candidates.every(
+          (candidate) => candidate.sourceAccountFact.state == LogicalProviderFactState.unavailable,
+        ),
+        isTrue,
+      );
+      expect(
+        evidence.candidates
+            .expand((candidate) => candidate.successfulOutbounds)
+            .every((outbound) => outbound.isSentFact.state == LogicalProviderFactState.unavailable),
+        isTrue,
+      );
+      expect(decision.isSingleTarget, isTrue, reason: decision.reason);
+      expect(decision.physicalTargetRowIds, [_writableRow]);
+    });
+
+    test('missing and malicious present provider facts retain three distinct states', () {
+      const accountSha = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+      final unavailableSatisfied = LogicalConversationOutboundRoutePolicy.resolveAccountFact(
+        providerFieldPresent: false,
+        providerValue: null,
+        expectedAccountSha256: accountSha,
+        authoritativeFallbackAvailable: true,
+      );
+      final unavailableUnproven = LogicalConversationOutboundRoutePolicy.resolveAccountFact(
+        providerFieldPresent: false,
+        providerValue: null,
+        expectedAccountSha256: accountSha,
+        authoritativeFallbackAvailable: false,
+      );
+      final maliciousPresent = LogicalConversationOutboundRoutePolicy.resolveAccountFact(
+        providerFieldPresent: true,
+        providerValue: 'wrong-account',
+        expectedAccountSha256: accountSha,
+        authoritativeFallbackAvailable: true,
+      );
+      final omittedSent = LogicalConversationOutboundRoutePolicy.resolveTerminalFact(
+        providerFieldPresent: false,
+        providerValue: null,
+        authoritativeFallbackValue: false,
+      );
+      final presentFalseFinished = LogicalConversationOutboundRoutePolicy.resolveTerminalFact(
+        providerFieldPresent: true,
+        providerValue: false,
+        authoritativeFallbackValue: true,
+      );
+      expect(unavailableSatisfied.state, LogicalProviderFactState.unavailable);
+      expect(unavailableSatisfied.invariantSatisfied, isTrue);
+      expect(unavailableUnproven.state, LogicalProviderFactState.unavailable);
+      expect(unavailableUnproven.invariantSatisfied, isFalse);
+      expect(maliciousPresent.state, LogicalProviderFactState.presentAndContradicts);
+      expect(maliciousPresent.invariantSatisfied, isFalse);
+      expect(omittedSent.state, LogicalProviderFactState.unavailable);
+      expect(omittedSent.invariantSatisfied, isFalse);
+      expect(presentFalseFinished.state, LogicalProviderFactState.presentAndContradicts);
+      expect(presentFalseFinished.invariantSatisfied, isFalse);
+    });
+
+    test('mixed present and missing account fields remain unavailable rather than contradictory', () {
+      const missing = LogicalRouteMessageEvidence(
+        messageGuid: 'serializer-omitted-account',
+        messageRowId: 999,
+        createdAtEpoch: 2500,
+        isFromMe: false,
+        error: 0,
+        itemType: 0,
+        accountFact: LogicalProviderFactEvidence(state: LogicalProviderFactState.unavailable),
+      );
+      final decision = _resolve(
+        newMessage,
+        evidence: _evidence(
+          candidates: [
+            _candidate(_writableRow, messages: [_message('serializer-present-account', 998, 2400), missing]),
+            _candidate(_alternateRow),
+          ],
+        ),
+      );
+      expect(decision.isQualified, isFalse);
+      expect(decision.reason, 'ACCOUNT_FACT_UNAVAILABLE');
+    });
+
+    test('terminal fallback requires exact source service account message GUID and ROWID coordinates', () {
+      final evidence = _withProviderFactContract(_advancedGenerationEvidence(evidenceDrivenSuccession: true));
+      final certificate = evidence.executionGenerationCertificate!;
+      final writer = evidence.candidates.singleWhere((candidate) => candidate.sourceChatRowId == _writableRow);
+      final outbound = writer.successfulOutbounds.singleWhere((outbound) => outbound.terminalAcknowledgement);
+      final exact = LogicalConversationOutboundRoutePolicy.authoritativeTerminalFactFor(
+        certificate: certificate,
+        sourceChatGuid: writer.sourceChatGuid,
+        service: writer.sourceService,
+        accountSha256: writer.sourceAccount,
+        messageGuid: outbound.messageGuid,
+        messageRowId: outbound.messageRowId,
+      );
+      expect(exact, isNotNull);
+      expect(
+        LogicalConversationOutboundRoutePolicy.authoritativeTerminalFactFor(
+          certificate: certificate,
+          sourceChatGuid: writer.sourceChatGuid,
+          service: writer.sourceService,
+          accountSha256: writer.sourceAccount,
+          messageGuid: outbound.messageGuid,
+          messageRowId: outbound.messageRowId + 1,
+        ),
+        isNull,
+      );
+      expect(
+        LogicalConversationOutboundRoutePolicy.authoritativeTerminalFactFor(
+          certificate: certificate,
+          sourceChatGuid: 'wrong-source-guid',
+          service: writer.sourceService,
+          accountSha256: writer.sourceAccount,
+          messageGuid: outbound.messageGuid,
+          messageRowId: outbound.messageRowId,
+        ),
+        isNull,
+      );
+    });
+
     test('evidence-driven generation does not merge peers or arm write without terminal outbound proof', () {
       final decision = _resolve(
         newMessage,
         evidence: _advancedGenerationEvidence(evidenceDrivenSuccession: true, terminalCurrentOutbound: false),
       );
       expect(decision.isQualified, isFalse);
-      expect(decision.reason, 'CURRENT_WRITER_ACCOUNT_BOUND_OUTBOUND_MISSING');
+      expect(decision.reason, 'TERMINAL_FACT_UNAVAILABLE');
     });
 
     test('future iMessage generation can succeed SMS through structured evidence', () {
@@ -681,6 +963,54 @@ void main() {
       final decision = _resolve(newMessage, evidence: _futureIMessageSuccessorEvidence(futureAccount: 'test-account'));
       expect(decision.isSingleTarget, isTrue, reason: decision.reason);
       expect(decision.physicalTargetRowIds, [50]);
+    });
+
+    test('production-shaped fallback contract allows a future GUID with present authoritative facts to advance', () {
+      const production = LogicalConversationOutboundRoutePolicy.comcastNodeUpdatesGeneration;
+      expect(production.hasProviderFactFallback, isTrue);
+      expect(
+        LogicalConversationOutboundRoutePolicy.authoritativeAccountFactFor(
+          certificate: production,
+          sourceChatGuid: 'future-provider-generation-guid',
+          service: 'iMessage',
+        ),
+        isNull,
+      );
+      final evidence = _withProviderFactContract(
+        _futureIMessageSuccessorEvidence(),
+        preservePresentProviderRows: const {50, 60},
+      );
+      final decision = _resolve(newMessage, evidence: evidence);
+      expect(decision.isSingleTarget, isTrue, reason: decision.reason);
+      expect(decision.physicalTargetRowIds, [50]);
+    });
+
+    test('stale account snapshot or provider contract revision blocks transport binding', () {
+      const generation = LogicalConversationOutboundRoutePolicy.comcastNodeUpdatesGeneration;
+      expect(
+        LogicalConversationOutboundRoutePolicy.matchesCurrentProviderFactTransportContract(
+          expectedAccountSnapshotSha256: generation.expectedAccountSnapshotSha256,
+          expectedProviderFactContractRevision: generation.providerFactContractRevision,
+          observedAccountSnapshotSha256: generation.expectedAccountSnapshotSha256,
+        ),
+        isTrue,
+      );
+      expect(
+        LogicalConversationOutboundRoutePolicy.matchesCurrentProviderFactTransportContract(
+          expectedAccountSnapshotSha256: 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+          expectedProviderFactContractRevision: generation.providerFactContractRevision,
+          observedAccountSnapshotSha256: 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+        ),
+        isFalse,
+      );
+      expect(
+        LogicalConversationOutboundRoutePolicy.matchesCurrentProviderFactTransportContract(
+          expectedAccountSnapshotSha256: generation.expectedAccountSnapshotSha256,
+          expectedProviderFactContractRevision: 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+          observedAccountSnapshotSha256: generation.expectedAccountSnapshotSha256,
+        ),
+        isFalse,
+      );
     });
 
     test('exact later outbound reply is natural continuation but arbitrary later outbound is not', () {
@@ -787,7 +1117,7 @@ void main() {
         evidence: _advancedGenerationEvidence(selfVariantAccount: 'different-current-account'),
       );
       expect(decision.isQualified, isFalse);
-      expect(decision.reason, 'CURRENT_GENERATION_ACCOUNT_CONTRADICTION');
+      expect(decision.reason, 'AUTHORITATIVE_ACCOUNT_CONTRADICTION');
     });
 
     test('predecessor advancement newer than the current reproof invalidates stale authority', () {
@@ -1236,7 +1566,7 @@ void main() {
             ],
           ),
         ).reason,
-        'PROVIDER_ROUTE_ACCOUNT_FACT_UNAVAILABLE',
+        'ACCOUNT_FACT_UNAVAILABLE',
       );
       expect(
         _resolve(

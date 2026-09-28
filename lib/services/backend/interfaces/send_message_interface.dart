@@ -22,6 +22,8 @@ class SendMessageInterface {
     bool? ddScan,
     String? expectedProviderContextFingerprint,
     String? expectedCertificateRevision,
+    String? expectedProviderAccountSnapshotSha256,
+    String? expectedProviderFactContractRevision,
     bool allowTransientRetry = true,
   }) async {
     final data = {
@@ -36,6 +38,8 @@ class SendMessageInterface {
       'ddScan': ddScan,
       'expectedProviderContextFingerprint': expectedProviderContextFingerprint,
       'expectedCertificateRevision': expectedCertificateRevision,
+      'expectedProviderAccountSnapshotSha256': expectedProviderAccountSnapshotSha256,
+      'expectedProviderFactContractRevision': expectedProviderFactContractRevision,
       'allowTransientRetry': allowTransientRetry,
     };
     if (isIsolate) {
@@ -53,6 +57,8 @@ class SendMessageInterface {
     int? partIndex,
     String? expectedProviderContextFingerprint,
     String? expectedCertificateRevision,
+    String? expectedProviderAccountSnapshotSha256,
+    String? expectedProviderFactContractRevision,
     bool allowTransientRetry = true,
   }) async {
     final data = {
@@ -63,6 +69,8 @@ class SendMessageInterface {
       'partIndex': partIndex,
       'expectedProviderContextFingerprint': expectedProviderContextFingerprint,
       'expectedCertificateRevision': expectedCertificateRevision,
+      'expectedProviderAccountSnapshotSha256': expectedProviderAccountSnapshotSha256,
+      'expectedProviderFactContractRevision': expectedProviderFactContractRevision,
       'allowTransientRetry': allowTransientRetry,
     };
     if (isIsolate) {
@@ -84,6 +92,8 @@ class SendMessageInterface {
     bool? ddScan,
     String? expectedProviderContextFingerprint,
     String? expectedCertificateRevision,
+    String? expectedProviderAccountSnapshotSha256,
+    String? expectedProviderFactContractRevision,
     bool allowTransientRetry = true,
   }) async {
     final data = {
@@ -97,6 +107,8 @@ class SendMessageInterface {
       'ddScan': ddScan,
       'expectedProviderContextFingerprint': expectedProviderContextFingerprint,
       'expectedCertificateRevision': expectedCertificateRevision,
+      'expectedProviderAccountSnapshotSha256': expectedProviderAccountSnapshotSha256,
+      'expectedProviderFactContractRevision': expectedProviderFactContractRevision,
       'allowTransientRetry': allowTransientRetry,
     };
     if (isIsolate) {
@@ -126,6 +138,8 @@ class SendMessageInterface {
     bool? isAudioMessage,
     String? expectedProviderContextFingerprint,
     String? expectedCertificateRevision,
+    String? expectedProviderAccountSnapshotSha256,
+    String? expectedProviderFactContractRevision,
     bool allowTransientRetry = true,
   }) async {
     final data = {
@@ -142,6 +156,8 @@ class SendMessageInterface {
       'isAudioMessage': isAudioMessage ?? false,
       'expectedProviderContextFingerprint': expectedProviderContextFingerprint,
       'expectedCertificateRevision': expectedCertificateRevision,
+      'expectedProviderAccountSnapshotSha256': expectedProviderAccountSnapshotSha256,
+      'expectedProviderFactContractRevision': expectedProviderFactContractRevision,
       'allowTransientRetry': allowTransientRetry,
     };
     if (isIsolate) {

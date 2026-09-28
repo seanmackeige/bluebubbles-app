@@ -3,8 +3,9 @@ import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
 
-const logicalConversationOutboundRouteSchema = 'LOGICAL_CONVERSATION_OUTBOUND_ROUTE_V3_GENERATION_PROVENANCE';
-const logicalExecutionGenerationCertificateSchema = 'LOGICAL_EXECUTION_GENERATION_CERTIFICATE_V3_EVIDENCE_GRAPH';
+const logicalConversationOutboundRouteSchema = 'LOGICAL_CONVERSATION_OUTBOUND_ROUTE_V4_PROVIDER_FACT_CONTRACT';
+const logicalExecutionGenerationCertificateSchema =
+    'LOGICAL_EXECUTION_GENERATION_CERTIFICATE_V4_PROVIDER_FACT_CONTRACT';
 const logicalConversationEvidenceReconciliationSchema = 'LOGICAL_CONVERSATION_EVIDENCE_RECONCILIATION_V1';
 
 enum LogicalMutationClass { newMessage, reply, reaction, attachment, markRead, unsupported }
@@ -18,6 +19,71 @@ enum LogicalTransportReadinessState { ready, unavailable, unknown }
 enum LogicalTransportEvidenceStrength { authoritative, strongIndicator, weakIndicator, unavailable }
 
 enum LogicalTransportSendDisposition { ready, blocked, allowedWithReachabilityUnknown }
+
+/// Availability and agreement are deliberately separate. In particular, a
+/// field omitted by a known provider serializer is not the boolean `false` and
+/// is not an account mismatch.
+enum LogicalProviderFactState { presentAndMatches, presentAndContradicts, unavailable }
+
+class LogicalProviderFactEvidence {
+  const LogicalProviderFactEvidence({required this.state, this.satisfiedByAuthoritativeFallback = false});
+
+  final LogicalProviderFactState state;
+  final bool satisfiedByAuthoritativeFallback;
+
+  bool get invariantSatisfied =>
+      state == LogicalProviderFactState.presentAndMatches ||
+      (state == LogicalProviderFactState.unavailable && satisfiedByAuthoritativeFallback);
+}
+
+class LogicalAuthoritativeAccountFact {
+  const LogicalAuthoritativeAccountFact({
+    required this.sourceChatGuidSha256,
+    required this.service,
+    required this.accountSha256,
+  });
+
+  final String sourceChatGuidSha256;
+  final String service;
+  final String accountSha256;
+
+  bool get isValid =>
+      RegExp(r'^[0-9a-f]{64}$').hasMatch(sourceChatGuidSha256) &&
+      service.isNotEmpty &&
+      RegExp(r'^[0-9a-f]{64}$').hasMatch(accountSha256);
+}
+
+/// A terminal fallback is an independently observed Apple/Messages fact, not
+/// an inference from HTTP `error == 0`. Every coordinate must match before it
+/// can fill a field omitted by the BlueBubbles serializer.
+class LogicalAuthoritativeTerminalFact {
+  const LogicalAuthoritativeTerminalFact({
+    required this.sourceChatGuidSha256,
+    required this.service,
+    required this.accountSha256,
+    required this.messageGuidSha256,
+    required this.messageRowId,
+    required this.isSent,
+    required this.isFinished,
+  });
+
+  final String sourceChatGuidSha256;
+  final String service;
+  final String accountSha256;
+  final String messageGuidSha256;
+  final int messageRowId;
+  final bool isSent;
+  final bool isFinished;
+
+  bool get isValid =>
+      RegExp(r'^[0-9a-f]{64}$').hasMatch(sourceChatGuidSha256) &&
+      service.isNotEmpty &&
+      RegExp(r'^[0-9a-f]{64}$').hasMatch(accountSha256) &&
+      RegExp(r'^[0-9a-f]{64}$').hasMatch(messageGuidSha256) &&
+      messageRowId > 0 &&
+      isSent &&
+      isFinished;
+}
 
 /// Read-only transport evidence, deliberately separate from route authority.
 ///
@@ -132,6 +198,9 @@ class LogicalSuccessfulOutboundEvidence {
     required this.createdAtEpoch,
     this.terminalAcknowledgement = false,
     this.account = '',
+    this.accountFact = const LogicalProviderFactEvidence(state: LogicalProviderFactState.unavailable),
+    this.isSentFact = const LogicalProviderFactEvidence(state: LogicalProviderFactState.unavailable),
+    this.isFinishedFact = const LogicalProviderFactEvidence(state: LogicalProviderFactState.unavailable),
   });
 
   final String messageGuid;
@@ -139,6 +208,9 @@ class LogicalSuccessfulOutboundEvidence {
   final int createdAtEpoch;
   final bool terminalAcknowledgement;
   final String account;
+  final LogicalProviderFactEvidence accountFact;
+  final LogicalProviderFactEvidence isSentFact;
+  final LogicalProviderFactEvidence isFinishedFact;
 }
 
 class LogicalRouteMessageEvidence {
@@ -152,6 +224,7 @@ class LogicalRouteMessageEvidence {
     this.associatedMessageGuid,
     this.replyToGuid,
     this.account = '',
+    this.accountFact = const LogicalProviderFactEvidence(state: LogicalProviderFactState.unavailable),
   });
 
   final String messageGuid;
@@ -163,6 +236,7 @@ class LogicalRouteMessageEvidence {
   final String? associatedMessageGuid;
   final String? replyToGuid;
   final String account;
+  final LogicalProviderFactEvidence accountFact;
 
   bool get isNormal => itemType == 0 && (associatedMessageGuid == null || associatedMessageGuid!.isEmpty);
 
@@ -192,6 +266,9 @@ class LogicalExecutionGenerationCertificate {
     required this.explanation,
     this.allowAdditionalCurrentMembers = false,
     this.evidenceDrivenSuccession = false,
+    this.expectedAccountSnapshotSha256 = '',
+    this.authoritativeAccountFacts = const [],
+    this.authoritativeTerminalFacts = const [],
   });
 
   final String schema;
@@ -210,6 +287,40 @@ class LogicalExecutionGenerationCertificate {
   final String explanation;
   final bool allowAdditionalCurrentMembers;
   final bool evidenceDrivenSuccession;
+  final String expectedAccountSnapshotSha256;
+  final List<LogicalAuthoritativeAccountFact> authoritativeAccountFacts;
+  final List<LogicalAuthoritativeTerminalFact> authoritativeTerminalFacts;
+
+  bool get hasProviderFactFallback =>
+      expectedAccountSnapshotSha256.isNotEmpty ||
+      authoritativeAccountFacts.isNotEmpty ||
+      authoritativeTerminalFacts.isNotEmpty;
+
+  String get providerFactContractRevision {
+    final accounts = [
+      for (final fact in authoritativeAccountFacts)
+        '${fact.sourceChatGuidSha256}:${fact.service}:${fact.accountSha256}',
+    ]..sort();
+    final terminals = [
+      for (final fact in authoritativeTerminalFacts)
+        '${fact.sourceChatGuidSha256}:${fact.service}:${fact.accountSha256}:'
+            '${fact.messageGuidSha256}:${fact.messageRowId}:${fact.isSent}:${fact.isFinished}',
+    ]..sort();
+    return sha256
+        .convert(
+          utf8.encode(
+            jsonEncode(<String, dynamic>{
+              'schema': schema,
+              'logicalId': logicalId,
+              'evidenceReceiptCommit': evidenceReceiptCommit,
+              'expectedAccountSnapshotSha256': expectedAccountSnapshotSha256,
+              'authoritativeAccountFacts': accounts,
+              'authoritativeTerminalFacts': terminals,
+            }),
+          ),
+        )
+        .toString();
+  }
 
   bool get isValid =>
       schema == logicalExecutionGenerationCertificateSchema &&
@@ -227,7 +338,17 @@ class LogicalExecutionGenerationCertificate {
       (evidenceDrivenSuccession || RegExp(r'^[0-9a-f]{64}$').hasMatch(authorizedOutboundGuidSha256)) &&
       maximumTransitionEdgeDelayMilliseconds > 0 &&
       maximumNaturalResponseDelayMilliseconds > 0 &&
-      explanation.isNotEmpty;
+      explanation.isNotEmpty &&
+      (!hasProviderFactFallback ||
+          (RegExp(r'^[0-9a-f]{64}$').hasMatch(expectedAccountSnapshotSha256) &&
+              authoritativeAccountFacts.isNotEmpty &&
+              authoritativeAccountFacts.every((fact) => fact.isValid) &&
+              authoritativeAccountFacts.map((fact) => fact.sourceChatGuidSha256).toSet().length ==
+                  authoritativeAccountFacts.length &&
+              authoritativeTerminalFacts.isNotEmpty &&
+              authoritativeTerminalFacts.every((fact) => fact.isValid) &&
+              authoritativeTerminalFacts.map((fact) => fact.messageGuidSha256).toSet().length ==
+                  authoritativeTerminalFacts.length));
 }
 
 class LogicalRouteCandidateEvidence {
@@ -249,6 +370,7 @@ class LogicalRouteCandidateEvidence {
     this.groupIdentifier,
     required this.messages,
     required this.successfulOutbounds,
+    this.sourceAccountFact = const LogicalProviderFactEvidence(state: LogicalProviderFactState.unavailable),
   });
 
   final int sourceChatRowId;
@@ -268,6 +390,7 @@ class LogicalRouteCandidateEvidence {
   final String? groupIdentifier;
   final List<LogicalRouteMessageEvidence> messages;
   final List<LogicalSuccessfulOutboundEvidence> successfulOutbounds;
+  final LogicalProviderFactEvidence sourceAccountFact;
 }
 
 class LogicalRouteEvidence {
@@ -358,6 +481,27 @@ class LogicalRouteEvidence {
       'maximumNaturalResponseDelayMilliseconds': certificate.maximumNaturalResponseDelayMilliseconds,
       'allowAdditionalCurrentMembers': certificate.allowAdditionalCurrentMembers,
       'evidenceDrivenSuccession': certificate.evidenceDrivenSuccession,
+      'expectedAccountSnapshotSha256': certificate.expectedAccountSnapshotSha256,
+      'authoritativeAccountFacts': [
+        for (final fact in certificate.authoritativeAccountFacts)
+          <String, dynamic>{
+            'sourceChatGuidSha256': fact.sourceChatGuidSha256,
+            'service': fact.service,
+            'accountSha256': fact.accountSha256,
+          },
+      ]..sort(_compareJsonText),
+      'authoritativeTerminalFacts': [
+        for (final fact in certificate.authoritativeTerminalFacts)
+          <String, dynamic>{
+            'sourceChatGuidSha256': fact.sourceChatGuidSha256,
+            'service': fact.service,
+            'accountSha256': fact.accountSha256,
+            'messageGuidSha256': fact.messageGuidSha256,
+            'messageRowId': fact.messageRowId,
+            'isSent': fact.isSent,
+            'isFinished': fact.isFinished,
+          },
+      ]..sort(_compareJsonText),
     };
   }
 
@@ -385,6 +529,7 @@ class LogicalRouteEvidence {
       'sourceChatGuid': candidate.sourceChatGuid,
       'sourceService': candidate.sourceService,
       'sourceAccountSha256': sha256.convert(utf8.encode(candidate.sourceAccount)).toString(),
+      'sourceAccountFact': _providerFactJson(candidate.sourceAccountFact),
       'chatIdentifier': candidate.chatIdentifier,
       'style': candidate.style,
       'lastAddressedHandle': _addressJson(candidate.lastAddressedHandle),
@@ -410,8 +555,24 @@ class LogicalRouteEvidence {
       // caller, so routine message arrivals do not invalidate a draft while a
       // changed winner or failed invariant still advances the revision.
       'hasSuccessfulOutbound': candidate.successfulOutbounds.isNotEmpty,
+      'successfulOutboundProviderFacts': [
+        for (final outbound in candidate.successfulOutbounds)
+          <String, dynamic>{
+            'messageGuidSha256': sha256.convert(utf8.encode(outbound.messageGuid)).toString(),
+            'messageRowId': outbound.messageRowId,
+            'account': _providerFactJson(outbound.accountFact),
+            'isSent': _providerFactJson(outbound.isSentFact),
+            'isFinished': _providerFactJson(outbound.isFinishedFact),
+            'terminalAcknowledgement': outbound.terminalAcknowledgement,
+          },
+      ]..sort(_compareJsonText),
     };
   }
+
+  static Map<String, dynamic> _providerFactJson(LogicalProviderFactEvidence fact) => <String, dynamic>{
+    'state': fact.state.name,
+    'satisfiedByAuthoritativeFallback': fact.satisfiedByAuthoritativeFallback,
+  };
 
   static int _compareJsonText(Map<String, dynamic> left, Map<String, dynamic> right) =>
       jsonEncode(left).compareTo(jsonEncode(right));
@@ -585,7 +746,7 @@ class LogicalConversationOutboundRoutePolicy {
   static const comcastNodeUpdatesGeneration = LogicalExecutionGenerationCertificate(
     schema: logicalExecutionGenerationCertificateSchema,
     logicalId: 'LGC_V2_377f996e2dfd452ac69370dadda3aaf185c6714a0bda48af92faf8f55282424a',
-    evidenceReceiptCommit: '272fb442c343665459957eaf52b6e61411dd7e3e',
+    evidenceReceiptCommit: 'b4eb45d79368251a878628a68b9836b3c704e0c6',
     currentService: 'SMS',
     predecessorService: 'iMessage',
     expectedCurrentMemberCount: 2,
@@ -598,12 +759,189 @@ class LogicalConversationOutboundRoutePolicy {
     maximumNaturalResponseDelayMilliseconds: 2 * 60 * 60 * 1000,
     allowAdditionalCurrentMembers: true,
     evidenceDrivenSuccession: true,
+    expectedAccountSnapshotSha256: 'c11f1e308b967e93a1421a7bbdac704bafaf2eac6e224572d044c463635aa528',
+    authoritativeAccountFacts: [
+      LogicalAuthoritativeAccountFact(
+        sourceChatGuidSha256: 'c1d32cce4facfe8dd5c6143133088818b705b3850fd1c2bc954dda1bffc6102f',
+        service: 'iMessage',
+        accountSha256: '775d19ffb95a883405e5beb099bbf263f123f8bae4560daf279a36d1a15876cc',
+      ),
+      LogicalAuthoritativeAccountFact(
+        sourceChatGuidSha256: '48cf84dd195bd118d7b44be8f4740b23e6e07041366c56b5a0150d6a275d008d',
+        service: 'SMS',
+        accountSha256: '5c7d454b572614544f19a136c35d8a1bd67253106ef24d95c325e6ad77b53048',
+      ),
+      LogicalAuthoritativeAccountFact(
+        sourceChatGuidSha256: 'bfd04ec33281be066323d0a38e4e93f1f61fe946f469c004b86c86d15665a9d4',
+        service: 'SMS',
+        accountSha256: '5c7d454b572614544f19a136c35d8a1bd67253106ef24d95c325e6ad77b53048',
+      ),
+    ],
+    authoritativeTerminalFacts: [
+      LogicalAuthoritativeTerminalFact(
+        sourceChatGuidSha256: 'bfd04ec33281be066323d0a38e4e93f1f61fe946f469c004b86c86d15665a9d4',
+        service: 'SMS',
+        accountSha256: '5c7d454b572614544f19a136c35d8a1bd67253106ef24d95c325e6ad77b53048',
+        messageGuidSha256: 'd45914338a4f823cf0d457339b0684ca41dd0f8d587f6f535b76bd594eb456a2',
+        messageRowId: 159521,
+        isSent: true,
+        isFinished: true,
+      ),
+    ],
     explanation:
         'Apple chat properties and message account/service provenance establish an iMessage-to-SMS generation '
         'succession. Exact structured edges, account-bound terminal outbound, bounded natural response, and current '
-        'last-seen pointers admit one physical execution-generation head without pinning a service or ROWID. Later '
-        'provider generations advance only through fresh relationship and response proof.',
+        'last-seen pointers admit one physical execution-generation head. BlueBubbles Server 1.9.7 omits account and '
+        'terminal fields, so independently observed Mac account bindings and exact terminal coordinates may satisfy '
+        'only unavailable serializer facts while any present contradiction remains fail-closed. Later provider '
+        'generations advance only through fresh relationship and response proof.',
   );
+
+  static String providerValueFingerprint(String value) => sha256.convert(utf8.encode(value)).toString();
+
+  /// Mirrors the route collector's stable iCloud-account projection and is
+  /// also used by the transport isolate immediately before HTTP dispatch.
+  static String providerAccountSnapshotFingerprint(dynamic raw) {
+    if (raw is! Map) return '';
+    final account = raw.cast<String, dynamic>();
+    List<Map<String, dynamic>> projectAliases(dynamic value) {
+      if (value is! List) return const [];
+      final projected = <Map<String, dynamic>>[];
+      for (final item in value.whereType<Map>()) {
+        final alias = item['Alias'];
+        final status = item['Status'];
+        final visible = item['IsUserVisible'];
+        if (alias is! String || alias.isEmpty || status is! num || visible is! bool) return const [];
+        projected.add(<String, dynamic>{'alias': alias, 'status': status.toInt(), 'visible': visible});
+      }
+      projected.sort((left, right) {
+        final byAlias = (left['alias'] as String).compareTo(right['alias'] as String);
+        if (byAlias != 0) return byAlias;
+        final byStatus = (left['status'] as int).compareTo(right['status'] as int);
+        return byStatus != 0
+            ? byStatus
+            : left['visible'] == right['visible']
+            ? 0
+            : left['visible'] == true
+            ? 1
+            : -1;
+      });
+      return projected;
+    }
+
+    final aliases = projectAliases(account['aliases']);
+    final vetted = projectAliases(account['vetted_aliases']);
+    final activeAlias = account['active_alias'];
+    final appleId = account['apple_id'];
+    if (aliases.isEmpty ||
+        vetted.isEmpty ||
+        activeAlias is! String ||
+        activeAlias.isEmpty ||
+        appleId is! String ||
+        appleId.isEmpty) {
+      return '';
+    }
+    return sha256
+        .convert(
+          utf8.encode(
+            jsonEncode(<String, dynamic>{
+              'aliases': aliases,
+              'vetted_aliases': vetted,
+              'active_alias': activeAlias,
+              'apple_id': appleId,
+            }),
+          ),
+        )
+        .toString();
+  }
+
+  static bool matchesCurrentProviderFactTransportContract({
+    required String expectedAccountSnapshotSha256,
+    required String expectedProviderFactContractRevision,
+    required String observedAccountSnapshotSha256,
+  }) {
+    const generation = comcastNodeUpdatesGeneration;
+    return generation.isValid &&
+        expectedAccountSnapshotSha256 == generation.expectedAccountSnapshotSha256 &&
+        expectedProviderFactContractRevision == generation.providerFactContractRevision &&
+        observedAccountSnapshotSha256 == expectedAccountSnapshotSha256;
+  }
+
+  static LogicalProviderFactEvidence resolveAccountFact({
+    required bool providerFieldPresent,
+    required Object? providerValue,
+    required String expectedAccountSha256,
+    required bool authoritativeFallbackAvailable,
+  }) {
+    if (providerFieldPresent) {
+      final matches =
+          providerValue is String &&
+          providerValue.isNotEmpty &&
+          (expectedAccountSha256.isEmpty || providerValueFingerprint(providerValue) == expectedAccountSha256);
+      return LogicalProviderFactEvidence(
+        state: matches ? LogicalProviderFactState.presentAndMatches : LogicalProviderFactState.presentAndContradicts,
+      );
+    }
+    return LogicalProviderFactEvidence(
+      state: LogicalProviderFactState.unavailable,
+      satisfiedByAuthoritativeFallback: authoritativeFallbackAvailable,
+    );
+  }
+
+  static LogicalProviderFactEvidence resolveTerminalFact({
+    required bool providerFieldPresent,
+    required Object? providerValue,
+    required bool authoritativeFallbackValue,
+  }) {
+    if (providerFieldPresent) {
+      return LogicalProviderFactEvidence(
+        state: providerValue == true
+            ? LogicalProviderFactState.presentAndMatches
+            : LogicalProviderFactState.presentAndContradicts,
+      );
+    }
+    return LogicalProviderFactEvidence(
+      state: LogicalProviderFactState.unavailable,
+      satisfiedByAuthoritativeFallback: authoritativeFallbackValue,
+    );
+  }
+
+  static LogicalAuthoritativeAccountFact? authoritativeAccountFactFor({
+    required LogicalExecutionGenerationCertificate certificate,
+    required String sourceChatGuid,
+    required String service,
+  }) {
+    if (!certificate.isValid) return null;
+    final sourceChatGuidSha256 = providerValueFingerprint(sourceChatGuid);
+    final matches = certificate.authoritativeAccountFacts
+        .where((fact) => fact.sourceChatGuidSha256 == sourceChatGuidSha256 && fact.service == service)
+        .toList(growable: false);
+    return matches.length == 1 ? matches.single : null;
+  }
+
+  static LogicalAuthoritativeTerminalFact? authoritativeTerminalFactFor({
+    required LogicalExecutionGenerationCertificate certificate,
+    required String sourceChatGuid,
+    required String service,
+    required String accountSha256,
+    required String messageGuid,
+    required int messageRowId,
+  }) {
+    if (!certificate.isValid) return null;
+    final sourceChatGuidSha256 = providerValueFingerprint(sourceChatGuid);
+    final messageGuidSha256 = providerValueFingerprint(messageGuid);
+    final matches = certificate.authoritativeTerminalFacts
+        .where(
+          (fact) =>
+              fact.sourceChatGuidSha256 == sourceChatGuidSha256 &&
+              fact.service == service &&
+              fact.accountSha256 == accountSha256 &&
+              fact.messageGuidSha256 == messageGuidSha256 &&
+              fact.messageRowId == messageRowId,
+        )
+        .toList(growable: false);
+    return matches.length == 1 ? matches.single : null;
+  }
 
   static LogicalRouteDecision resolve(LogicalRouteEvidence evidence, LogicalMutationRequest request) {
     final sourceQualification = _qualifyCertifiedSources(evidence);
@@ -1257,6 +1595,15 @@ class LogicalConversationOutboundRoutePolicy {
         })
         .toList(growable: false);
     if (accountBoundOutbounds.isEmpty) {
+      if (writer.successfulOutbounds.any(
+        (outbound) =>
+            (outbound.isSentFact.state == LogicalProviderFactState.unavailable &&
+                !outbound.isSentFact.satisfiedByAuthoritativeFallback) ||
+            (outbound.isFinishedFact.state == LogicalProviderFactState.unavailable &&
+                !outbound.isFinishedFact.satisfiedByAuthoritativeFallback),
+      )) {
+        return const _LogicalGenerationQualification.notProven('TERMINAL_FACT_UNAVAILABLE');
+      }
       return const _LogicalGenerationQualification.notProven('CURRENT_WRITER_ACCOUNT_BOUND_OUTBOUND_MISSING');
     }
     final hasNaturalResponse = accountBoundOutbounds.any(
@@ -1331,6 +1678,11 @@ class LogicalConversationOutboundRoutePolicy {
         evidence.accountSnapshotBeforeSha256 != evidence.accountSnapshotAfterSha256) {
       return const LogicalRouteDecision.notProven('CURRENT_ACCOUNT_IDENTITY_UNSTABLE');
     }
+    final generationCertificate = evidence.executionGenerationCertificate;
+    if (generationCertificate?.hasProviderFactFallback == true &&
+        evidence.accountSnapshotBeforeSha256 != generationCertificate!.expectedAccountSnapshotSha256) {
+      return const LogicalRouteDecision.notProven('AUTHORITATIVE_ACCOUNT_SNAPSHOT_CONTRADICTION');
+    }
 
     final vettedAliases = <String>{};
     for (final alias in evidence.vettedSelfAliases) {
@@ -1369,13 +1721,26 @@ class LogicalConversationOutboundRoutePolicy {
           candidate.style != 43) {
         return const LogicalRouteDecision.notProven('CURRENT_SOURCE_BINDING_CONTRADICTION');
       }
-      // BlueBubbles Server must expose a provider-backed account value for
-      // the physical source. Do not fold a missing provider fact into the
-      // generic source-identity contradiction: that made a routine source
-      // event look like Apple had changed the chat binding and obscured the
-      // actual fail-closed boundary.
-      if (candidate.sourceAccount.isEmpty) {
-        return const LogicalRouteDecision.notProven('PROVIDER_ROUTE_ACCOUNT_FACT_UNAVAILABLE');
+      if (candidate.sourceAccountFact.state == LogicalProviderFactState.presentAndContradicts) {
+        return const LogicalRouteDecision.notProven('AUTHORITATIVE_ACCOUNT_CONTRADICTION');
+      }
+      LogicalAuthoritativeAccountFact? authoritativeAccount;
+      if (generationCertificate?.hasProviderFactFallback == true) {
+        authoritativeAccount = authoritativeAccountFactFor(
+          certificate: generationCertificate!,
+          sourceChatGuid: candidate.sourceChatGuid,
+          service: candidate.sourceService,
+        );
+        if (authoritativeAccount != null && candidate.sourceAccount != authoritativeAccount.accountSha256) {
+          return const LogicalRouteDecision.notProven('AUTHORITATIVE_ACCOUNT_CONTRADICTION');
+        }
+        if (candidate.sourceAccount.isEmpty ||
+            (candidate.sourceAccountFact.state == LogicalProviderFactState.unavailable &&
+                (authoritativeAccount == null || !candidate.sourceAccountFact.satisfiedByAuthoritativeFallback))) {
+          return const LogicalRouteDecision.notProven('ACCOUNT_FACT_UNAVAILABLE');
+        }
+      } else if (candidate.sourceAccount.isEmpty || !candidate.sourceAccountFact.invariantSatisfied) {
+        return const LogicalRouteDecision.notProven('ACCOUNT_FACT_UNAVAILABLE');
       }
       final currentRoute = normalizeRoutableAddress(candidate.lastAddressedHandle);
       if (currentRoute == null || currentRoute != activeAlias) {
@@ -1383,6 +1748,59 @@ class LogicalConversationOutboundRoutePolicy {
       }
       if (!candidate.messageSnapshotComplete) {
         return const LogicalRouteDecision.notProven('CURRENT_MESSAGE_PROVENANCE_INCOMPLETE');
+      }
+
+      for (final message in candidate.messages) {
+        if (message.accountFact.state == LogicalProviderFactState.presentAndContradicts) {
+          return const LogicalRouteDecision.notProven('AUTHORITATIVE_ACCOUNT_CONTRADICTION');
+        }
+        if (message.accountFact.state == LogicalProviderFactState.unavailable &&
+            (authoritativeAccount == null || !message.accountFact.satisfiedByAuthoritativeFallback)) {
+          return const LogicalRouteDecision.notProven('ACCOUNT_FACT_UNAVAILABLE');
+        }
+        if (message.account.isEmpty || message.account != candidate.sourceAccount) {
+          return const LogicalRouteDecision.notProven('AUTHORITATIVE_ACCOUNT_CONTRADICTION');
+        }
+      }
+
+      for (final outbound in candidate.successfulOutbounds) {
+        if (outbound.accountFact.state == LogicalProviderFactState.presentAndContradicts) {
+          return const LogicalRouteDecision.notProven('AUTHORITATIVE_ACCOUNT_CONTRADICTION');
+        }
+        if (outbound.accountFact.state == LogicalProviderFactState.unavailable &&
+            (authoritativeAccount == null || !outbound.accountFact.satisfiedByAuthoritativeFallback)) {
+          return const LogicalRouteDecision.notProven('ACCOUNT_FACT_UNAVAILABLE');
+        }
+        if (outbound.account.isEmpty || outbound.account != candidate.sourceAccount) {
+          return const LogicalRouteDecision.notProven('AUTHORITATIVE_ACCOUNT_CONTRADICTION');
+        }
+        if (outbound.isSentFact.state == LogicalProviderFactState.presentAndContradicts ||
+            outbound.isFinishedFact.state == LogicalProviderFactState.presentAndContradicts) {
+          return const LogicalRouteDecision.notProven('AUTHORITATIVE_TERMINAL_FACT_CONTRADICTION');
+        }
+        final authoritativeTerminal = generationCertificate == null
+            ? null
+            : authoritativeTerminalFactFor(
+                certificate: generationCertificate,
+                sourceChatGuid: candidate.sourceChatGuid,
+                service: candidate.sourceService,
+                accountSha256: candidate.sourceAccount,
+                messageGuid: outbound.messageGuid,
+                messageRowId: outbound.messageRowId,
+              );
+        final sentSatisfied =
+            outbound.isSentFact.state == LogicalProviderFactState.presentAndMatches ||
+            (outbound.isSentFact.state == LogicalProviderFactState.unavailable &&
+                outbound.isSentFact.satisfiedByAuthoritativeFallback &&
+                authoritativeTerminal?.isSent == true);
+        final finishedSatisfied =
+            outbound.isFinishedFact.state == LogicalProviderFactState.presentAndMatches ||
+            (outbound.isFinishedFact.state == LogicalProviderFactState.unavailable &&
+                outbound.isFinishedFact.satisfiedByAuthoritativeFallback &&
+                authoritativeTerminal?.isFinished == true);
+        if (outbound.terminalAcknowledgement != (sentSatisfied && finishedSatisfied)) {
+          return const LogicalRouteDecision.notProven('TERMINAL_ACKNOWLEDGEMENT_AUTHORITY_CONTRADICTION');
+        }
       }
 
       final participants = <String>{};
@@ -1412,7 +1830,6 @@ class LogicalConversationOutboundRoutePolicy {
       }
     }
 
-    final generationCertificate = evidence.executionGenerationCertificate;
     if (generationCertificate != null) {
       final externalParticipants = acceptedExternalParticipants!;
       if (externalParticipants.length != generationCertificate.expectedExternalParticipantCount) {

@@ -217,10 +217,10 @@ tasks.configureEach { task ->
     }
 }
 
-def seanRequiredLogicalRouteSchema = 'LOGICAL_CONVERSATION_OUTBOUND_ROUTE_V3_GENERATION_PROVENANCE'
+def seanRequiredLogicalRouteSchema = 'LOGICAL_CONVERSATION_OUTBOUND_ROUTE_V4_PROVIDER_FACT_CONTRACT'
 def seanForbiddenLogicalRouteSchema = 'LOGICAL_CONVERSATION_OUTBOUND_ROUTE_V1_GOLDEN_2155_2156'
 def seanRequiredLogicalReadCertificateSchema = 'LOGICAL_CONVERSATION_READ_CERTIFICATE_V2_N_MEMBER'
-def seanRequiredExecutionGenerationSchema = 'LOGICAL_EXECUTION_GENERATION_CERTIFICATE_V3_EVIDENCE_GRAPH'
+def seanRequiredExecutionGenerationSchema = 'LOGICAL_EXECUTION_GENERATION_CERTIFICATE_V4_PROVIDER_FACT_CONTRACT'
 def seanRequiredEvidenceReconciliationSchema = 'LOGICAL_CONVERSATION_EVIDENCE_RECONCILIATION_V1'
 def seanRequiredRuntimeCertificateSchema = 'LOGICAL_CONVERSATION_RUNTIME_CERTIFICATE_V1'
 def seanRequiredLogicalDraftSchema = 'LOGICAL_DRAFT_V1'

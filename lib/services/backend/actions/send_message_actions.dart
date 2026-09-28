@@ -1,4 +1,5 @@
 import 'package:bluebubbles/database/models.dart';
+import 'package:bluebubbles/services/ui/chat/logical_conversation_route.dart';
 import 'package:bluebubbles/services/ui/chat/logical_conversation_view.dart';
 import 'package:bluebubbles/services/isolates/global_isolate.dart';
 import 'package:bluebubbles/services/services.dart';
@@ -18,13 +19,16 @@ class SendMessageActions {
   static Future<void> _refreshLogicalCertificateForRequest(Map<String, dynamic> map) async {
     final available = await _refreshLogicalCertificate();
     final logicalRequest =
-        map['expectedProviderContextFingerprint'] != null || map['expectedCertificateRevision'] != null;
+        map['expectedProviderContextFingerprint'] != null ||
+        map['expectedCertificateRevision'] != null ||
+        map['expectedProviderAccountSnapshotSha256'] != null ||
+        map['expectedProviderFactContractRevision'] != null;
     if (!available && logicalRequest) {
       throw StateError('LOGICAL_RUNTIME_CERTIFICATE_UNAVAILABLE');
     }
   }
 
-  static void _validateProviderContext(Map<String, dynamic> map) {
+  static void _validateCertificateBinding(Map<String, dynamic> map) {
     final expected = map['expectedProviderContextFingerprint'] as String?;
     final expectedCertificateRevision = map['expectedCertificateRevision'] as String?;
     final chatGuid = map['chatGuid'] as String?;
@@ -37,14 +41,30 @@ class SendMessageActions {
         )) {
       throw StateError('LOGICAL_TRANSPORT_CERTIFICATE_BINDING_CHANGED');
     }
-    if (expected == null && expectedCertificateRevision != null) {
-      throw StateError('LOGICAL_TRANSPORT_ADMISSION_BINDING_INCOMPLETE');
-    }
     if (chat != null && LogicalConversationViewPolicy.isApprovedSourceRowId(chat.originalROWID) && expected == null) {
       throw StateError('LOGICAL_TRANSPORT_ADMISSION_REQUIRED');
     }
+  }
+
+  static Future<void> _validateProviderContext(Map<String, dynamic> map) async {
+    final expected = map['expectedProviderContextFingerprint'] as String?;
+    final expectedCertificateRevision = map['expectedCertificateRevision'] as String?;
+    final expectedProviderAccountSnapshotSha256 = map['expectedProviderAccountSnapshotSha256'] as String?;
+    final expectedProviderFactContractRevision = map['expectedProviderFactContractRevision'] as String?;
+    _validateCertificateBinding(map);
+    final bindingParts = <String?>[
+      expected,
+      expectedCertificateRevision,
+      expectedProviderAccountSnapshotSha256,
+      expectedProviderFactContractRevision,
+    ];
+    if (bindingParts.any((value) => value != null) &&
+        (bindingParts.any((value) => value == null || value.isEmpty) ||
+            !bindingParts.every((value) => RegExp(r'^[0-9a-f]{64}$').hasMatch(value!)))) {
+      throw StateError('LOGICAL_TRANSPORT_ADMISSION_BINDING_INCOMPLETE');
+    }
     if (expected == null) return;
-    final current = logicalProviderContextFingerprint(
+    String currentProviderContext() => logicalProviderContextFingerprint(
       origin: HttpSvc.origin,
       authKey: SettingsSvc.settings.guidAuthKey.value,
       isMinBigSur: SettingsSvc.serverDetails.isMinBigSur,
@@ -54,8 +74,37 @@ class SendMessageActions {
       privateAPISend: SettingsSvc.settings.privateAPISend.value,
       privateAPIAttachmentSend: SettingsSvc.settings.privateAPIAttachmentSend.value,
     );
-    if (current != expected) {
+    if (currentProviderContext() != expected) {
       throw StateError('LOGICAL_PROVIDER_CONTEXT_CHANGED_BEFORE_TRANSPORT');
+    }
+    const generation = LogicalConversationOutboundRoutePolicy.comcastNodeUpdatesGeneration;
+    if (generation.providerFactContractRevision != expectedProviderFactContractRevision) {
+      throw StateError('LOGICAL_PROVIDER_FACT_CONTRACT_CHANGED_BEFORE_TRANSPORT');
+    }
+    if (generation.expectedAccountSnapshotSha256 != expectedProviderAccountSnapshotSha256) {
+      throw StateError('LOGICAL_PROVIDER_ACCOUNT_CONTRACT_CHANGED_BEFORE_TRANSPORT');
+    }
+    final response = await HttpSvc.icloud.getAccountInfo();
+    final accountSnapshot = LogicalConversationOutboundRoutePolicy.providerAccountSnapshotFingerprint(
+      response.data['data'],
+    );
+    if (accountSnapshot.isEmpty || accountSnapshot != expectedProviderAccountSnapshotSha256) {
+      throw StateError('LOGICAL_PROVIDER_ACCOUNT_CHANGED_BEFORE_TRANSPORT');
+    }
+    // Account projection collection awaited the provider. Close that await
+    // window by reloading the durable certificate and then synchronously
+    // revalidating exact revision + row/GUID immediately before the POST.
+    await _refreshLogicalCertificateForRequest(map);
+    _validateCertificateBinding(map);
+    if (currentProviderContext() != expected) {
+      throw StateError('LOGICAL_PROVIDER_CONTEXT_CHANGED_BEFORE_TRANSPORT');
+    }
+    if (!LogicalConversationOutboundRoutePolicy.matchesCurrentProviderFactTransportContract(
+      expectedAccountSnapshotSha256: expectedProviderAccountSnapshotSha256!,
+      expectedProviderFactContractRevision: expectedProviderFactContractRevision!,
+      observedAccountSnapshotSha256: accountSnapshot,
+    )) {
+      throw StateError('LOGICAL_PROVIDER_FACT_CONTRACT_CHANGED_BEFORE_TRANSPORT');
     }
   }
 
@@ -63,7 +112,7 @@ class SendMessageActions {
   static Future<Map<String, dynamic>> sendTextMessage(dynamic data) async {
     final map = data as Map<String, dynamic>;
     await _refreshLogicalCertificateForRequest(map);
-    _validateProviderContext(map);
+    await _validateProviderContext(map);
     final chatGuid = map['chatGuid'] as String;
     final tempGuid = map['tempGuid'] as String;
     final message = map['message'] as String;
@@ -94,7 +143,7 @@ class SendMessageActions {
   static Future<Map<String, dynamic>> sendTapback(dynamic data) async {
     final map = data as Map<String, dynamic>;
     await _refreshLogicalCertificateForRequest(map);
-    _validateProviderContext(map);
+    await _validateProviderContext(map);
     final chatGuid = map['chatGuid'] as String;
     final selectedMessageText = map['selectedMessageText'] as String;
     final selectedMessageGuid = map['selectedMessageGuid'] as String;
@@ -117,7 +166,7 @@ class SendMessageActions {
   static Future<Map<String, dynamic>> sendMultipartMessage(dynamic data) async {
     final map = data as Map<String, dynamic>;
     await _refreshLogicalCertificateForRequest(map);
-    _validateProviderContext(map);
+    await _validateProviderContext(map);
     final chatGuid = map['chatGuid'] as String;
     final tempGuid = map['tempGuid'] as String;
     final parts = (map['parts'] as List).cast<Map<String, dynamic>>();
@@ -149,7 +198,7 @@ class SendMessageActions {
   static Future<Map<String, dynamic>> sendAttachmentMessage(dynamic data) async {
     final map = data as Map<String, dynamic>;
     await _refreshLogicalCertificateForRequest(map);
-    _validateProviderContext(map);
+    await _validateProviderContext(map);
     final chatGuid = map['chatGuid'] as String;
     final tempGuid = map['tempGuid'] as String;
     final filePath = map['filePath'] as String;
@@ -176,7 +225,7 @@ class SendMessageActions {
       allowTransientRetry: allowTransientRetry,
       validateBeforeTransport: () async {
         await _refreshLogicalCertificateForRequest(map);
-        _validateProviderContext(map);
+        await _validateProviderContext(map);
       },
       onSendProgress: (count, total) {
         if (total <= 0) return;
