@@ -349,6 +349,11 @@ class LogicalAuthorityRevision {
 /// Creates monotonically increasing in-process epochs while retaining content
 /// digests as the cross-lifecycle identity. A new process intentionally gets a
 /// new epoch, forcing a persisted draft through one fresh re-arm.
+///
+/// Within one process, an invalidation followed by a fresh observation of the
+/// byte-identical authority restores the previously observed epoch: a refresh
+/// or reconnect that proves nothing changed must not re-arm drafts. Any
+/// different content still advances the epoch.
 class LogicalAuthorityRevisionTracker {
   LogicalAuthorityRevisionTracker({int? seedEpoch}) : _epoch = seedEpoch ?? DateTime.now().microsecondsSinceEpoch;
 
@@ -356,8 +361,39 @@ class LogicalAuthorityRevisionTracker {
   String? _certificateRevision;
   String? _authorityRevision;
   LogicalAuthorityRevision? _current;
+  LogicalAuthorityRevision? _lastObserved;
+  bool _invalidated = false;
 
   LogicalAuthorityRevision observe({required String certificateRevision, required String authorityRevision}) {
+    final prior = _lastObserved;
+    if (_invalidated &&
+        prior != null &&
+        prior.certificateRevision == certificateRevision &&
+        prior.authorityRevision == authorityRevision) {
+      _invalidated = false;
+      _certificateRevision = certificateRevision;
+      _authorityRevision = authorityRevision;
+      _current = prior;
+      return prior;
+    }
+    _advance(certificateRevision, authorityRevision);
+    _invalidated = false;
+    _lastObserved = _current;
+    return _current!;
+  }
+
+  LogicalAuthorityRevision invalidate(String reason) {
+    final certificate = _certificateRevision ?? 'UNOBSERVED_CERTIFICATE';
+    final prior = _authorityRevision ?? 'UNOBSERVED_AUTHORITY';
+    final invalidated = sha256
+        .convert(utf8.encode('INVALIDATED\u0000$prior\u0000$reason\u0000${_epoch + 1}'))
+        .toString();
+    _advance(certificate, invalidated);
+    _invalidated = true;
+    return _current!;
+  }
+
+  void _advance(String certificateRevision, String authorityRevision) {
     if (_current == null || certificateRevision != _certificateRevision || authorityRevision != _authorityRevision) {
       _epoch += 1;
       _certificateRevision = certificateRevision;
@@ -368,19 +404,13 @@ class LogicalAuthorityRevisionTracker {
         epoch: _epoch,
       );
     }
-    return _current!;
-  }
-
-  LogicalAuthorityRevision invalidate(String reason) {
-    final certificate = _certificateRevision ?? 'UNOBSERVED_CERTIFICATE';
-    final prior = _authorityRevision ?? 'UNOBSERVED_AUTHORITY';
-    final invalidated = sha256
-        .convert(utf8.encode('INVALIDATED\u0000$prior\u0000$reason\u0000${_epoch + 1}'))
-        .toString();
-    return observe(certificateRevision: certificate, authorityRevision: invalidated);
   }
 
   LogicalAuthorityRevision? get current => _current;
+
+  /// The last authority actually derived from provider evidence, ignoring any
+  /// later invalidation placeholder.
+  LogicalAuthorityRevision? get lastObserved => _lastObserved;
 }
 
 /// Tracks provider-evidence observations separately from authority content.

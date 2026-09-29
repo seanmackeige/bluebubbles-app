@@ -693,6 +693,7 @@ class OutgoingMessageHandler {
       }
     }
     Logger.warn('Blocked logical mutation: $reason', tag: _tag);
+    ChatsSvc.requestLogicalAuthorityRecheck();
     throw error;
   }
 

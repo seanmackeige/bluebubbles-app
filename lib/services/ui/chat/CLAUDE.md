@@ -7,6 +7,7 @@
 | `conversation_view_controller.dart` | Per-chat controller for the active conversation screen |
 | `logical_conversation_view.dart` | Fail-closed N-member read certificate, member provenance, excluded-candidate evidence, and deterministic projection helpers |
 | `logical_conversation_route.dart` | Separate current-evidence write qualification; read membership never grants execution authority |
+| `logical_execution_authority.dart` | Write-authority convergence: execution generations, frontier/era, corroboration, writer selection, bounded diagnostics |
 
 ---
 
@@ -36,18 +37,64 @@ GetIt singleton. Accessed via `ChatsSvc`.
   are not admission evidence.
 - Keep read membership and outbound routing independent. An N-member read
   certificate has no writable target; current route evidence must qualify one.
-- Bind a service-generation handoff to its exact historical provider message;
-  do not require that message to remain the predecessor's terminal message
-  forever. Later predecessor activity fails closed until fresh current-member
-  relationships, last-seen pointers, a unique writer, and a bounded natural
-  response independently re-prove the current execution generation.
+- Never promote a predecessor or a new physical candidate from recent activity,
+  title similarity, participant similarity, or service preference alone.
 - Bind execution to the independently admitted external-participant count and
   public-safe set digest. Mutual equality among physical members is necessary
   but does not admit simultaneous participant co-drift.
-- Advancement relationships must be successful, causal, cross-member edges to
-  an exact authority-bearing natural message after the advancement cutoff.
-- Never promote a predecessor or a new physical candidate from recent activity,
-  title similarity, participant similarity, or service preference alone.
+
+### Write-authority doctrine (`logical_execution_authority.dart`)
+1. A physical chat is not an execution generation. A generation is
+   (service, account, external participant set); physical chats are its
+   representations.
+2. A representation with no vetted self alias is a `CANONICAL_ROUTE`; one that
+   adds exactly one vetted self alias is a `SELF_ALIAS_VARIANT` of the same
+   generation. A variant is read-equivalent and may be a reply source; it is
+   never a writer.
+3. A reply/reaction source is not a writer. Relationship mutations execute in
+   the target's own chat and require the target to be in the current
+   generation.
+4. The current generation is the generation of the latest provider-accepted
+   outbound (from-me, normal, error 0) across every certified member. Its era
+   is the maximal chronological suffix of outbounds on that generation;
+   outbounds sharing the boundary timestamp have no provable order and are
+   excluded from it.
+5. Sean's own successful outbound is the strongest writer evidence; a failed
+   attempt is not evidence of anything.
+6. An era arms only with corroboration of at least one of its outbounds:
+   certified terminal facts, a structured response from another participant,
+   or a bounded natural response in the same generation. Sean continuing his
+   own thread is not corroboration.
+7. Inbound messages, reactions (structured or literal quoted text), read
+   pointers, hybrid state and group photo/identifier metadata never move the
+   frontier. They can only add corroboration: they may arm the frontier
+   generation's writer, but never remove, re-select or create a writer on any
+   other row. Group identity is lineage metadata, not authority.
+8. A successful outbound in a different generation invalidates the old writer
+   immediately; the new generation writes only after its own corroboration.
+9. Writer = the unique canonical route of the current generation, proven by a
+   corroborated outbound of its own in the current era. Between several
+   canonical routes, recency of era outbounds discriminates only when the most
+   recent sender's corroboration is local to its own row. No discriminator or
+   an exact timestamp tie at the frontier or between canonical routes is
+   `SEND_BLOCKED_TRUE_MULTI_WRITER_AMBIGUITY`; no canonical
+   route or no corroboration is `SEND_BLOCKED_NO_CURRENT_WRITER`.
+10. Serializer omission is `unavailable`, never `false`; any present provider
+    contradiction, unadmitted same-set candidate, or unstable snapshot is
+    `SEND_BLOCKED_INVARIANT`.
+11. Authority revision digests only execution invariants plus the derived
+    decision. Identical evidence yields a byte-identical revision, and an
+    in-process re-observation of identical authority restores its epoch; a
+    new process still forces one draft re-arm.
+12. Only Sean's own execution events invalidate admission state; other
+    participants' events only drop cached evidence. Presentation keeps the
+    last evaluated state while a debounced passive re-check re-derives it.
+13. Authority is a pure function of freshly collected provider evidence; no
+    cache or persisted state is ever its source of truth.
+14. Decision logic never references ROWIDs, GUIDs or other coordinates of a
+    particular conversation; certificates carry membership data only.
+15. The composer shows nothing when send is ready; a block states its specific
+    reason, with bounded diagnostics behind the info button.
 
 ---
 

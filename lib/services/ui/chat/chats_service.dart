@@ -117,6 +117,10 @@ class ChatsService {
   Completer<void>? _logicalHydrationMutex;
   final Map<String, _LogicalSourceHydrationCursor> _logicalHydrationCursors = <String, _LogicalSourceHydrationCursor>{};
   final Map<String, int> _logicalSourceEventWatermarks = <String, int>{};
+  Timer? _logicalAuthorityRecheckTimer;
+  DateTime? _logicalAuthorityRecheckDueAt;
+  int _logicalPassiveSupersededRechecks = 0;
+  int _logicalPassiveRecheckFailures = 0;
 
   LogicalAuthorityRevision? get currentLogicalAuthorityRevision => _logicalAuthorityRevisionTracker.current;
 
@@ -280,7 +284,12 @@ class ChatsService {
   /// Advances reconstructible pagination metadata whenever a source event is
   /// observed outside the hydration fetch itself. Any existing source cursor
   /// must re-establish its provider boundary before it can fetch another page.
-  void noteLogicalSourceEvent(String physicalChatGuid) {
+  ///
+  /// Only Sean's own execution (a from-me message or its provider update) can
+  /// move the execution frontier. Other participants' messages, reactions and
+  /// read activity can at most corroborate an existing execution, so they never
+  /// invalidate a qualified authority; they only drop the cached snapshot.
+  void noteLogicalSourceEvent(String physicalChatGuid, {bool authorityRelevant = true}) {
     final definition = _logicalDefinition;
     final source =
         findChatByGuid(physicalChatGuid) ??
@@ -289,7 +298,15 @@ class ChatsService {
             : _logicalSourceChats(definition).firstWhereOrNull((candidate) => candidate.guid == physicalChatGuid));
     if (source == null || !isApprovedLogicalSource(source)) return;
     _logicalSourceEventWatermarks.update(physicalChatGuid, (value) => value + 1, ifAbsent: () => 1);
-    invalidateLogicalAuthority('LOGICAL_SOURCE_EVENT_OBSERVED');
+    if (authorityRelevant) {
+      invalidateLogicalAuthority('LOGICAL_SOURCE_EXECUTION_EVENT_OBSERVED');
+      return;
+    }
+    _logicalRouteEvidence = null;
+    _logicalRouteEvidenceAt = null;
+    if (!logicalRouteRuntimeStatus.value.isQualified) {
+      _scheduleLogicalAuthorityRecheck();
+    }
   }
 
   Chat presentationChatFor(Chat chat) {
@@ -719,9 +736,8 @@ class ChatsService {
     final valid =
         (rawHybrid == null || rawHybrid is bool) &&
         rawForceSms is bool &&
-        rawLastSeen is String &&
-        rawLastSeen.isNotEmpty &&
-        (rawGroupPhoto == null || (rawGroupPhoto is String && rawGroupPhoto.isNotEmpty));
+        (rawLastSeen == null || rawLastSeen is String) &&
+        (rawGroupPhoto == null || rawGroupPhoto is String);
     return _LogicalChatGenerationProperties(
       complete: valid,
       lastKnownHybridState: rawHybrid is bool ? rawHybrid : null,
@@ -754,17 +770,13 @@ class ChatsService {
       'lastAddressedHandle': chatData['lastAddressedHandle']?.toString(),
       'participants': participants,
       'propertiesComplete': properties.complete,
-      'lastKnownHybridState': properties.lastKnownHybridState,
       'shouldForceToSms': properties.shouldForceToSms,
-      'lastSeenMessageGuid': properties.lastSeenMessageGuid,
-      'groupPhotoGuid': properties.groupPhotoGuid,
     };
     return sha256.convert(utf8.encode(jsonEncode(projection))).toString();
   }
 
   String _logicalRouteChatScopeFingerprint(List<Map<String, dynamic>> chats) {
     final projection = chats.map((chat) {
-      final properties = _logicalChatGenerationProperties(chat);
       final participants = <Map<String, String?>>[];
       final rawParticipants = chat['participants'];
       if (rawParticipants is List) {
@@ -782,7 +794,6 @@ class ChatsService {
         'guid': chat['guid']?.toString(),
         'style': (chat['style'] as num?)?.toInt(),
         'groupId': chat['groupId']?.toString(),
-        'groupPhotoGuid': properties.groupPhotoGuid,
         'participants': participants,
       };
     }).toList()..sort((left, right) => (left['originalROWID'] as int).compareTo(right['originalROWID'] as int));
@@ -1040,7 +1051,7 @@ class ChatsService {
     // Stop every receipt minted under the predecessor certificate before the
     // first durable/isolate await. Certificate advancement is monotonic, so
     // row/GUID membership alone cannot detect a stale in-flight receipt.
-    invalidateLogicalAuthority('LOGICAL_READ_CERTIFICATE_ADVANCING');
+    invalidateLogicalAuthority('LOGICAL_READ_CERTIFICATE_ADVANCING', scheduleRecheck: false);
     await PrefsSvc.messaging.saveLogicalReadCertificateJson(encodedCertificate);
     if (!LogicalConversationViewPolicy.activateReconciledCertificate(
       reconciliation,
@@ -1177,7 +1188,13 @@ class ChatsService {
       // observer has finished. Older provider evidence can therefore never
       // complete late and overwrite a newer authority revision.
       final observationEpoch = _logicalEvidenceObservationEpochTracker.begin();
-      final evidence = await _collectLogicalRouteEvidence(chat);
+      var evidence = await _collectLogicalRouteEvidence(chat);
+      // Provider history that moved while it was being paged is re-read a
+      // bounded number of times; it never becomes an authority decision.
+      for (var attempt = 1; attempt < 3 && _logicalEvidenceNeedsSettle(evidence); attempt++) {
+        await Future<void>.delayed(const Duration(milliseconds: 750));
+        evidence = await _collectLogicalRouteEvidence(chat);
+      }
       _logicalRouteEvidence = evidence;
       _logicalRouteEvidenceAt = DateTime.now();
       _logicalEvidenceObservationEpochTracker.complete(observationEpoch);
@@ -1187,6 +1204,13 @@ class ChatsService {
       if (!mutex.isCompleted) mutex.complete();
     }
   }
+
+  bool _logicalEvidenceNeedsSettle(LogicalRouteEvidence evidence) =>
+      evidence.candidates.isNotEmpty &&
+      (!evidence.candidateScopeSnapshotComplete ||
+          evidence.accountSnapshotBeforeSha256 != evidence.accountSnapshotAfterSha256 ||
+          evidence.backendComputerId.isEmpty ||
+          evidence.candidates.any((candidate) => !candidate.chatSnapshotComplete || !candidate.messageSnapshotComplete));
 
   /// Resolves a batch from one complete evidence snapshot. Every decision and
   /// its revision therefore describe the same point-in-time provider truth.
@@ -1200,7 +1224,12 @@ class ChatsService {
       String? providerFactContractRevision,
     })
   >
-  resolveLogicalMutationBatch(Chat chat, List<LogicalMutationRequest> requests, {bool force = false}) async {
+  resolveLogicalMutationBatch(
+    Chat chat,
+    List<LogicalMutationRequest> requests, {
+    bool force = false,
+    bool passive = false,
+  }) async {
     final observedAt = DateTime.now().millisecondsSinceEpoch;
     LogicalTransportReadinessEvidence unavailableEvidence(String reason) => LogicalTransportReadinessEvidence(
       service: 'UNKNOWN',
@@ -1227,7 +1256,8 @@ class ChatsService {
         providerFactContractRevision: null,
       );
     }
-    if (requests.any((request) => request.mutationClass == LogicalMutationClass.newMessage)) {
+    if (requests.any((request) => request.mutationClass == LogicalMutationClass.newMessage) &&
+        !logicalRouteRuntimeStatus.value.hasEvaluated) {
       logicalRouteRuntimeStatus.value = const LogicalRouteRuntimeStatus.checking();
     }
     try {
@@ -1251,8 +1281,10 @@ class ChatsService {
         evidence,
         const LogicalMutationRequest(mutationClass: LogicalMutationClass.newMessage),
       );
+      final authority = LogicalConversationOutboundRoutePolicy.executionAuthority(evidence);
       final authorityMaterial = <String, dynamic>{
         'evidence': evidence.authorityRevision,
+        'authority': authority?.revisionMaterial,
         'routeReason': authorityDecision.reason,
         'routeTargets': authorityDecision.physicalTargetRowIds,
       };
@@ -1289,8 +1321,20 @@ class ChatsService {
         for (var index = 0; index < requests.length; index++)
           if (requests[index].mutationClass == LogicalMutationClass.newMessage) index,
       ].firstOrNull;
+      _logicalPassiveRecheckFailures = 0;
+      _logicalPassiveSupersededRechecks = 0;
       if (newMessageDecision != null) {
         final decision = decisions[newMessageDecision];
+        final previous = logicalRouteRuntimeStatus.value;
+        if (previous.authorityRevision != revision.authorityRevision || previous.authorityEpoch != revision.epoch) {
+          Logger.info(
+            'Logical write authority: state=${authority?.stateName ?? (decision.isSingleTarget ? 'SEND_READY' : 'SEND_BLOCKED')}, '
+            'writer=${authority?.writerRoute ?? 'NONE'}, '
+            'generation=${authority?.currentGenerationId?.substring(0, 12) ?? 'NONE'}, '
+            'predicate=${decision.reason}, epoch=${revision.epoch}',
+            tag: 'LogicalConversationRoute',
+          );
+        }
         logicalRouteRuntimeStatus.value = LogicalRouteRuntimeStatus(
           stage: decision.isSingleTarget ? LogicalRouteRuntimeStage.qualified : LogicalRouteRuntimeStage.routeNotProven,
           reason: decision.reason,
@@ -1302,6 +1346,12 @@ class ChatsService {
           transportReadiness: transportReadiness[newMessageDecision].effectiveStateAt(observedAt),
           transportReason: transportReadiness[newMessageDecision].reason,
           sendDisposition: transportReadiness[newMessageDecision].sendDispositionAt(observedAt),
+          authorityState: authority?.stateName,
+          diagnostics: authority?.diagnostics(
+            logicalConversationId: definition.id,
+            certificateRevision: revision.certificateRevision,
+            authorityRevision: revision.authorityRevision,
+          ),
         );
       }
       return (
@@ -1312,10 +1362,21 @@ class ChatsService {
         providerAccountSnapshotSha256: evidence.accountSnapshotAfterSha256,
         providerFactContractRevision: evidence.executionGenerationCertificate?.providerFactContractRevision,
       );
-    } catch (_) {
+    } catch (error) {
       Logger.warn('Logical route evidence unavailable; mutation remains fail closed', tag: 'LogicalConversationRoute');
       _logicalAuthorityRevisionTracker.invalidate('CURRENT_ROUTE_EVIDENCE_UNAVAILABLE');
-      if (requests.any((request) => request.mutationClass == LogicalMutationClass.newMessage)) {
+      final superseded = error is StateError && error.message == 'LOGICAL_EVIDENCE_OBSERVATION_COMPLETION_OUT_OF_ORDER';
+      // A passive re-check that cannot reach the provider is transport
+      // trouble, not authority evidence: keep the last proven presentation for
+      // one bounded retry before reporting the evidence as unavailable. A
+      // superseded observation is neither; the newer observation re-derives.
+      if (passive && superseded && _logicalPassiveSupersededRechecks < 3) {
+        _logicalPassiveSupersededRechecks += 1;
+        _scheduleLogicalAuthorityRecheck(delay: const Duration(milliseconds: 250));
+      } else if (passive && logicalRouteRuntimeStatus.value.isQualified && _logicalPassiveRecheckFailures < 1) {
+        _logicalPassiveRecheckFailures += 1;
+        _scheduleLogicalAuthorityRecheck(delay: const Duration(seconds: 15), deferToSooner: true);
+      } else if (requests.any((request) => request.mutationClass == LogicalMutationClass.newMessage)) {
         logicalRouteRuntimeStatus.value = const LogicalRouteRuntimeStatus(
           stage: LogicalRouteRuntimeStage.routeNotProven,
           reason: 'CURRENT_ROUTE_EVIDENCE_UNAVAILABLE',
@@ -1340,24 +1401,63 @@ class ChatsService {
     Chat chat,
     LogicalMutationRequest request, {
     bool force = false,
+    bool passive = false,
   }) async {
-    final result = await resolveLogicalMutationBatch(chat, <LogicalMutationRequest>[request], force: force);
+    final result = await resolveLogicalMutationBatch(
+      chat,
+      <LogicalMutationRequest>[request],
+      force: force,
+      passive: passive,
+    );
     return result.decisions.single;
   }
 
-  void invalidateLogicalAuthority(String reason) {
+  /// Invalidates every admission binding immediately. The last evaluated
+  /// presentation stays visible while one debounced passive re-check
+  /// re-derives authority, so an invalidation that proves nothing changed never
+  /// flashes the composer; execution boundaries always force fresh evidence.
+  void invalidateLogicalAuthority(String reason, {bool scheduleRecheck = true}) {
     _logicalRouteEvidence = null;
     _logicalRouteEvidenceAt = null;
     _logicalTransportReadinessBySourceRow.clear();
     _logicalEvidenceObservationEpochTracker.invalidate();
     final revision = _logicalAuthorityRevisionTracker.invalidate(reason);
-    logicalRouteRuntimeStatus.value = LogicalRouteRuntimeStatus(
-      stage: LogicalRouteRuntimeStage.unchecked,
-      reason: reason,
-      certificateRevision: revision.certificateRevision,
-      authorityRevision: revision.authorityRevision,
-      authorityEpoch: revision.epoch,
-    );
+    if (!logicalRouteRuntimeStatus.value.hasEvaluated) {
+      logicalRouteRuntimeStatus.value = LogicalRouteRuntimeStatus(
+        stage: LogicalRouteRuntimeStage.unchecked,
+        reason: reason,
+        certificateRevision: revision.certificateRevision,
+        authorityRevision: revision.authorityRevision,
+        authorityEpoch: revision.epoch,
+      );
+    }
+    if (scheduleRecheck) _scheduleLogicalAuthorityRecheck();
+  }
+
+  /// Re-derives presentation authority after a blocked admission so a banner
+  /// never outlives the evidence that produced it.
+  void requestLogicalAuthorityRecheck() => _scheduleLogicalAuthorityRecheck(delay: const Duration(seconds: 3));
+
+  void _scheduleLogicalAuthorityRecheck({
+    Duration delay = const Duration(seconds: 2),
+    bool deferToSooner = false,
+  }) {
+    final dueAt = DateTime.now().add(delay);
+    final pendingDueAt = _logicalAuthorityRecheckDueAt;
+    if (deferToSooner &&
+        _logicalAuthorityRecheckTimer?.isActive == true &&
+        pendingDueAt != null &&
+        pendingDueAt.isBefore(dueAt)) {
+      return;
+    }
+    _logicalAuthorityRecheckTimer?.cancel();
+    _logicalAuthorityRecheckDueAt = dueAt;
+    _logicalAuthorityRecheckTimer = Timer(delay, () {
+      _logicalAuthorityRecheckDueAt = null;
+      final chat = activeChat?.chat;
+      if (chat == null || !isApprovedLogicalSource(chat)) return;
+      unawaited(prepareLogicalRoute(chat, force: true, passive: true));
+    });
   }
 
   LogicalDraft? loadLogicalDraft(Chat chat) {
@@ -1405,7 +1505,7 @@ class ChatsService {
           LogicalDraft.create(
             logicalId: definition.id,
             nowEpochMilliseconds: now,
-            observedRevision: currentLogicalAuthorityRevision,
+            observedRevision: _logicalAuthorityRevisionTracker.lastObserved ?? currentLogicalAuthorityRevision,
           );
       final updated = existing.mergeUserIntent(
         text: text,
@@ -1553,11 +1653,13 @@ class ChatsService {
     });
   }
 
-  Future<LogicalRouteDecision> prepareLogicalRoute(Chat chat, {bool force = false}) => resolveLogicalMutation(
-    chat,
-    const LogicalMutationRequest(mutationClass: LogicalMutationClass.newMessage),
-    force: force,
-  );
+  Future<LogicalRouteDecision> prepareLogicalRoute(Chat chat, {bool force = false, bool passive = false}) =>
+      resolveLogicalMutation(
+        chat,
+        const LogicalMutationRequest(mutationClass: LogicalMutationClass.newMessage),
+        force: force,
+        passive: passive,
+      );
 
   /// Marks only currently unread certified source chats as read. A logical
   /// read operation may intentionally have more than one physical target.
@@ -2295,9 +2397,12 @@ class ChatsService {
 
   Future<void> addChat(Chat toAdd, {bool immediate = false}) async {
     if (headless) return;
-    // Any newly observed physical chat can be a route candidate. Conservatively
+    // A newly observed group chat can be a route candidate. Conservatively
     // invalidate admission state until a forced provider observation proves it.
-    invalidateLogicalAuthority('PHYSICAL_CHAT_CANDIDATE_OBSERVED');
+    // Re-adding a known chat or observing a one-to-one chat cannot.
+    if (!chatStates.containsKey(toAdd.guid) && (toAdd.style == 43 || toAdd.style == null)) {
+      invalidateLogicalAuthority('PHYSICAL_CHAT_CANDIDATE_OBSERVED');
+    }
     // Check if chat already exists
     if (chatStates.containsKey(toAdd.guid)) {
       // Update existing chat instead (debounced during init, immediate for new chats)
@@ -2320,7 +2425,9 @@ class ChatsService {
 
   void removeChat(Chat toRemove) {
     if (headless) return;
-    invalidateLogicalAuthority('PHYSICAL_CHAT_REMOVAL_OBSERVED');
+    if (isApprovedLogicalSource(toRemove) || toRemove.style == 43 || toRemove.style == null) {
+      invalidateLogicalAuthority('PHYSICAL_CHAT_REMOVAL_OBSERVED');
+    }
     if (isApprovedLogicalSource(toRemove)) return;
     chatStates.remove(toRemove.guid);
     _sortedChats.removeWhere((c) => c.guid == toRemove.guid);

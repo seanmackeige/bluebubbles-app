@@ -376,6 +376,32 @@ void main() {
       expect(invalidated.authorityRevision, isNot(certificateChanged.authorityRevision));
     });
 
+    test('refresh that re-proves identical authority restores the epoch; changed authority never does', () {
+      final tracker = LogicalAuthorityRevisionTracker(seedEpoch: 70);
+      final observed = tracker.observe(certificateRevision: 'certificate-v1', authorityRevision: 'authority-v1');
+      final draft = _draft(revision: observed);
+      for (var refresh = 0; refresh < 5; refresh++) {
+        final invalidated = tracker.invalidate('LOGICAL_SOURCE_EVENT_OBSERVED');
+        expect(invalidated.matchesDraft(draft), isFalse);
+        final reproved = tracker.observe(certificateRevision: 'certificate-v1', authorityRevision: 'authority-v1');
+        expect(reproved.epoch, observed.epoch);
+        expect(reproved.matchesDraft(draft), isTrue);
+      }
+
+      tracker.invalidate('LOGICAL_SOURCE_EVENT_OBSERVED');
+      final changed = tracker.observe(certificateRevision: 'certificate-v1', authorityRevision: 'authority-v2');
+      expect(changed.epoch, greaterThan(observed.epoch));
+      expect(changed.matchesDraft(draft), isFalse);
+      tracker.invalidate('LOGICAL_SOURCE_EVENT_OBSERVED');
+      final reverted = tracker.observe(certificateRevision: 'certificate-v1', authorityRevision: 'authority-v1');
+      expect(reverted.epoch, greaterThan(changed.epoch), reason: 'only the immediately prior authority is restorable');
+      expect(reverted.matchesDraft(draft), isFalse);
+
+      final restarted = LogicalAuthorityRevisionTracker(seedEpoch: 900);
+      final afterRestart = restarted.observe(certificateRevision: 'certificate-v1', authorityRevision: 'authority-v1');
+      expect(afterRestart.matchesDraft(draft), isFalse, reason: 'a new process still forces one fresh re-arm');
+    });
+
     test('new provider observation invalidates an older completed admission snapshot while in flight', () {
       final tracker = LogicalEvidenceObservationEpochTracker();
       final first = tracker.begin();

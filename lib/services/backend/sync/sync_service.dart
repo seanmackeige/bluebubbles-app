@@ -85,7 +85,7 @@ class SyncService {
         if (message.id != null) processedMessageIds.add(message.id!);
         final chatGuid = message.chat.target?.guid;
         if (chatGuid == null || message.guid == null) continue;
-        ChatsSvc.noteLogicalSourceEvent(chatGuid);
+        ChatsSvc.noteLogicalSourceEvent(chatGuid, authorityRelevant: message.isFromMe != false);
         final presentationGuid = ChatsSvc.presentationGuidFor(chatGuid);
         if (Get.isRegistered<MessagesService>(tag: presentationGuid)) {
           final service = Get.find<MessagesService>(tag: presentationGuid);
@@ -153,7 +153,7 @@ class SyncService {
           if (message.id != null && processedMessageIds.contains(message.id)) continue;
           final chatGuid = message.chat.target?.guid;
           if (chatGuid == null || message.guid == null) continue;
-          ChatsSvc.noteLogicalSourceEvent(chatGuid);
+          ChatsSvc.noteLogicalSourceEvent(chatGuid, authorityRelevant: message.isFromMe != false);
           final presentationGuid = ChatsSvc.presentationGuidFor(chatGuid);
           if (Get.isRegistered<MessagesService>(tag: presentationGuid)) {
             final service = Get.find<MessagesService>(tag: presentationGuid);

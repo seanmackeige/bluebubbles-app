@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/header/cupertino_header.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/header/material_header.dart';
@@ -289,6 +290,45 @@ class _LogicalComposerGate extends StatelessWidget {
   final ConversationViewController controller;
   final GestureDragUpdateCallback onPanUpdate;
 
+  static String _blockedReason(LogicalRouteRuntimeStatus status) {
+    switch (status.reason) {
+      case 'CURRENT_GENERATION_EXECUTION_UNCORROBORATED':
+        return 'no current writer: latest send not yet confirmed';
+      case 'CURRENT_WRITER_ROUTE_EXECUTION_UNCORROBORATED':
+        return 'no current writer: route never confirmed';
+      case 'CURRENT_GENERATION_HAS_NO_CANONICAL_ROUTE':
+        return 'no current writer: no writable route';
+      case 'NO_SUCCESSFUL_OUTBOUND_EXECUTION_PROVENANCE':
+        return 'no current writer: no confirmed send yet';
+    }
+    if (status.authorityState == 'SEND_BLOCKED_TRUE_MULTI_WRITER_AMBIGUITY') {
+      return 'two current writers';
+    }
+    return status.reason;
+  }
+
+  static void _showDiagnostics(BuildContext context, LogicalRouteRuntimeStatus status) {
+    final payload = <String, dynamic>{
+      'stage': status.stage.name,
+      'reason': status.reason,
+      'authority_state': status.authorityState,
+      'authority_epoch': status.authorityEpoch,
+      'service': status.service,
+      'transport': status.transportReason,
+      ...?status.diagnostics,
+    };
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Send authority'),
+        content: SingleChildScrollView(
+          child: SelectableText(const JsonEncoder.withIndent('  ').convert(payload)),
+        ),
+        actions: [TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close'))],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -300,25 +340,19 @@ class _LogicalComposerGate extends StatelessWidget {
           final ambiguousOutcome =
               !ledger.isCorrupt &&
               ledger.hasAmbiguousOutcomeForLogical(LogicalConversationViewPolicy.comcastNodeUpdates.id);
-          final transportUnknown =
-              status.isQualified &&
-              status.sendDisposition == LogicalTransportSendDisposition.allowedWithReachabilityUnknown;
           final transportBlocked =
               status.isQualified && status.sendDisposition == LogicalTransportSendDisposition.blocked;
-          if (status.isQualified && !transportUnknown && !transportBlocked && !ambiguousOutcome) {
+          if (status.isQualified && !transportBlocked && !ambiguousOutcome) {
             return const SizedBox.shrink();
           }
-          final checking =
-              status.stage == LogicalRouteRuntimeStage.checking || status.stage == LogicalRouteRuntimeStage.unchecked;
+          final checking = !status.hasEvaluated && !ambiguousOutcome;
           final message = ambiguousOutcome
               ? 'Previous send outcome unknown • no automatic retry'
               : transportBlocked
               ? 'Send blocked — ${status.service ?? 'SMS'} relay unavailable'
-              : transportUnknown
-              ? '${status.service ?? 'SMS'} route ready • relay reachability unknown • send allowed'
               : checking
-              ? 'Refreshing send authority…'
-              : 'Send blocked — ${status.reason}';
+              ? 'Checking send authority…'
+              : 'Send blocked — ${_blockedReason(status)}';
           return SafeArea(
             top: false,
             bottom: false,
@@ -329,20 +363,24 @@ class _LogicalComposerGate extends StatelessWidget {
                 children: [
                   if (checking)
                     const SizedBox.square(dimension: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                  else if (transportUnknown)
-                    const Icon(Icons.info_outline, size: 18)
                   else
                     const Icon(Icons.lock_outline, size: 18),
                   const SizedBox(width: 8),
                   Flexible(
                     child: Text(message, maxLines: 2, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center),
                   ),
-                  if (!checking)
+                  if (!checking) ...[
+                    IconButton(
+                      tooltip: 'Send authority details',
+                      onPressed: () => _showDiagnostics(context, status),
+                      icon: const Icon(Icons.info_outline),
+                    ),
                     IconButton(
                       tooltip: 'Check route again',
                       onPressed: () => unawaited(ChatsSvc.prepareLogicalRoute(controller.chat, force: true)),
                       icon: const Icon(Icons.refresh),
                     ),
+                  ],
                 ],
               ),
             ),

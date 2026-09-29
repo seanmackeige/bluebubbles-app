@@ -707,7 +707,7 @@ class IncomingMessageHandler {
   /// An `EventDispatcherSvc.emit` is fired in both cases so chat tiles, badge
   /// counts, and any other cross-cutting listeners can react.
   Future<void> _dispatchNewMessage(Chat chat, Message message, {String? tempGuid}) async {
-    ChatsSvc.noteLogicalSourceEvent(chat.guid);
+    ChatsSvc.noteLogicalSourceEvent(chat.guid, authorityRelevant: message.isFromMe != false);
     final presentationChat = ChatsSvc.presentationChatFor(chat);
     final presentationGuid = presentationChat.guid;
     final msvcRegistered = Get.isRegistered<MessagesService>(tag: presentationGuid);
@@ -744,7 +744,7 @@ class IncomingMessageHandler {
 
   /// Notifies the UI layer about an update to an existing message.
   void _dispatchUpdatedMessage(Chat chat, Message message, {String? oldGuid}) {
-    ChatsSvc.noteLogicalSourceEvent(chat.guid);
+    ChatsSvc.noteLogicalSourceEvent(chat.guid, authorityRelevant: message.isFromMe != false);
     final presentationGuid = ChatsSvc.presentationChatFor(chat).guid;
     if (Get.isRegistered<MessagesService>(tag: presentationGuid)) {
       MessagesSvc(presentationGuid).updateMessage(message, oldGuid: oldGuid);

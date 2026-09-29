@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:bluebubbles/services/ui/chat/logical_conversation_route.dart';
+import 'package:bluebubbles/services/ui/chat/logical_execution_authority.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -620,7 +621,7 @@ LogicalRouteEvidence _withProviderFactContract(
   );
 }
 
-LogicalRouteEvidence _singleWriterContinuationEvidence({required bool exactContinuation}) {
+LogicalRouteEvidence _singleWriterContinuationEvidence({required bool exactContinuation, bool terminal = true}) {
   final predecessor = _candidate(
     30,
     sourceGuid: 'single-predecessor-guid',
@@ -663,19 +664,19 @@ LogicalRouteEvidence _singleWriterContinuationEvidence({required bool exactConti
         account: 'current-account',
       ),
     ],
-    successfulOutbounds: const [
+    successfulOutbounds: [
       LogicalSuccessfulOutboundEvidence(
         messageGuid: 'single-terminal-outbound',
         messageRowId: 102,
         createdAtEpoch: 2000,
-        terminalAcknowledgement: true,
+        terminalAcknowledgement: terminal,
         account: 'current-account',
       ),
       LogicalSuccessfulOutboundEvidence(
         messageGuid: 'single-exact-continuation',
         messageRowId: 103,
         createdAtEpoch: 2500,
-        terminalAcknowledgement: true,
+        terminalAcknowledgement: terminal,
         account: 'current-account',
       ),
     ],
@@ -803,7 +804,7 @@ void main() {
       final decision = _resolve(newMessage, evidence: _advancedGenerationEvidence(evidenceDrivenSuccession: true));
       expect(decision.isSingleTarget, isTrue, reason: decision.reason);
       expect(decision.physicalTargetRowIds, [_writableRow]);
-      expect(decision.reason, 'EVIDENCE_DRIVEN_CURRENT_EXECUTION_GENERATION_PROVEN_UNIQUE_WRITABLE_SOURCE');
+      expect(decision.reason, LogicalExecutionConvergence.readyReason);
     });
 
     test('natural sibling SMS reaction cannot steal or invalidate the proven writer', () {
@@ -813,7 +814,7 @@ void main() {
       );
       expect(decision.isSingleTarget, isTrue, reason: decision.reason);
       expect(decision.physicalTargetRowIds, [_writableRow]);
-      expect(decision.reason, 'EVIDENCE_DRIVEN_CURRENT_EXECUTION_GENERATION_PROVEN_UNIQUE_WRITABLE_SOURCE');
+      expect(decision.reason, LogicalExecutionConvergence.readyReason);
     });
 
     test('Server 1.9.7 omissions remain unavailable while exact authoritative fallbacks preserve writer', () {
@@ -941,13 +942,25 @@ void main() {
       );
     });
 
-    test('evidence-driven generation does not merge peers or arm write without terminal outbound proof', () {
-      final decision = _resolve(
+    test('evidence-driven generation does not arm write from an uncorroborated current era', () {
+      final unavailableTerminalWithResponse = _resolve(
         newMessage,
         evidence: _advancedGenerationEvidence(evidenceDrivenSuccession: true, terminalCurrentOutbound: false),
       );
-      expect(decision.isQualified, isFalse);
-      expect(decision.reason, 'TERMINAL_FACT_UNAVAILABLE');
+      final uncorroborated = _resolve(
+        newMessage,
+        evidence: _advancedGenerationEvidence(
+          evidenceDrivenSuccession: true,
+          terminalCurrentOutbound: false,
+          includePostAdvancementResponse: false,
+        ),
+      );
+      // Serializer omission is unavailable, not false: a bounded natural
+      // response in the same generation still corroborates the era.
+      expect(unavailableTerminalWithResponse.isSingleTarget, isTrue, reason: unavailableTerminalWithResponse.reason);
+      expect(unavailableTerminalWithResponse.physicalTargetRowIds, [_writableRow]);
+      expect(uncorroborated.isQualified, isFalse);
+      expect(uncorroborated.reason, 'CURRENT_GENERATION_EXECUTION_UNCORROBORATED');
     });
 
     test('future iMessage generation can succeed SMS through structured evidence', () {
@@ -1013,13 +1026,19 @@ void main() {
       );
     });
 
-    test('exact later outbound reply is natural continuation but arbitrary later outbound is not', () {
+    test('certified terminal outbound arms a writer but Sean continuing his own thread does not', () {
       final exact = _resolve(newMessage, evidence: _singleWriterContinuationEvidence(exactContinuation: true));
       final arbitrary = _resolve(newMessage, evidence: _singleWriterContinuationEvidence(exactContinuation: false));
+      final selfContinuationOnly = _resolve(
+        newMessage,
+        evidence: _singleWriterContinuationEvidence(exactContinuation: true, terminal: false),
+      );
       expect(exact.isSingleTarget, isTrue, reason: exact.reason);
       expect(exact.physicalTargetRowIds, [_writableRow]);
-      expect(arbitrary.isQualified, isFalse);
-      expect(arbitrary.reason, 'CURRENT_WRITER_NATURAL_RESPONSE_MISSING');
+      expect(arbitrary.isSingleTarget, isTrue, reason: arbitrary.reason);
+      expect(arbitrary.physicalTargetRowIds, [_writableRow]);
+      expect(selfContinuationOnly.isQualified, isFalse);
+      expect(selfContinuationOnly.reason, 'CURRENT_GENERATION_EXECUTION_UNCORROBORATED');
     });
 
     test('current public-safe 2027 2155 2156 fixture preserves all 16 external identities', () {
