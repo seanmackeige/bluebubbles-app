@@ -1,0 +1,22 @@
+{
+  "schema": "SEAN_CREATE_CHAT_V2_SOURCE_AUTHORITY_V1",
+  "observed_at_utc": "2026-10-02",
+  "production": {
+    "hardware": "Macmini7,1",
+    "macos": "14.6.1 (23G93)",
+    "server_version": "1.9.7",
+    "server_source_commit": "c8fd02317f106f0f8deebd1cb3593bb096b2fb2e",
+    "server_app_asar_sha256": "04de35b91da68dc922a96af6f79e2663b2a1c83e7f5132adc258e3d5ef9d5d95",
+    "helper_version": "0.0.19",
+    "helper_source_commit": "cb0bccae0e0e0ab9452896fc48a5f7b1433e2f6f",
+    "helper_installed_sha256": "685f2e36a016d7624b8fc59c313776949d0f32110b8608b5fdef89195d7b60f9",
+    "helper_code_lineage": "ALL_NON_LINKEDIT_SECTIONS_IDENTICAL_TO_OFFICIAL_RELEASE_ASSET"
+  },
+  "upstream_reference": {
+    "server_commit": "f2e2286241a7c3b6617a82b37d4afaab4df3a6b9",
+    "helper_commit": "1ee57f3fde63f8cc5769d60cfabfe9a06fcc1069",
+    "new_group_semantics": "LEGACY_ACTIVE_ACCOUNT_CHATFORIMHANDLES_SENDER_NIL_UNCHANGED"
+  },
+  "production_write_count": 0,
+  "production_restart_count": 0
+}

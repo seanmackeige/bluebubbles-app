@@ -1,0 +1,53 @@
+{
+  "schema": "SEAN_CREATE_CHAT_V2_ZERO_SEND_RESULT_V1",
+  "observed_at_utc": "2026-10-02",
+  "host": "PRODUCTION_SONOMA_MAC_PUBLIC_SAFE",
+  "probe_binary": {
+    "architecture": "x86_64",
+    "sha256": "d5a5cf310c19c1764d6d2c47c72cecbf2154b39b04578510d39186f1ba4ce3dd"
+  },
+  "frameworks_loaded": {
+    "IMFoundation": true,
+    "IMSharedUtilities": true,
+    "IMCore": true
+  },
+  "method_encodings": {
+    "IMAccountController_accountForUniqueID": "@24@0:8@16",
+    "IMAccount_imHandleWithID": "@24@0:8@16",
+    "IMAccount_vettedAliases": "@16@0:8",
+    "IMAccount_displayName": "@16@0:8",
+    "IMHandle_account": "@16@0:8",
+    "IMHandle_service": "@16@0:8",
+    "IMChatRegistry_chatForIMHandles_lastAddressedHandle_lastAddressedSIMID": "@40@0:8@16@24@32",
+    "IMChat_lastAddressedHandleID": "@16@0:8",
+    "IMChat__sendMessage_withAccount_adjustingSender_shouldQueue": "v40@0:8@16@24c32c36",
+    "IMMessage_sender": "@16@0:8"
+  },
+  "standalone_account_enumeration": {
+    "controller_present": true,
+    "account_count": 0,
+    "classification": "PROCESS_CONTEXT_INSUFFICIENT_FOR_MESSAGES_ACCOUNT_OBJECTS"
+  },
+  "implementation_disassembly": {
+    "classification": "UNAVAILABLE",
+    "reason": "NONINTERACTIVE_DEBUG_SESSION_PERMISSION_DENIED"
+  },
+  "proof_not_obtained": [
+    "EXACT_ROUTE_CAPTURED_BY_CHAT_CREATOR",
+    "NO_ACTIVE_OR_DEFAULT_ACCOUNT_FALLBACK",
+    "DOWNSTREAM_ROUTE_PRESERVED",
+    "UNAVAILABLE_ROUTE_REJECTED_WITHOUT_SUBSTITUTION",
+    "PROVIDER_CONDITIONAL_REVISION"
+  ],
+  "effect_counts": {
+    "chat_creator_invocations": 0,
+    "chat_objects_created": 0,
+    "message_objects_created": 0,
+    "send_selector_invocations": 0,
+    "chat_db_accesses": 0,
+    "messages_restarts": 0,
+    "bluebubbles_restarts": 0,
+    "helper_restarts": 0
+  },
+  "raw_provider_identities_emitted": false
+}

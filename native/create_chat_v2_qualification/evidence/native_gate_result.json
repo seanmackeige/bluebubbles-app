@@ -1,0 +1,12 @@
+{
+  "schema": "SEAN_CREATE_CHAT_V2_NATIVE_GATE_RESULT_V1",
+  "observed_at_utc": "2026-10-02",
+  "binary_architecture": "x86_64",
+  "binary_sha256": "cc9fd2494e360952617d5101c14f04b49ea5882b9fc905e6bbe156eeabfcbe5c",
+  "checks": 15,
+  "failures": 0,
+  "chat_creator_invocations": 0,
+  "send_selector_invocations": 0,
+  "classification": "PASS_FAIL_CLOSED_POLICY_HARNESS_ONLY",
+  "provider_implementation_claimed": false
+}
