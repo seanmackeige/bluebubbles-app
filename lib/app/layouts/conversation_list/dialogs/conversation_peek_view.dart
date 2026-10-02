@@ -57,7 +57,7 @@ class ConversationPeekView extends StatefulWidget {
 class _ConversationPeekViewState extends State<ConversationPeekView>
     with SingleTickerProviderStateMixin, MessagesServiceMixin, ThemeHelpers {
   late final AnimationController controller;
-  late final ConversationViewController cvController = cvc(widget.chat);
+  late final ConversationViewController cvController = cvc(widget.chat, bindPresentation: true);
   final double itemHeight = kIsDesktop || kIsWeb ? 56 : 48;
   bool disposed = false;
 

@@ -156,7 +156,9 @@ GetIt singleton. Accessed via `ChatsSvc`.
 GetX controller, one instance per open application conversation. Access it via
 `cvc(chat)`; its tag is `ChatsSvc.conversationKeyFor(chat)`, which is the stable
 logical key for certified conversations and the existing physical GUID for an
-ordinary chat. Presentation changes rebind without changing that identity.
+ordinary chat. Existing-controller lookup is read-only. Only the route/peek
+owner may request `cvc(chat, bindPresentation: true)`; passive message, action,
+and focus lookups must never rebind presentation during a widget build.
 
 **What it owns:**
 - `pickedAttachments` — files staged for sending

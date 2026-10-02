@@ -94,6 +94,87 @@ void main() {
       expect(fixture['containsPersonalContent'], isFalse);
     });
 
+    test('banks the Build 106 exact-S24 timeline construction feedback ANR', () {
+      final fixture =
+          (jsonDecode(File('test/fixtures/build106_s24_timeline_attachment_navigator_anr.json').readAsStringSync())
+                  as Map)
+              .cast<String, dynamic>();
+      final trigger = (fixture['trigger'] as Map).cast<String, dynamic>();
+      final resources = (fixture['resourceEvidence'] as Map).cast<String, dynamic>();
+      final runtimeShape = (fixture['runtimeShape'] as Map).cast<String, dynamic>();
+      final causalSource = (fixture['causalSourceEvidence'] as Map).cast<String, dynamic>();
+      final stack = (fixture['mainThreadStack'] as List).cast<String>();
+
+      expect(fixture['versionCode'], 20002106);
+      expect(trigger['kind'], 'conversation row open attempt');
+      expect(trigger['processWasAlreadyBusyBeforeTimeout'], isTrue);
+      expect(fixture['exitReason'], 'ANR_INPUT_DISPATCH_TIMEOUT');
+      expect(fixture['processExited'], isFalse);
+      expect(
+        fixture['firstBrokenTransition'],
+        'CONVERSATION_TIMELINE_BUILD_TO_CONTROLLER_PRESENTATION_REBIND_FEEDBACK',
+      );
+      expect(
+        stack,
+        containsAllInOrder(<String>[
+          'Element.findAncestorStateOfType',
+          'Navigator.of',
+          'NavigatorService.width',
+          '_AttachmentHolderState.build.<anonymous closure>',
+          'RenderSliverList.performLayout',
+        ]),
+      );
+      expect(resources['processCpuPercent'], greaterThan(100));
+      expect(resources['mainThreadCpuNs'], greaterThan(70000000000));
+      expect(resources['rssKb'], greaterThan(500000));
+      expect(runtimeShape['loadedMessages'], 25);
+      expect(runtimeShape['messageParts'], 26);
+      expect(runtimeShape['attachments'], 2);
+      expect(runtimeShape['largeHistoryOrAttachmentFanout'], isFalse);
+      expect(causalSource['lookupWasMutating'], isTrue);
+      expect(causalSource['attachmentNavigatorStackIsSampledVictimNotRootCause'], isTrue);
+      expect(fixture['containsPersonalContent'], isFalse);
+    });
+
+    test('attachment reactive rebuilds do not walk the Navigator ancestor chain', () {
+      final navigatorSource = File('lib/services/ui/navigator/navigator_service.dart').readAsStringSync();
+      final widthMethod = navigatorSource.substring(
+        navigatorSource.indexOf('double width(BuildContext context)'),
+        navigatorSource.indexOf('double ratio(BuildContext context)'),
+      );
+      final attachmentSource = File(
+        'lib/app/layouts/conversation_view/widgets/message/attachment/attachment_holder.dart',
+      ).readAsStringSync();
+      final buildMethod = attachmentSource.substring(
+        attachmentSource.indexOf('Widget build(BuildContext context)'),
+        attachmentSource.indexOf('\n  }\n}', attachmentSource.indexOf('Widget build(BuildContext context)')),
+      );
+
+      expect(widthMethod, isNot(contains('Navigator.of(context)')));
+      expect(widthMethod, contains('ModalRoute.of(context)?.navigator'));
+      expect(buildMethod.indexOf('final maxAttachmentWidth'), lessThan(buildMethod.indexOf('child: Obx(()')));
+      expect(buildMethod, contains('maxWidth: maxAttachmentWidth'));
+      expect(buildMethod, isNot(contains('maxWidth: NavigationSvc.width(context)')));
+    });
+
+    test('timeline read-side controller lookup cannot rebind presentation', () {
+      final controllerSource = File('lib/services/ui/chat/conversation_view_controller.dart').readAsStringSync();
+      final lookup = controllerSource.substring(
+        controllerSource.indexOf('ConversationViewController cvc('),
+        controllerSource.indexOf('\n}\n\nclass ConversationViewController'),
+      );
+      final routeSource = File('lib/app/layouts/conversation_view/pages/conversation_view.dart').readAsStringSync();
+      final peekSource = File(
+        'lib/app/layouts/conversation_list/dialogs/conversation_peek_view.dart',
+      ).readAsStringSync();
+
+      expect(lookup, contains('bool bindPresentation = false'));
+      expect(lookup, contains('if (bindPresentation) existing.rebindPresentation(chat)'));
+      expect(lookup, isNot(contains('\n    existing.rebindPresentation(chat);\n')));
+      expect(routeSource, contains('bindPresentation: true'));
+      expect(peekSource, contains('bindPresentation: true'));
+    });
+
     test('big-emoji classification never applies the global regexp to a complete message', () {
       final source = File('lib/helpers/types/helpers/message_helper.dart').readAsStringSync();
       final method = source.substring(

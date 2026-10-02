@@ -150,10 +150,7 @@ class _AttachmentHolderState extends State<AttachmentHolder> with ThemeHelpers {
   }
 
   EdgeInsetsGeometry _computePadding(AttachmentState state, bool hideAttachments, bool showTail, bool isInReply) {
-    final sideInsets = EdgeInsets.only(
-      left: message.isFromMe! ? 0 : 10,
-      right: message.isFromMe! ? 10 : 0,
-    );
+    final sideInsets = EdgeInsets.only(left: message.isFromMe! ? 0 : 10, right: message.isFromMe! ? 10 : 0);
 
     // Treat an error preview the same as a resolved file — no extra padding.
     final hasError = state.hasError.value || message.error > 0;
@@ -187,10 +184,7 @@ class _AttachmentHolderState extends State<AttachmentHolder> with ThemeHelpers {
   }) {
     // Redacted mode always shows placeholder regardless of download status.
     if (hideAttachments) {
-      return NotLoadedContent(
-        hideAttachments: true,
-        isiOS: isiOS,
-      );
+      return NotLoadedContent(hideAttachments: true, isiOS: isiOS);
     }
 
     // Outgoing send failed — render the local file as normal so it shows next
@@ -229,10 +223,7 @@ class _AttachmentHolderState extends State<AttachmentHolder> with ThemeHelpers {
 
     // Upload in progress — show progress overlay (with optional preview).
     if (state.isSending.value) {
-      return UploadProgressContent(
-        isiOS: isiOS,
-        cvController: controller.cvController,
-      );
+      return UploadProgressContent(isiOS: isiOS, cvController: controller.cvController);
     }
 
     // Download in progress — show the download controller's progress UI.
@@ -247,10 +238,7 @@ class _AttachmentHolderState extends State<AttachmentHolder> with ThemeHelpers {
     }
 
     // Not yet loaded, queued, or errored.
-    return NotLoadedContent(
-      hideAttachments: false,
-      isiOS: isiOS,
-    );
+    return NotLoadedContent(hideAttachments: false, isiOS: isiOS);
   }
 
   // ── Build ─────────────────────────────────────────────────────────────────
@@ -265,6 +253,10 @@ class _AttachmentHolderState extends State<AttachmentHolder> with ThemeHelpers {
     // Resolve state once for the scope.  The AttachmentState object is updated
     // in-place by the service layer; no re-lookup is needed on reactive changes.
     final state = _resolveAttachmentState();
+    // Geometry depends on route/media state, not attachment transfer state.
+    // Keep its route lookup outside the Obx so transfer transitions cannot
+    // repeat navigator resolution while constructing a timeline frame.
+    final maxAttachmentWidth = NavigationSvc.width(context) * 0.5;
 
     return AttachmentStateScope(
       attachmentState: state,
@@ -290,9 +282,11 @@ class _AttachmentHolderState extends State<AttachmentHolder> with ThemeHelpers {
         final ____ = state.hasError.value;
 
         final hasError = state.hasError.value || message.error > 0;
-        final hasPreview = state.resolvedFile.value != null ||
+        final hasPreview =
+            state.resolvedFile.value != null ||
             (hasError && message.isFromMe == true && state.uploadPreviewFile.value != null);
-        final transparentCard = hasPreview && (widget.transparentBackground || isPass || attachment.mimeStart == "image");
+        final transparentCard =
+            hasPreview && (widget.transparentBackground || isPass || attachment.mimeStart == "image");
         // Gallery cards in non-preview states (downloading, not-loaded, etc.) need
         // to fill the SizedBox dimensions set by MessageImageGallery and have their
         // background clipped to rounded corners.
@@ -305,7 +299,7 @@ class _AttachmentHolderState extends State<AttachmentHolder> with ThemeHelpers {
               color: transparentCard ? Colors.transparent : context.theme.colorScheme.surfaceContainerHighest,
               child: ConstrainedBox(
                 constraints: BoxConstraints(
-                  maxWidth: NavigationSvc.width(context) * 0.5,
+                  maxWidth: maxAttachmentWidth,
                   maxHeight: isInReply ? double.infinity : context.height * 0.6,
                   minHeight: isInReply ? 0 : 40,
                   minWidth: isInReply ? 0 : 100,
@@ -382,10 +376,7 @@ class _AttachmentHolderState extends State<AttachmentHolder> with ThemeHelpers {
                     ],
                   )
                 : const BoxDecoration(),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(20),
-              child: content,
-            ),
+            child: ClipRRect(borderRadius: BorderRadius.circular(20), child: content),
           );
         }
         // ColorFiltered is only for standalone (non-gallery) selection tinting.

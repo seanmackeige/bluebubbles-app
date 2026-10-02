@@ -218,7 +218,7 @@ class ChatCreatorState extends State<ChatCreator> with ThemeHelpers {
     if (update) {
       if (existingChat != null) {
         await ChatsSvc.setActiveChat(existingChat, clearNotifications: false);
-        ChatsSvc.activeChat!.controller = cvc(existingChat);
+        ChatsSvc.activeChat!.controller = cvc(existingChat, bindPresentation: true);
 
         // Get or create the MessagesService for this chat
         // Only create a new one if we don't already have one for this chat
@@ -535,7 +535,7 @@ class ChatCreatorState extends State<ChatCreator> with ThemeHelpers {
                             // Ensure fakeController is set up for this chat
                             if (fakeController.value == null) {
                               await ChatsSvc.setActiveChat(existingChat, clearNotifications: false);
-                              ChatsSvc.activeChat!.controller = cvc(existingChat);
+                              ChatsSvc.activeChat!.controller = cvc(existingChat, bindPresentation: true);
                               fakeController.value = ChatsSvc.activeChat!.controller;
                             }
                             if (messagesService == null || messagesService!.tag != existingChat.guid) {

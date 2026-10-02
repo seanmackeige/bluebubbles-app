@@ -1,0 +1,76 @@
+{
+  "schema": "sean-build106-s24-timeline-attachment-navigator-anr-v1",
+  "capturedAtLocal": "2026-10-02T16:16:44.618-07:00",
+  "device": {
+    "hardwareSerialSha256": "54a87d012b177ef35ddd1723eda95c89a18cfa7a0496105bf477451cc20e8dc8",
+    "model": "SM-S928U",
+    "device": "e3q",
+    "android": 16
+  },
+  "package": "com.mackeige.bluebubbles",
+  "versionCode": 20002106,
+  "trigger": {
+    "kind": "conversation row open attempt",
+    "inputTimeoutMs": 10000,
+    "processWasAlreadyBusyBeforeTimeout": true
+  },
+  "exitReason": "ANR_INPUT_DISPATCH_TIMEOUT",
+  "processExited": false,
+  "mainThreadState": "RUNNABLE_DART_AOT_WIDGET_CONSTRUCTION",
+  "firstBrokenTransition": "CONVERSATION_TIMELINE_BUILD_TO_CONTROLLER_PRESENTATION_REBIND_FEEDBACK",
+  "mainThreadStack": [
+    "Element.findAncestorStateOfType",
+    "Navigator.of",
+    "NavigatorService.width",
+    "_AttachmentHolderState.build.<anonymous closure>",
+    "Obx.build",
+    "BuildScope._flushDirtyElements",
+    "SliverMultiBoxAdaptorElement.createChild",
+    "RenderSliverList.performLayout",
+    "WidgetsBinding.drawFrame"
+  ],
+  "resourceEvidence": {
+    "cpuWindowMs": 60463,
+    "processCpuPercent": 103,
+    "processUserCpuPercent": 102,
+    "mainThreadCpuNs": 74391517685,
+    "rssHighWaterKb": 567196,
+    "rssKb": 553420,
+    "rssAnonKb": 407004,
+    "swapKb": 30184,
+    "lowMemoryKill": false
+  },
+  "runtimeShape": {
+    "loadedMessages": 25,
+    "messageParts": 26,
+    "attachments": 2,
+    "maxPartsPerMessage": 2,
+    "associatedMessages": 4,
+    "maxTextUtf16CodeUnits": 152,
+    "maxAttributedBodyBytes": 1266,
+    "largeHistoryOrAttachmentFanout": false
+  },
+  "feedbackGraph": [
+    "conversation route observes ConversationViewController.chat",
+    "timeline constructs visible text bubbles",
+    "buildEnrichedMessageSpans performs cvc(message.chat.target) lookup",
+    "cvc finds the stable application-conversation controller",
+    "Build 101 cvc lookup rebinds a different hydrated Chat instance",
+    "ConversationViewController.chat Rx dirties the conversation route",
+    "timeline construction repeats"
+  ],
+  "causalSourceEvidence": {
+    "introducedBy": "BUILD_101_CONTROLLER_IDENTITY_CONVERGENCE",
+    "lookupWasMutating": true,
+    "objectboxChatIdentityIsNotStableAcrossHydration": true,
+    "sameConversationTagCanReceiveDifferentChatInstances": true,
+    "attachmentNavigatorStackIsSampledVictimNotRootCause": true
+  },
+  "evidence": {
+    "dropboxAnrSha256": "ae0ccc7caf17105398f3b2c6b838c3f2b3796e41b257ea5491e3b1126b3eca66",
+    "mainPcsSha256": "b30f39acb84417be3f3c9f8b4da6e01c2ea3408ccfdffa4e3c6f8453068444a4",
+    "symbolizedMainSha256": "4bae0e6de96ebe68791abf5f05598433ff5f8f26a79b570a2e37119afa85424f",
+    "aotBuildId": "b7188509cab2d8e2f90d3cfa70372961"
+  },
+  "containsPersonalContent": false
+}

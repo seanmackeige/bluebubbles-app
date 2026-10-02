@@ -42,7 +42,11 @@ class ConversationView extends StatefulWidget {
 }
 
 class ConversationViewState extends State<ConversationView> with ThemeHelpers<ConversationView>, RouteAware {
-  late final ConversationViewController controller = cvc(widget.chat, tag: widget.customService?.tag);
+  late final ConversationViewController controller = cvc(
+    widget.chat,
+    tag: widget.customService?.tag,
+    bindPresentation: true,
+  );
 
   // Cache actions map to avoid rebuilding on every frame
   late final Map<Type, Action<Intent>> _actionsMap;

@@ -45,11 +45,16 @@ class NavigatorService {
   /// grab the available screen width, returning the split screen width if applicable
   /// this should *always* be used in place of context.width or similar
   double width(BuildContext context) {
-    if (Navigator.of(context).widget.key?.toString().contains("Getx nested key: 1") ?? false) {
+    // ModalRoute exposes the owning navigator through an inherited route
+    // lookup. Unlike Navigator.of, this does not linearly walk every ancestor
+    // element. Width is read in message and attachment build hot paths, so the
+    // distinction is material for deep timeline widget trees.
+    final navigatorKey = ModalRoute.of(context)?.navigator?.widget.key?.toString();
+    if (navigatorKey?.contains("Getx nested key: 1") ?? false) {
       return _widthChatListLeft ?? context.width;
-    } else if (Navigator.of(context).widget.key?.toString().contains("Getx nested key: 2") ?? false) {
+    } else if (navigatorKey?.contains("Getx nested key: 2") ?? false) {
       return _widthChatListRight ?? context.width;
-    } else if (Navigator.of(context).widget.key?.toString().contains("Getx nested key: 3") ?? false) {
+    } else if (navigatorKey?.contains("Getx nested key: 3") ?? false) {
       return _widthSettings ?? context.width;
     }
     return context.width;
@@ -65,9 +70,9 @@ class NavigatorService {
     if (Get.keys.containsKey(2) && isTabletMode(context)) {
       Get.to(() => widget, transition: Transition.rightToLeft, id: 2);
     } else {
-      Navigator.of(context).push(ThemeSwitcher.buildPageRoute(
-        builder: (BuildContext context) => TitleBarWrapper(child: widget),
-      ));
+      Navigator.of(
+        context,
+      ).push(ThemeSwitcher.buildPageRoute(builder: (BuildContext context) => TitleBarWrapper(child: widget)));
     }
   }
 
@@ -76,9 +81,9 @@ class NavigatorService {
     if (Get.keys.containsKey(1) && isTabletMode(context)) {
       await Get.to(() => widget, transition: Transition.leftToRight, id: 1);
     } else {
-      await Navigator.of(context).push(ThemeSwitcher.buildPageRoute(
-        builder: (BuildContext context) => TitleBarWrapper(child: widget),
-      ));
+      await Navigator.of(
+        context,
+      ).push(ThemeSwitcher.buildPageRoute(builder: (BuildContext context) => TitleBarWrapper(child: widget)));
     }
   }
 
@@ -88,15 +93,20 @@ class NavigatorService {
       return await Get.to(() => widget, transition: Transition.rightToLeft, id: 3, binding: binding);
     } else {
       binding?.dependencies();
-      return await Navigator.of(context).push(ThemeSwitcher.buildPageRoute(
-        builder: (BuildContext context) => TitleBarWrapper(child: widget),
-      ));
+      return await Navigator.of(
+        context,
+      ).push(ThemeSwitcher.buildPageRoute(builder: (BuildContext context) => TitleBarWrapper(child: widget)));
     }
   }
 
   /// Push a new route, popping all previous routes, on the chat list right side navigator
-  Future<void> pushAndRemoveUntil(BuildContext context, Widget widget, bool Function(Route) predicate,
-      {bool closeActiveChat = true, PageRoute? customRoute}) async {
+  Future<void> pushAndRemoveUntil(
+    BuildContext context,
+    Widget widget,
+    bool Function(Route) predicate, {
+    bool closeActiveChat = true,
+    PageRoute? customRoute,
+  }) async {
     if (Get.keys.containsKey(2) && isTabletMode(context)) {
       if (closeActiveChat && ChatsSvc.activeChat != null) {
         Logger.debug("Closing active chat: ${ChatsSvc.activeChat!.chat.guid}", tag: "NavigatorService");
@@ -104,43 +114,43 @@ class NavigatorService {
       }
 
       await Get.offUntil(
-          GetPageRoute(
-            page: () => widget,
-            transition: Transition.noTransition,
-            transitionDuration: Duration.zero,
-          ),
-          predicate,
-          id: 2);
+        GetPageRoute(page: () => widget, transition: Transition.noTransition, transitionDuration: Duration.zero),
+        predicate,
+        id: 2,
+      );
     } else {
       await Navigator.of(context).pushAndRemoveUntil(
-          customRoute ??
-              ThemeSwitcher.buildPageRoute(
-                builder: (BuildContext context) => TitleBarWrapper(child: widget),
-              ),
-          predicate);
+        customRoute ?? ThemeSwitcher.buildPageRoute(builder: (BuildContext context) => TitleBarWrapper(child: widget)),
+        predicate,
+      );
     }
   }
 
   /// Push a new route, popping all previous routes, on the settings navigator
-  void pushAndRemoveSettingsUntil(BuildContext context, Widget widget, bool Function(Route) predicate,
-      {Bindings? binding}) {
+  void pushAndRemoveSettingsUntil(
+    BuildContext context,
+    Widget widget,
+    bool Function(Route) predicate, {
+    Bindings? binding,
+  }) {
     if (Get.keys.containsKey(3) && isTabletMode(context)) {
       // we only want to offUntil when in landscape, otherwise when the user presses back, the previous page will be the chat list
       Get.offUntil(
-          GetPageRoute(
-            page: () => widget,
-            binding: binding,
-            transition: Transition.noTransition,
-            transitionDuration: Duration.zero,
-          ),
-          predicate,
-          id: 3);
+        GetPageRoute(
+          page: () => widget,
+          binding: binding,
+          transition: Transition.noTransition,
+          transitionDuration: Duration.zero,
+        ),
+        predicate,
+        id: 3,
+      );
     } else {
       binding?.dependencies();
       // only push here because we don't want to remove underlying routes when in portrait
-      Navigator.of(context).push(ThemeSwitcher.buildPageRoute(
-        builder: (BuildContext context) => TitleBarWrapper(child: widget),
-      ));
+      Navigator.of(
+        context,
+      ).push(ThemeSwitcher.buildPageRoute(builder: (BuildContext context) => TitleBarWrapper(child: widget)));
     }
   }
 

@@ -165,7 +165,7 @@ void main() {
     expect(find.byKey(ValueKey<String>(logicalKey)).evaluate().single, same(logicalElement));
   });
 
-  testWidgets('stable logical tile and view controllers rebind when the presentation member changes', (tester) async {
+  testWidgets('view-controller lookups stay pure while explicit presentation ownership can rebind', (tester) async {
     final chatsService = _UiTestChatsService(certifiedRows: const <int>{2027, 2155, 2156});
     GetIt.I.registerSingleton<ChatsService>(chatsService);
     final listController = ConversationListController(showArchivedChats: false, showUnknownSenders: false);
@@ -196,11 +196,39 @@ void main() {
     final firstViewController = cvc(fallback);
     final preferredViewController = cvc(preferred);
     expect(preferredViewController, same(firstViewController));
-    expect(preferredViewController.chat, same(preferred));
+    // Read-side helpers call cvc() while constructing every message. Those
+    // lookups must not mutate the shared controller presentation or they dirty
+    // the whole conversation route during SliverList child construction.
+    expect(preferredViewController.chat, same(fallback));
     expect(preferredViewController.tag, logicalKey);
+
+    preferredViewController.rebindPresentation(preferred);
+    expect(preferredViewController.chat, same(preferred));
+
     final fallbackViewController = cvc(fallback);
     expect(fallbackViewController, same(firstViewController));
-    expect(fallbackViewController.chat, same(fallback));
+    expect(fallbackViewController.chat, same(preferred));
+
+    final explicitlyBoundController = cvc(fallback, bindPresentation: true);
+    expect(explicitlyBoundController, same(firstViewController));
+    expect(explicitlyBoundController.chat, same(fallback));
+
+    var routeBuilds = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Obx(() {
+          routeBuilds++;
+          final presentation = firstViewController.chat;
+          for (var i = 0; i < 1000; i++) {
+            cvc(_chat(rowId: 2027, guid: _firstGuid, title: 'Hydrated source $i'));
+          }
+          return Text(presentation.guid);
+        }),
+      ),
+    );
+    await tester.pump();
+    expect(routeBuilds, 1);
+    expect(firstViewController.chat, same(fallback));
   });
 
   testWidgets('ChatSubtitle selects durable logical draft and preserves ordinary ChatState draft behavior', (

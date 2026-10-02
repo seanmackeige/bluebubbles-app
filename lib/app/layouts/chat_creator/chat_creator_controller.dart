@@ -370,7 +370,7 @@ class ChatCreatorController extends StatefulController {
 
   Future<void> _activateExistingChat(Chat chat, {bool transferText = true}) async {
     await ChatsSvc.setActiveChat(chat, clearNotifications: false);
-    ChatsSvc.activeChat!.controller = cvc(chat);
+    ChatsSvc.activeChat!.controller = cvc(chat, bindPresentation: true);
 
     // Only create a new MessagesService if necessary.
     // Do NOT initialize here — MessagesView initializes it with proper handlers.

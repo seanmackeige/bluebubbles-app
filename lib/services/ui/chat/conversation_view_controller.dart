@@ -31,11 +31,23 @@ String conversationControllerTag(Chat chat, {String? explicitTag}) {
   return ChatsSvc.conversationKeyFor(chat);
 }
 
-ConversationViewController cvc(Chat chat, {String? tag}) {
+/// Returns the controller for [chat]'s stable application-conversation key.
+///
+/// Existing-controller lookup is deliberately side-effect free. Message
+/// renderers call this helper while a SliverList is constructing children, and
+/// ObjectBox relations may hydrate a different [Chat] instance for every
+/// message even though all instances have the same conversation identity.
+/// Rebinding the controller from those read-side lookups dirties every Obx that
+/// reads [ConversationViewController.chat], which can feed route construction
+/// back into itself indefinitely.
+///
+/// Only a widget or navigation boundary that owns the active presentation may
+/// set [bindPresentation].
+ConversationViewController cvc(Chat chat, {String? tag, bool bindPresentation = false}) {
   final conversationTag = conversationControllerTag(chat, explicitTag: tag);
   if (Get.isRegistered<ConversationViewController>(tag: conversationTag)) {
     final existing = Get.find<ConversationViewController>(tag: conversationTag);
-    existing.rebindPresentation(chat);
+    if (bindPresentation) existing.rebindPresentation(chat);
     return existing;
   }
   return Get.put(ConversationViewController(chat, tag_: conversationTag), tag: conversationTag);

@@ -288,7 +288,7 @@ def seanRequiredDailyDriverAotMarkers = [
     SEAN_RELEASE_AOT_NEW_GROUP_SAFETY_CONTRACT_MISSING:
         seanRequiredNewGroupSafetyContract,
 ]
-def seanRequiredCandidateVersionCode = 20002106
+def seanRequiredCandidateVersionCode = 20002107
 def seanRequiredCandidateFlutterBuildNumber = seanRequiredCandidateVersionCode - seanVersionCodeBase
 def seanRequiredNativePolicyMarkers = [
     SEAN_RELEASE_NATIVE_WORKER_COMPLETION_POLICY_MISSING:
@@ -545,7 +545,7 @@ tasks.register('verifySeanReleaseGateRegression') {
         proveMarkerRequirements(seanRequiredDailyDriverAotMarkers, 'aot')
         proveMarkerRequirements(seanRequiredNativePolicyMarkers, 'native')
         verifySeanCandidateVersionCode(seanRequiredCandidateVersionCode)
-        [20002101, 20002102, 20002103, 20002104, 20002105, 20002107].each { invalidVersionCode ->
+        [20002101, 20002102, 20002103, 20002104, 20002105, 20002106, 20002108].each { invalidVersionCode ->
             boolean rejected = false
             try {
                 verifySeanCandidateVersionCode(invalidVersionCode)
@@ -567,7 +567,7 @@ tasks.register('verifySeanReleaseGateRegression') {
 
 def verifySeanCandidateVersionInput = tasks.register('verifySeanCandidateVersionInput') {
     group = 'verification'
-    description = 'Rejects a Sean candidate unless Flutter supplied build-number 106 (versionCode 20002106).'
+    description = 'Rejects a Sean candidate unless Flutter supplied build-number 107 (versionCode 20002107).'
     doLast {
         int configuredVersionCode = seanVersionCodeBase + flutterVersionCode.toInteger()
         try {
