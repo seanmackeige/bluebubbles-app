@@ -598,6 +598,29 @@ bool shouldTemporarilySuppressLogicalCandidate({
       (record.phase == LogicalCandidateQuarantinePhase.certified || record.mayBeTemporarilySuppressedAt(nowEpochMs));
 }
 
+/// Coalesces read-side requests to persist a materialized quarantine ledger.
+///
+/// Projection can inspect thousands of chats while one preferences write is
+/// pending. Only the request that owns the in-flight fingerprint may complete
+/// it, and only an actual durable write may publish transition side effects.
+class LogicalCandidatePersistenceCoordinator {
+  String? _inFlightFingerprint;
+
+  bool get isBusy => _inFlightFingerprint != null;
+
+  bool request(String fingerprint) {
+    if (_inFlightFingerprint != null) return false;
+    _inFlightFingerprint = fingerprint;
+    return true;
+  }
+
+  bool complete(String fingerprint, {required bool wrote}) {
+    if (_inFlightFingerprint != fingerprint) return false;
+    _inFlightFingerprint = null;
+    return wrote;
+  }
+}
+
 /// Pure, IO-free durable state machine. Callers persist [toJson] atomically and
 /// must base all projection decisions on [recordFor] or [recordsAt], both of
 /// which materialize the visibility deadline before returning state.

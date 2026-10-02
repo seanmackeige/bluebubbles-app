@@ -1,0 +1,26 @@
+{
+  "schema": "BUILD101_S24_RUNTIME_FIXTURE_V1",
+  "privacy": "structural_only",
+  "device": {
+    "model": "SM-S928U",
+    "device": "e3q",
+    "android": 16
+  },
+  "build": {
+    "versionCode": 20002101,
+    "apkSha256": "b1793fc5a1f910fad34987934dde21af6aa08804eed111c1cfd73745012fa77f"
+  },
+  "historicalAnrCount": 5,
+  "exitReason": "ANR_INPUT_DISPATCH_TIMEOUT",
+  "mainThreadState": "RUNNABLE_DART_AOT",
+  "controlledReproduction": {
+    "coldLaunchTotalMs": 954,
+    "sampledCpuPercentPeak": 159,
+    "initialPssKb": 372500,
+    "initialRssKb": 488168,
+    "startupShareTargetPublishesObserved": 4,
+    "stableUiReached": false
+  },
+  "firstBrokenTransition": "CONVERSATION_LIST_TO_CANDIDATE_PERSISTENCE_SIDE_EFFECTS",
+  "requiredInvariant": "ONE_PERSISTENCE_WRITE_EMITS_AT_MOST_ONE_SIDE_EFFECT_BATCH"
+}

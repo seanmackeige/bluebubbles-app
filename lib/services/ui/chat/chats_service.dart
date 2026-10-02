@@ -214,6 +214,7 @@ class ChatsService {
   static const int _logicalCandidateQuarantineDurationMs = 15 * Duration.millisecondsPerMinute;
   LogicalCandidateQuarantineLedger _logicalCandidateQuarantine = LogicalCandidateQuarantineLedger.empty();
   Completer<void>? _logicalCandidateQuarantineMutex;
+  final LogicalCandidatePersistenceCoordinator _logicalCandidatePersistence = LogicalCandidatePersistenceCoordinator();
   String? _logicalCandidateQuarantinePersistedFingerprint;
   LogicalCandidateReconciliationContextLedger _logicalCandidateContexts =
       LogicalCandidateReconciliationContextLedger.empty();
@@ -431,12 +432,15 @@ class ChatsService {
   bool isApprovedLogicalSource(Chat chat) => _registeredLogicalIdForChat(chat) != null;
 
   LogicalCandidateQuarantineRecord? _logicalCandidateRecordForChat(Chat chat, {required int nowEpochMs}) {
-    final record = _logicalCandidateQuarantine.recordFor(
+    return _logicalCandidateQuarantine.recordFor(
       PhysicalConversationRef.fromStablePhysicalGuid(chat.guid),
       nowEpochMs: nowEpochMs,
     );
+  }
+
+  void _materializeLogicalCandidateQuarantine(int nowEpochMs) {
+    _logicalCandidateQuarantine.recordsAt(nowEpochMs: nowEpochMs);
     _scheduleLogicalCandidateQuarantinePersistence(nowEpochMs);
-    return record;
   }
 
   List<LogicalAddressEvidence> _logicalCandidateAddresses(Chat chat) {
@@ -488,9 +492,10 @@ class ChatsService {
       );
     }
 
+    final nowEpochMs = DateTime.now().millisecondsSinceEpoch;
+    _materializeLogicalCandidateQuarantine(nowEpochMs);
     final certified = isApprovedLogicalSource(chat);
-    final quarantined =
-        !certified && _logicalCandidateRecordForChat(chat, nowEpochMs: DateTime.now().millisecondsSinceEpoch) != null;
+    final quarantined = !certified && _logicalCandidateRecordForChat(chat, nowEpochMs: nowEpochMs) != null;
 
     final genericContextCandidate =
         !certified &&
@@ -509,8 +514,11 @@ class ChatsService {
   /// Read-only notification/presentation classification. Lookup materializes
   /// a bounded quarantine expiry through the existing durable state machine;
   /// it does not weaken candidate mutation protection.
-  LogicalCandidateQuarantinePhase? logicalCandidateQuarantinePhaseFor(Chat chat) =>
-      _logicalCandidateRecordForChat(chat, nowEpochMs: DateTime.now().millisecondsSinceEpoch)?.phase;
+  LogicalCandidateQuarantinePhase? logicalCandidateQuarantinePhaseFor(Chat chat) {
+    final nowEpochMs = DateTime.now().millisecondsSinceEpoch;
+    _materializeLogicalCandidateQuarantine(nowEpochMs);
+    return _logicalCandidateRecordForChat(chat, nowEpochMs: nowEpochMs)?.phase;
+  }
 
   /// Certified conversations may mutate their local logical settings ledger.
   /// Candidates and corrupt-authority state must not fall through to physical
@@ -562,16 +570,17 @@ class ChatsService {
     }
   }
 
-  Future<void> _persistLogicalCandidateQuarantineUnlocked({required int nowEpochMs}) async {
+  Future<bool> _persistLogicalCandidateQuarantineUnlocked({required int nowEpochMs}) async {
     final fingerprint = _logicalCandidateQuarantine.stableFingerprintAt(nowEpochMs: nowEpochMs);
-    if (fingerprint == _logicalCandidateQuarantinePersistedFingerprint) return;
+    if (fingerprint == _logicalCandidateQuarantinePersistedFingerprint) return false;
     await PrefsSvc.messaging.saveLogicalCandidateQuarantineJson(
       jsonEncode(_logicalCandidateQuarantine.toJson(nowEpochMs: nowEpochMs)),
     );
     _logicalCandidateQuarantinePersistedFingerprint = fingerprint;
+    return true;
   }
 
-  Future<void> _persistLogicalCandidateQuarantine({required int nowEpochMs}) =>
+  Future<bool> _persistLogicalCandidateQuarantine({required int nowEpochMs}) =>
       _withLogicalCandidateQuarantineLock(() => _persistLogicalCandidateQuarantineUnlocked(nowEpochMs: nowEpochMs));
 
   Future<void> _reconcileDeferredLogicalNotifications() async {
@@ -596,19 +605,32 @@ class ChatsService {
   }
 
   void _scheduleLogicalCandidateQuarantinePersistence(int nowEpochMs) {
+    // A completion always performs one fresh recheck, so projections arriving
+    // while a write is in flight must not synchronously reserialize the ledger.
+    if (_logicalCandidatePersistence.isBusy) return;
     final fingerprint = _logicalCandidateQuarantine.stableFingerprintAt(nowEpochMs: nowEpochMs);
     if (fingerprint == _logicalCandidateQuarantinePersistedFingerprint) return;
+    if (!_logicalCandidatePersistence.request(fingerprint)) return;
     unawaited(
-      _persistLogicalCandidateQuarantine(
-        nowEpochMs: nowEpochMs,
-      ).then((_) => _publishLogicalCandidateTransitionSideEffects()).catchError((Object error, StackTrace trace) {
-        Logger.warn(
-          'Logical candidate visibility state could not be persisted',
-          error: error,
-          trace: trace,
-          tag: 'LogicalCandidate',
-        );
-      }),
+      _persistLogicalCandidateQuarantine(nowEpochMs: nowEpochMs)
+          .then((wrote) {
+            if (_logicalCandidatePersistence.complete(fingerprint, wrote: wrote)) {
+              _publishLogicalCandidateTransitionSideEffects();
+            }
+            // A real transition may have arrived while this write held the lock.
+            // Recheck once after releasing the coalescer; identical projections
+            // stop here because their fingerprint is now durable.
+            _scheduleLogicalCandidateQuarantinePersistence(DateTime.now().millisecondsSinceEpoch);
+          })
+          .catchError((Object error, StackTrace trace) {
+            _logicalCandidatePersistence.complete(fingerprint, wrote: false);
+            Logger.warn(
+              'Logical candidate visibility state could not be persisted',
+              error: error,
+              trace: trace,
+              tag: 'LogicalCandidate',
+            );
+          }),
     );
   }
 
@@ -793,7 +815,9 @@ class ChatsService {
     if (certificate != null) {
       return certificate.id == LogicalConversationViewPolicy.bankedLogicalConversationId;
     }
-    final record = _logicalCandidateRecordForChat(chat, nowEpochMs: DateTime.now().millisecondsSinceEpoch);
+    final nowEpochMs = DateTime.now().millisecondsSinceEpoch;
+    _materializeLogicalCandidateQuarantine(nowEpochMs);
+    final record = _logicalCandidateRecordForChat(chat, nowEpochMs: nowEpochMs);
     if (record != null) {
       return logicalCandidateTargets(record, LogicalConversationViewPolicy.bankedApplicationLogicalId);
     }
@@ -3476,6 +3500,7 @@ class ChatsService {
   List<Chat> _projectLogicalChatList(Iterable<Chat> rawChats) {
     final registry = _logicalRegistry;
     final nowEpochMs = DateTime.now().millisecondsSinceEpoch;
+    _materializeLogicalCandidateQuarantine(nowEpochMs);
     final visible = rawChats.where(
       (chat) => !_isLogicalCandidateTemporarilySuppressed(chat, registry, nowEpochMs: nowEpochMs),
     );
