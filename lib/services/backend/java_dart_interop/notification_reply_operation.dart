@@ -5,6 +5,7 @@ import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
 
+@pragma('vm:entry-point')
 const notificationReplyOperationContract = 'LOGICAL_NOTIFICATION_REPLY_OPERATION_V2_DURABLE_BOUNDARY';
 const notificationReplyOperationJournalSchema = 2;
 const notificationReplyOperationJournalLegacySchema = 1;

@@ -7,6 +7,7 @@ const physicalConversationRefSchema = 'PHYSICAL_CONVERSATION_REF_V1';
 const conversationAddressSchema = 'CONVERSATION_ADDRESS_V1';
 const logicalUnreadLedgerSchema = 'LOGICAL_UNREAD_LEDGER_V1';
 const logicalSearchResultSchema = 'LOGICAL_SEARCH_RESULT_V1';
+@pragma('vm:entry-point')
 const logicalMediaItemSchema = 'LOGICAL_MEDIA_ITEM_V1';
 const logicalConversationSnapshotSchema = 'LOGICAL_CONVERSATION_SNAPSHOT_V1';
 
