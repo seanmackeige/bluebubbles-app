@@ -492,10 +492,9 @@ class ChatsService {
       );
     }
 
-    final nowEpochMs = DateTime.now().millisecondsSinceEpoch;
-    _materializeLogicalCandidateQuarantine(nowEpochMs);
     final certified = isApprovedLogicalSource(chat);
-    final quarantined = !certified && _logicalCandidateRecordForChat(chat, nowEpochMs: nowEpochMs) != null;
+    final quarantined =
+        !certified && _logicalCandidateRecordForChat(chat, nowEpochMs: DateTime.now().millisecondsSinceEpoch) != null;
 
     final genericContextCandidate =
         !certified &&
@@ -515,9 +514,7 @@ class ChatsService {
   /// a bounded quarantine expiry through the existing durable state machine;
   /// it does not weaken candidate mutation protection.
   LogicalCandidateQuarantinePhase? logicalCandidateQuarantinePhaseFor(Chat chat) {
-    final nowEpochMs = DateTime.now().millisecondsSinceEpoch;
-    _materializeLogicalCandidateQuarantine(nowEpochMs);
-    return _logicalCandidateRecordForChat(chat, nowEpochMs: nowEpochMs)?.phase;
+    return _logicalCandidateRecordForChat(chat, nowEpochMs: DateTime.now().millisecondsSinceEpoch)?.phase;
   }
 
   /// Certified conversations may mutate their local logical settings ledger.
@@ -815,9 +812,7 @@ class ChatsService {
     if (certificate != null) {
       return certificate.id == LogicalConversationViewPolicy.bankedLogicalConversationId;
     }
-    final nowEpochMs = DateTime.now().millisecondsSinceEpoch;
-    _materializeLogicalCandidateQuarantine(nowEpochMs);
-    final record = _logicalCandidateRecordForChat(chat, nowEpochMs: nowEpochMs);
+    final record = _logicalCandidateRecordForChat(chat, nowEpochMs: DateTime.now().millisecondsSinceEpoch);
     if (record != null) {
       return logicalCandidateTargets(record, LogicalConversationViewPolicy.bankedApplicationLogicalId);
     }

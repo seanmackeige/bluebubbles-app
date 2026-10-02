@@ -50,6 +50,16 @@ void main() {
       expect(lookup, isNot(contains('_scheduleLogicalCandidateQuarantinePersistence')));
       expect(lookup, isNot(contains('stableFingerprintAt')));
       expect('_materializeLogicalCandidateQuarantine'.allMatches(projection).length, 1);
+
+      for (final boundary in <List<String>>[
+        <String>['LogicalMutationProtection logicalMutationProtectionFor', 'bool isPotentialLogicalSource'],
+        <String>['LogicalCandidateQuarantinePhase? logicalCandidateQuarantinePhaseFor', 'bool canApplyConversation'],
+        <String>['bool _canAffectBuild99WriterAuthority', 'String? logicalConversationIdFor'],
+      ]) {
+        final readBoundary = source.substring(source.indexOf(boundary.first), source.indexOf(boundary.last));
+        expect(readBoundary, isNot(contains('_materializeLogicalCandidateQuarantine')));
+        expect(readBoundary, isNot(contains('stableFingerprintAt')));
+      }
     });
   });
 }
