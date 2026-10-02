@@ -6,6 +6,29 @@ const newGroupIntentSchema = 'NEW_LOGICAL_CONVERSATION_INTENT_V1';
 const newGroupCapabilitySchema = 'NEW_GROUP_PROVIDER_CAPABILITY_V1';
 const newGroupOperationSchema = 'NEW_GROUP_OPERATION_V1';
 
+/// CREATE_CHAT_V2 is negotiated by behavior, not inferred from a server or
+/// helper version. Unknown and legacy combinations fail closed.
+abstract final class NewGroupProviderProtocol {
+  static const legacyV1 = 'NEW_GROUP_V1_LEGACY_UNSAFE';
+  static const createChatV2 = 'CREATE_CHAT_V2';
+}
+
+abstract final class NewGroupProviderCapabilityToken {
+  static const accountBound = 'NEW_GROUP_V2_ACCOUNT_BOUND';
+  static const senderBound = 'NEW_GROUP_V2_SENDER_BOUND';
+  static const serviceBound = 'NEW_GROUP_V2_SERVICE_BOUND';
+  static const operationId = 'NEW_GROUP_V2_OPERATION_ID';
+  static const resultObservation = 'NEW_GROUP_V2_RESULT_OBSERVATION';
+
+  static const requiredForProduction = <String>{
+    accountBound,
+    senderBound,
+    serviceBound,
+    operationId,
+    resultObservation,
+  };
+}
+
 enum NewGroupRequestedService { iMessage, smsMms }
 
 enum NewGroupRecipientCapability { available, unavailable, unknown }
@@ -38,6 +61,7 @@ enum NewGroupFailureReason {
   privateApiUnavailable,
   helperUnavailable,
   helperCreateActionUnattested,
+  providerProtocolMismatch,
   accountProofMissing,
   accountMismatch,
   senderMismatch,
@@ -278,6 +302,11 @@ class NewGroupProviderCapability {
     required this.privateApiEnabled,
     required this.helperConnected,
     required this.helperCreateActionAttested,
+    required this.serverProtocol,
+    required this.helperProtocol,
+    required this.serverEvidenceRevision,
+    required this.helperEvidenceRevision,
+    required this.capabilityTokens,
     required this.iMessageGroupSupported,
     required this.smsMmsGroupSupported,
     required this.explicitAccountBinding,
@@ -294,10 +323,18 @@ class NewGroupProviderCapability {
   final bool privateApiEnabled;
   final bool helperConnected;
   final bool helperCreateActionAttested;
+  final String serverProtocol;
+  final String helperProtocol;
+  final String serverEvidenceRevision;
+  final String helperEvidenceRevision;
+  final Set<String> capabilityTokens;
   final bool iMessageGroupSupported;
   final bool smsMmsGroupSupported;
   final bool explicitAccountBinding;
   final bool explicitSenderBinding;
+
+  /// Durable at-most-once admission at the provider boundary. This is not
+  /// distributed exactly-once delivery through Apple.
   final bool operationIdempotency;
   final bool appleObservation;
   final bool attachmentFirstSend;
@@ -312,6 +349,14 @@ class NewGroupProviderCapability {
     return service == NewGroupRequestedService.iMessage ? iMessageGroupSupported : smsMmsGroupSupported;
   }
 
+  bool get hasCompleteV2Negotiation {
+    return serverProtocol == NewGroupProviderProtocol.createChatV2 &&
+        helperProtocol == NewGroupProviderProtocol.createChatV2 &&
+        serverEvidenceRevision.isNotEmpty &&
+        helperEvidenceRevision.isNotEmpty &&
+        capabilityTokens.containsAll(NewGroupProviderCapabilityToken.requiredForProduction);
+  }
+
   NewGroupProviderCapabilityState get capabilityState {
     if (!privateApiEnabled && !helperConnected) {
       return NewGroupProviderCapabilityState.appleScriptSingleOnly;
@@ -322,7 +367,12 @@ class NewGroupProviderCapability {
     if (!helperCreateActionAttested) {
       return NewGroupProviderCapabilityState.privateRoutePresentUnattested;
     }
-    final safeContract = explicitAccountBinding && explicitSenderBinding && operationIdempotency && appleObservation;
+    final safeContract =
+        hasCompleteV2Negotiation &&
+        explicitAccountBinding &&
+        explicitSenderBinding &&
+        operationIdempotency &&
+        appleObservation;
     if (!safeContract) {
       return NewGroupProviderCapabilityState.privateRouteAttestedUnsafeContract;
     }
@@ -341,6 +391,11 @@ class NewGroupProviderCapability {
     'privateApiEnabled': privateApiEnabled,
     'helperConnected': helperConnected,
     'helperCreateActionAttested': helperCreateActionAttested,
+    'serverProtocol': serverProtocol,
+    'helperProtocol': helperProtocol,
+    'serverEvidenceRevision': serverEvidenceRevision,
+    'helperEvidenceRevision': helperEvidenceRevision,
+    'capabilityTokens': capabilityTokens.toList(growable: false)..sort(),
     'iMessageGroupSupported': iMessageGroupSupported,
     'smsMmsGroupSupported': smsMmsGroupSupported,
     'explicitAccountBinding': explicitAccountBinding,
@@ -559,6 +614,12 @@ class NewGroupPreflight {
       return blocked(
         NewGroupFailureReason.helperCreateActionUnattested,
         'Group creation unavailable — helper create capability not verified',
+      );
+    }
+    if (!provider.hasCompleteV2Negotiation) {
+      return blocked(
+        NewGroupFailureReason.providerProtocolMismatch,
+        'Group creation unavailable — server/helper capability mismatch',
       );
     }
     if (accountProof == null || !accountProof.isCurrentAt(nowEpochMilliseconds)) {

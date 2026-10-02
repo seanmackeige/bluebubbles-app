@@ -176,12 +176,48 @@ class NewGroupProviderReservation {
   bool get isReserved => state == NewGroupProviderReservationState.reserved && reservationId != null;
 }
 
+class NewGroupProviderRejectedBeforeDispatch implements Exception {
+  const NewGroupProviderRejectedBeforeDispatch({
+    required this.operationId,
+    required this.reservationId,
+    required this.executionStarted,
+    required this.providerRevision,
+    required this.accountIdentity,
+    required this.senderIdentity,
+    required this.service,
+    required this.reasonCode,
+  });
+
+  final String operationId;
+  final String reservationId;
+  final bool executionStarted;
+  final String providerRevision;
+  final String accountIdentity;
+  final String senderIdentity;
+  final NewGroupRequestedService service;
+  final String reasonCode;
+
+  bool exactlyMatches(NewGroupExecutionEnvelope envelope, NewGroupProviderReservation reservation) {
+    return !executionStarted &&
+        reservationId == reservation.reservationId &&
+        operationId == envelope.operationId &&
+        providerRevision == envelope.providerRevision &&
+        accountIdentity == envelope.accountIdentity &&
+        senderIdentity == envelope.senderIdentity &&
+        service == envelope.requestedService;
+  }
+}
+
 class NewGroupExecutionReceipt {
   const NewGroupExecutionReceipt({
     required this.operationId,
     required this.reservationId,
     required this.providerRequestId,
     required this.providerMessageIdentity,
+    required this.providerAccountIdentity,
+    required this.providerSenderIdentity,
+    required this.service,
+    required this.executionStarted,
     required this.acceptedAtEpochMilliseconds,
   });
 
@@ -189,6 +225,10 @@ class NewGroupExecutionReceipt {
   final String reservationId;
   final String providerRequestId;
   final String providerMessageIdentity;
+  final String providerAccountIdentity;
+  final String providerSenderIdentity;
+  final NewGroupRequestedService service;
+  final bool executionStarted;
   final int acceptedAtEpochMilliseconds;
 }
 
@@ -820,6 +860,22 @@ class NewGroupProviderCoordinator {
       NewGroupExecutionReceipt receipt;
       try {
         receipt = await provider.executeFirstSend(envelope, reservation);
+      } on NewGroupProviderRejectedBeforeDispatch catch (rejection) {
+        if (!rejection.exactlyMatches(envelope, reservation)) {
+          operation = operation.transition(
+            NewGroupProviderOperationState.outcomeAmbiguous,
+            now(),
+            'PROVIDER_REJECTION_IDENTITY_MISMATCH',
+          );
+        } else {
+          operation = operation.transition(
+            NewGroupProviderOperationState.preExecutionRejected,
+            now(),
+            rejection.reasonCode,
+          );
+        }
+        await _persist(journal, operation);
+        return operation;
       } catch (_) {
         operation = operation.transition(
           NewGroupProviderOperationState.outcomeAmbiguous,
@@ -832,7 +888,11 @@ class NewGroupProviderCoordinator {
       if (receipt.operationId != operationId ||
           receipt.reservationId != reservation.reservationId ||
           receipt.providerRequestId.isEmpty ||
-          receipt.providerMessageIdentity.isEmpty) {
+          receipt.providerMessageIdentity.isEmpty ||
+          !receipt.executionStarted ||
+          receipt.providerAccountIdentity != envelope.accountIdentity ||
+          receipt.providerSenderIdentity != envelope.senderIdentity ||
+          receipt.service != envelope.requestedService) {
         operation = operation.transition(
           NewGroupProviderOperationState.outcomeAmbiguous,
           now(),

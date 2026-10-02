@@ -19,6 +19,9 @@ Capability evidence includes:
 - Private API enabled state;
 - helper connection;
 - exact helper action attestation;
+- explicit server and helper protocol identities;
+- the complete account, sender, service, operation-ID, and result-observation
+  capability token set;
 - requested iMessage or SMS/MMS group support;
 - explicit account binding;
 - explicit sender binding;
@@ -37,6 +40,29 @@ route is no longer merely present or assumed from a settings boolean. However,
 the exact action selects the active Apple account internally and has no
 operation identity. Current classification is therefore
 `PRIVATE_ROUTE_ATTESTED_UNSAFE_CONTRACT`.
+
+The bounded successor protocol is `CREATE_CHAT_V2`. Production requires both
+the server and helper to report that exact protocol plus:
+
+- `NEW_GROUP_V2_ACCOUNT_BOUND`
+- `NEW_GROUP_V2_SENDER_BOUND`
+- `NEW_GROUP_V2_SERVICE_BOUND`
+- `NEW_GROUP_V2_OPERATION_ID`
+- `NEW_GROUP_V2_RESULT_OBSERVATION`
+
+An old helper is explicitly `NEW_GROUP_V1_LEGACY_UNSAFE`. Missing tokens,
+unknown protocol, empty evidence revision, or server/helper skew fail closed.
+No capability is inferred from a version number.
+
+`NEW_GROUP_V2_OPERATION_ID` means durable at-most-once provider admission and
+no automatic replay after physical execution may have begun. Apple exposes no
+operation-id conditional primitive, so it is not a distributed exactly-once
+claim.
+
+The 2026-10-02 provider-binding R&D remains classification B: the offline wire
+contract and deterministic implementation are complete, but the current
+production server/helper do not implement or advertise V2. See
+`NEW_GROUP_PROVIDER_BINDING_R_D.md`.
 
 The safe UI state is:
 

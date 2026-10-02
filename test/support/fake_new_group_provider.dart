@@ -5,6 +5,13 @@ import 'package:bluebubbles/services/ui/chat/new_group_provider_contract.dart';
 
 enum FakeNewGroupInjection {
   helperSuccess,
+  accountUnavailable,
+  senderUnavailable,
+  operationDuplicate,
+  capabilityMismatch,
+  oldHelper,
+  newHelper,
+  toctouSimulation,
   helperPreExecutionFailure,
   helperTimeoutBeforeExecution,
   helperTimeoutAfterExecution,
@@ -18,6 +25,9 @@ enum FakeNewGroupInjection {
   serviceChangeBeforeExecution,
   missingRecipient,
   extraRecipient,
+  wrongReceiptAccount,
+  wrongReceiptSender,
+  wrongReceiptService,
   wrongObservationAccount,
   wrongObservationSender,
   wrongObservationMessageIdentity,
@@ -88,6 +98,7 @@ class FakeNewGroupProvider implements NewGroupProvider {
   int syntheticCallbackDeliveries = 0;
   int reconciliationInvocations = 0;
   NewGroupExecutionEnvelope? lastExecutionEnvelope;
+  NewGroupExecutionReceipt? lastReceipt;
   final Map<String, String> _reservations = <String, String>{};
   final Map<String, NewGroupExecutionReceipt> _receipts = <String, NewGroupExecutionReceipt>{};
   final Map<String, NewGroupObservedAppleResult> _observations = <String, NewGroupObservedAppleResult>{};
@@ -96,6 +107,10 @@ class FakeNewGroupProvider implements NewGroupProvider {
   Future<NewGroupProviderCapability> inspectCapabilities() async {
     capabilityReads += 1;
     final changed = injections.contains(FakeNewGroupInjection.providerRevisionChange) && capabilityReads > 1;
+    final oldHelper = injections.contains(FakeNewGroupInjection.oldHelper);
+    final capabilityMismatch = injections.contains(FakeNewGroupInjection.capabilityMismatch);
+    final tokens = <String>{...NewGroupProviderCapabilityToken.requiredForProduction};
+    if (capabilityMismatch) tokens.remove(NewGroupProviderCapabilityToken.senderBound);
     return NewGroupProviderCapability(
       serverVersion: 'fake-safe-provider',
       evidenceRevision: changed ? 'provider-v2' : 'provider-v1',
@@ -104,6 +119,11 @@ class FakeNewGroupProvider implements NewGroupProvider {
       privateApiEnabled: true,
       helperConnected: true,
       helperCreateActionAttested: true,
+      serverProtocol: NewGroupProviderProtocol.createChatV2,
+      helperProtocol: oldHelper ? NewGroupProviderProtocol.legacyV1 : NewGroupProviderProtocol.createChatV2,
+      serverEvidenceRevision: 'fake-server-v2',
+      helperEvidenceRevision: oldHelper ? 'fake-helper-v1' : 'fake-helper-v2',
+      capabilityTokens: tokens,
       iMessageGroupSupported:
           !(injections.contains(FakeNewGroupInjection.serviceChangeBeforeExecution) && capabilityReads > 1),
       smsMmsGroupSupported: true,
@@ -145,6 +165,9 @@ class FakeNewGroupProvider implements NewGroupProvider {
   @override
   Future<ProviderAccountIdentity> readAccountIdentity() async {
     accountReads += 1;
+    if (injections.contains(FakeNewGroupInjection.accountUnavailable)) {
+      throw StateError('FAKE_ACCOUNT_UNAVAILABLE');
+    }
     final changedBeforeExecution =
         injections.contains(FakeNewGroupInjection.accountChangeBeforeExecution) && accountReads > 1;
     return ProviderAccountIdentity(
@@ -160,6 +183,9 @@ class FakeNewGroupProvider implements NewGroupProvider {
   @override
   Future<ProviderSenderIdentity> readSenderIdentity() async {
     senderReads += 1;
+    if (injections.contains(FakeNewGroupInjection.senderUnavailable)) {
+      throw StateError('FAKE_SENDER_UNAVAILABLE');
+    }
     final changedBeforeExecution =
         injections.contains(FakeNewGroupInjection.senderChangeBeforeExecution) && senderReads > 1;
     return ProviderSenderIdentity(
@@ -200,6 +226,12 @@ class FakeNewGroupProvider implements NewGroupProvider {
   @override
   Future<NewGroupProviderReservation> reserveOperation(NewGroupExecutionEnvelope envelope) async {
     reserveInvocations += 1;
+    if (injections.contains(FakeNewGroupInjection.operationDuplicate)) {
+      return const NewGroupProviderReservation(
+        state: NewGroupProviderReservationState.rejected,
+        reasonCode: 'PROVIDER_OPERATION_DUPLICATE',
+      );
+    }
     if (injections.contains(FakeNewGroupInjection.helperPreExecutionFailure)) {
       return const NewGroupProviderReservation(
         state: NewGroupProviderReservationState.rejected,
@@ -227,6 +259,18 @@ class FakeNewGroupProvider implements NewGroupProvider {
   ) async {
     executeInvocations += 1;
     lastExecutionEnvelope = envelope;
+    if (injections.contains(FakeNewGroupInjection.toctouSimulation)) {
+      throw NewGroupProviderRejectedBeforeDispatch(
+        operationId: envelope.operationId,
+        reservationId: reservation.reservationId!,
+        executionStarted: false,
+        providerRevision: envelope.providerRevision,
+        accountIdentity: envelope.accountIdentity,
+        senderIdentity: envelope.senderIdentity,
+        service: envelope.requestedService,
+        reasonCode: 'PROVIDER_IDENTITY_CHANGED_BEFORE_PHYSICAL_DISPATCH',
+      );
+    }
     if (_receipts.containsKey(envelope.operationId)) throw StateError('FAKE_DUPLICATE_EXECUTION');
     physicalExecutions += 1;
     final receipt = NewGroupExecutionReceipt(
@@ -234,8 +278,19 @@ class FakeNewGroupProvider implements NewGroupProvider {
       reservationId: reservation.reservationId!,
       providerRequestId: 'request-${envelope.operationId}',
       providerMessageIdentity: 'message-${envelope.operationId}',
+      providerAccountIdentity: injections.contains(FakeNewGroupInjection.wrongReceiptAccount)
+          ? 'account-wrong'
+          : envelope.accountIdentity,
+      providerSenderIdentity: injections.contains(FakeNewGroupInjection.wrongReceiptSender)
+          ? 'sender-wrong'
+          : envelope.senderIdentity,
+      service: injections.contains(FakeNewGroupInjection.wrongReceiptService)
+          ? NewGroupRequestedService.smsMms
+          : envelope.requestedService,
+      executionStarted: true,
       acceptedAtEpochMilliseconds: clock(),
     );
+    lastReceipt = receipt;
     _receipts[envelope.operationId] = receipt;
     _observations[envelope.operationId] = _observation(envelope, receipt);
     if (injections.contains(FakeNewGroupInjection.helperTimeoutAfterExecution) ||

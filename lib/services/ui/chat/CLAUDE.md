@@ -10,6 +10,7 @@
 | `logical_execution_authority.dart` | Write-authority convergence: execution generations, frontier/era, corroboration, writer selection, bounded diagnostics |
 | `new_group_conversation.dart` | Offline fail-closed new-group intent, capability, exact-match, admission, ambiguity, and Apple-observation policy |
 | `new_group_provider_contract.dart` | Narrow provider adapter, durable full state machine, conditional authority, strong result reconciliation, and Build 100 UI gate |
+| `new_group_create_chat_v2.dart` | Explicit CREATE_CHAT_V2 wire contract, capability negotiation, exact bound response checks, and durable provider at-most-once journal model |
 | `new_group_operation_store.dart` | Crash-durable preference journal and explicit non-executing production boundary |
 
 ---
@@ -107,15 +108,18 @@ GetIt singleton. Accessed via `ChatsSvc`.
 3. An exact existing recipient/service/account match requires explicit human
    selection; current, historical, and multiple matches are never auto-reused.
 4. A macOS version is not a capability. Private API, helper action, account and
-   sender binding, provider idempotency, and Apple observation are proven
-   independently and must all be current before admission.
+   sender binding, durable operation reservation, and Apple observation are
+   proven independently and must all be current before admission. Server and
+   helper must negotiate the complete `CREATE_CHAT_V2` token set; omission or
+   version skew fails closed.
 5. Admission and execution-started records must be durably persisted before a
    transport call. Any interruption after execution starts becomes
    `outcomeAmbiguous` and must not be retried automatically.
 6. Success requires one terminal first message and an Apple-created chat whose
    exact recipients, service, account, sender, and content match the intent.
-7. This policy must remain transport-disconnected until the provider supports
-   explicit account/sender binding and conditional operation identity.
+7. This policy must remain transport-disconnected until a native provider
+   implements and runtime-proves the complete `CREATE_CHAT_V2` account, sender,
+   service, operation-identity, and result-observation contract.
 8. Build 100 may inspect and explain current capability, but unresolved groups
    never invoke `/chat/new`; the production execution boundary remains false.
 9. Existing exact-set groups activate only after explicit physical-chat

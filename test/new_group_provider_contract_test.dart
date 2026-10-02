@@ -67,6 +67,11 @@ void main() {
         privateApiEnabled: true,
         helperConnected: true,
         helperCreateActionAttested: true,
+        serverProtocol: NewGroupProviderProtocol.legacyV1,
+        helperProtocol: NewGroupProviderProtocol.legacyV1,
+        serverEvidenceRevision: 'legacy-server',
+        helperEvidenceRevision: 'legacy-helper',
+        capabilityTokens: <String>{},
         iMessageGroupSupported: true,
         smsMmsGroupSupported: true,
         explicitAccountBinding: false,
@@ -77,6 +82,29 @@ void main() {
       );
 
       expect(capability.capabilityState, NewGroupProviderCapabilityState.privateRouteAttestedUnsafeContract);
+    });
+
+    test('CREATE_CHAT_V2 requires matching server and helper capability evidence', () async {
+      final current = FakeNewGroupProvider(clock: FakeNewGroupClock(1000));
+      final currentCapability = await current.inspectCapabilities();
+      expect(currentCapability.hasCompleteV2Negotiation, isTrue);
+
+      final explicitlyNew = FakeNewGroupProvider(
+        clock: FakeNewGroupClock(1000),
+        injections: <FakeNewGroupInjection>{FakeNewGroupInjection.newHelper},
+      );
+      expect((await explicitlyNew.inspectCapabilities()).hasCompleteV2Negotiation, isTrue);
+
+      for (final injection in <FakeNewGroupInjection>[
+        FakeNewGroupInjection.oldHelper,
+        FakeNewGroupInjection.capabilityMismatch,
+      ]) {
+        final fixture = _fixture(injections: <FakeNewGroupInjection>{injection});
+        final result = await fixture.coordinator.prepare(_intent(operationId: 'operation-${injection.name}'));
+        expect(result.state, NewGroupProviderOperationState.preExecutionRejected);
+        expect(result.reasonCode, 'PRE_EXECUTION_PROVIDERPROTOCOLMISMATCH');
+        expect(fixture.provider.physicalExecutions, 0);
+      }
     });
 
     test('unresolved groups can never reach raw create endpoint in Build 100', () {
@@ -128,6 +156,10 @@ void main() {
       expect(result.appleResult?.chatRowId, 101);
       expect(result.appleResult?.messageRowId, 202);
       expect(result.providerMessageIdentity, result.appleResult?.messageGuid);
+      expect(fixture.provider.lastReceipt?.providerAccountIdentity, _account);
+      expect(fixture.provider.lastReceipt?.providerSenderIdentity, _sender);
+      expect(fixture.provider.lastReceipt?.service, NewGroupRequestedService.iMessage);
+      expect(fixture.provider.lastReceipt?.executionStarted, isTrue);
       expect(fixture.provider.lastExecutionEnvelope?.normalizedRecipients, intent.normalizedRecipientSet);
       expect(fixture.provider.lastExecutionEnvelope?.draftText, intent.draftText);
       expect(
@@ -209,6 +241,52 @@ void main() {
       expect(result.state, NewGroupProviderOperationState.preExecutionRejected);
       expect(result.reasonCode, 'PROVIDER_AUTHORITY_CHANGED_BEFORE_EXECUTION');
       expect(fixture.provider.executeInvocations, 0);
+    });
+
+    test('unavailable account or sender fails closed before provider reservation', () async {
+      for (final injection in <FakeNewGroupInjection>[
+        FakeNewGroupInjection.accountUnavailable,
+        FakeNewGroupInjection.senderUnavailable,
+      ]) {
+        final fixture = _fixture(injections: <FakeNewGroupInjection>{injection});
+        final result = await fixture.coordinator.prepare(_intent(operationId: 'operation-'));
+        expect(result.state, NewGroupProviderOperationState.preExecutionRejected);
+        expect(result.reasonCode, 'PROVIDER_EVIDENCE_UNAVAILABLE_BEFORE_EXECUTION');
+        expect(fixture.provider.reserveInvocations, 0);
+        expect(fixture.provider.physicalExecutions, 0);
+      }
+    });
+
+    test('duplicate provider operation is rejected before physical execution', () async {
+      final fixture = _fixture(injections: <FakeNewGroupInjection>{FakeNewGroupInjection.operationDuplicate});
+      final intent = _intent();
+      await fixture.coordinator.prepare(intent);
+
+      final result = await fixture.coordinator.execute(intent.operationId);
+
+      expect(result.state, NewGroupProviderOperationState.preExecutionRejected);
+      expect(result.reasonCode, 'PROVIDER_OPERATION_DUPLICATE');
+      expect(fixture.provider.executeInvocations, 0);
+      expect(fixture.provider.physicalExecutions, 0);
+    });
+
+    test('provider TOCTOU identity change certifies zero physical execution', () async {
+      final fixture = _fixture(injections: <FakeNewGroupInjection>{FakeNewGroupInjection.toctouSimulation});
+      final intent = _intent();
+      await fixture.coordinator.prepare(intent);
+
+      final result = await fixture.coordinator.execute(intent.operationId);
+
+      expect(result.state, NewGroupProviderOperationState.preExecutionRejected);
+      expect(result.reasonCode, 'PROVIDER_IDENTITY_CHANGED_BEFORE_PHYSICAL_DISPATCH');
+      expect(result.dispatchInvocationCount, 1);
+      expect(fixture.provider.executeInvocations, 1);
+      expect(fixture.provider.physicalExecutions, 0);
+      expect(
+        (await fixture.coordinator.execute(intent.operationId)).state,
+        NewGroupProviderOperationState.preExecutionRejected,
+      );
+      expect(fixture.provider.executeInvocations, 1);
     });
 
     test('recipient account sender or service drift before execution performs zero dispatches', () async {
@@ -320,6 +398,29 @@ void main() {
       expect(second.state, NewGroupProviderOperationState.terminalSuccess);
       expect(fixture.provider.reconciliationInvocations, 1);
       expect(fixture.provider.executeInvocations, 1);
+    });
+
+    test('receipt account sender or service mismatch is ambiguous after one physical execution', () async {
+      for (final injection in <FakeNewGroupInjection>[
+        FakeNewGroupInjection.wrongReceiptAccount,
+        FakeNewGroupInjection.wrongReceiptSender,
+        FakeNewGroupInjection.wrongReceiptService,
+      ]) {
+        final fixture = _fixture(injections: <FakeNewGroupInjection>{injection});
+        final intent = _intent(operationId: 'operation-${injection.name}');
+        await fixture.coordinator.prepare(intent);
+
+        final result = await fixture.coordinator.execute(intent.operationId);
+
+        expect(result.state, NewGroupProviderOperationState.outcomeAmbiguous);
+        expect(result.reasonCode, 'PROVIDER_RECEIPT_IDENTITY_MISMATCH');
+        expect(fixture.provider.physicalExecutions, 1);
+        expect(
+          (await fixture.coordinator.execute(intent.operationId)).state,
+          NewGroupProviderOperationState.outcomeAmbiguous,
+        );
+        expect(fixture.provider.executeInvocations, 1);
+      }
     });
 
     test('wrong Apple account sender message recipients or service never binds', () async {

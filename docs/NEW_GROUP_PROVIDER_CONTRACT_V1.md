@@ -33,6 +33,14 @@ account, sender, draft text and fingerprint, attachment intents, operation
 identity, and admitted provider revision. A provider must not reconstruct the
 payload from UI state or resolve recipients a second time after admission.
 
+The helper/server extension is a separate `CREATE_CHAT_V2` action; it never
+overloads legacy `create-chat`. Its receipt must echo the accepted operation
+ID, provider account, provider sender, and service, and must state whether
+physical execution started. A typed pre-dispatch rejection is trusted only for
+the same operation ID and only with `execution_started=false`. Any ordinary
+exception after the durable execution-start marker remains
+`NEW_GROUP_OUTCOME_AMBIGUOUS`.
+
 ## Conditional authority
 
 Admission records a revision over capability, account, sender, recipient, and
@@ -64,6 +72,13 @@ does not accept an exact account, sender, or durable operation identity. Its
 response carries a transaction identity and message identifier, not provider
 idempotency or conditional account authority.
 
+Read-only re-attestation on 2026-10-02 confirmed the same live helper hash,
+Server 1.9.7, Private API enabled, helper connected, and stable active account
+projection. The public account response exposes neither `IMAccount.uniqueID`
+nor service identity, and a consecutive read cannot close the race before the
+helper's later `activeIMessageAccount` lookup. Conditional stock execution is
+therefore unsafe.
+
 Therefore the current capability is
 `PRIVATE_ROUTE_ATTESTED_UNSAFE_CONTRACT`. Technical creation is proven; safe
 production execution is not.
@@ -81,6 +96,8 @@ The production boundary is explicitly non-executing:
 - a future adapter must supply stable account, sender, recipient, service, and
   provider revisions plus provider-side operation idempotency before this
   classification can advance.
+- the complete `CREATE_CHAT_V2` capability set is mandatory; old or mismatched
+  server/helper combinations fail closed.
 
 A later real first send requires separate human authorization for the exact
 recipients, service, account, sender, draft, and attachment intent. Build 100
