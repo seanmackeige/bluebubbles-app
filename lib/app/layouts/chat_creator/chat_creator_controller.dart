@@ -9,6 +9,8 @@ import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/services/backend/interfaces/sync_interface.dart';
+import 'package:bluebubbles/services/ui/chat/new_group_conversation.dart';
+import 'package:bluebubbles/services/ui/chat/new_group_provider_contract.dart';
 import 'package:bluebubbles/services/ui/chat/send_data.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:bluebubbles/utils/string_utils.dart';
@@ -49,6 +51,7 @@ class ChatCreatorController extends StatefulController {
   Timer? _debounce;
   MessagesService? messagesService;
   Completer<void>? _createCompleter;
+  Chat? _explicitExistingChat;
   final RxString currentQuery = ''.obs;
   final RxBool isSending = false.obs;
 
@@ -61,12 +64,6 @@ class ChatCreatorController extends StatefulController {
     textController = MentionTextEditingController(text: initialText, focusNode: messageNode);
 
     selectedContacts.addAll(initialSelected);
-
-    // Auto-select service based on pre-selected contacts' known iMessage status.
-    // If any initial contact is explicitly non-iMessage, start on SMS.
-    if (initialSelected.any((c) => c.serviceType.value == ChatServiceType.sms)) {
-      selectedService.value = ChatServiceType.sms;
-    }
 
     _loadData();
 
@@ -208,6 +205,7 @@ class ChatCreatorController extends StatefulController {
   // ---------------------------------------------------------------------------
 
   Future<void> addSelected(SelectedContact contact) async {
+    _explicitExistingChat = null;
     // Guard: server doesn't support group chats
     if (selectedContacts.length > 1 && !canCreateGroupChats) {
       showSnackbar('Not Supported', 'Your server does not support creating group chats');
@@ -251,7 +249,9 @@ class ChatCreatorController extends StatefulController {
     }
   }
 
-  Future<void> addSelectedFromChat(List<SelectedContact> contacts) async {
+  Future<void> addSelectedFromChat(List<SelectedContact> contacts, {required Chat explicitChat}) async {
+    _explicitExistingChat = explicitChat;
+    selectedService.value = explicitChat.isIMessage ? ChatServiceType.iMessage : ChatServiceType.sms;
     for (final c in contacts) {
       if (selectedContacts.firstWhereOrNull((s) => s.address == c.address) == null) {
         selectedContacts.add(c);
@@ -264,7 +264,7 @@ class ChatCreatorController extends StatefulController {
     final result = _computeSearchResults('');
     filteredChats.value = result.chats;
     filteredContacts.value = result.contacts;
-    await findExistingChat();
+    await _activateExistingChat(explicitChat);
 
     // A chat was selected — move focus to the message compose field.
     // Defer to the next frame so the TextFieldComponent has time to build
@@ -277,6 +277,7 @@ class ChatCreatorController extends StatefulController {
 
   Future<void> removeSelected(SelectedContact contact) async {
     selectedContacts.remove(contact);
+    _explicitExistingChat = null;
 
     // Refresh results immediately so the removed contact is selectable again
     // and the contact exclusion logic reflects the updated selection set.
@@ -296,6 +297,7 @@ class ChatCreatorController extends StatefulController {
 
   Future<void> onServiceChanged(ChatServiceType service) async {
     if (selectedService.value == service) return;
+    _explicitExistingChat = null;
     selectedService.value = service;
     selectedContacts.clear();
     addressController.text = '';
@@ -315,13 +317,6 @@ class ChatCreatorController extends StatefulController {
       return null;
     }
 
-    // Auto-update service type based on selected contact iMessage status
-    final hasSmsContact = selectedContacts.firstWhereOrNull((c) => c.serviceType.value == ChatServiceType.sms) != null;
-    if (hasSmsContact) {
-      selectedService.value = ChatServiceType.sms;
-    } else {
-      selectedService.value = ChatServiceType.iMessage;
-    }
     filteredChats.value = _allChats.where(_chatMatchesService).toList();
 
     Chat? existingChat;
@@ -342,8 +337,10 @@ class ChatCreatorController extends StatefulController {
     // Always use the complete service-filtered list here — filteredChats is
     // narrowed by the current search query and would miss valid chats.
     if (existingChat == null) {
+      if (selectedContacts.length > 1 && _explicitExistingChat == null) return null;
       final searchList = checkDeleted ? ChatsSvc.allChats : _allChats.where(_chatMatchesService).toList();
       for (final c in searchList) {
+        if (_explicitExistingChat != null && c.guid != _explicitExistingChat!.guid) continue;
         if (c.handles.length != selectedContacts.length) continue;
         int matches = 0;
         for (final contact in selectedContacts) {
@@ -426,6 +423,30 @@ class ChatCreatorController extends StatefulController {
   }
 
   // ---------------------------------------------------------------------------
+
+  NewGroupUiGateDecision unresolvedGroupCreationGate() {
+    final service = selectedService.value == ChatServiceType.iMessage
+        ? NewGroupRequestedService.iMessage
+        : NewGroupRequestedService.smsMms;
+    final capabilities = selectedContacts.map((contact) {
+      if (service == NewGroupRequestedService.smsMms) {
+        return contact.address.isEmail
+            ? NewGroupRecipientCapability.unavailable
+            : NewGroupRecipientCapability.available;
+      }
+      return switch (contact.serviceType.value) {
+        ChatServiceType.iMessage => NewGroupRecipientCapability.available,
+        ChatServiceType.sms => NewGroupRecipientCapability.unavailable,
+        ChatServiceType.rcs => NewGroupRecipientCapability.unavailable,
+        null => NewGroupRecipientCapability.unknown,
+      };
+    });
+    return NewGroupBuild100UiGate.evaluate(
+      recipientCount: selectedContacts.length,
+      requestedService: service,
+      recipientCapabilities: capabilities,
+    );
+  }
   // Address field on-submit (auto-select if valid address)
   // ---------------------------------------------------------------------------
 
@@ -493,6 +514,12 @@ class ChatCreatorController extends StatefulController {
     // Step 1: If we have a local chat, use it directly — no server check.
     // ------------------------------------------------------------------
     if (resolvedChat == null) {
+      final groupGate = unresolvedGroupCreationGate();
+      if (!groupGate.mayInvokeCreateEndpoint) {
+        showSnackbar('New Group', groupGate.userMessage);
+        return;
+      }
+
       // ----------------------------------------------------------------
       // Step 2: No local chat. A message is required to create a new one
       // (the server rejects POST /chat/new without one when the Private

@@ -42,6 +42,7 @@ class SharedPreferencesMessagingActions {
   static const String _logicalDraftPrefix = 'logicalDraftV1';
   static const String _logicalAdmissionLedgerKey = 'logicalAdmissionLedgerV1';
   static const String _logicalReadCertificateKey = 'logicalReadCertificateV1';
+  static const String _newGroupOperationJournalKey = 'newGroupOperationJournalV1';
 
   final SharedPreferencesService service;
 
@@ -117,6 +118,17 @@ class SharedPreferencesMessagingActions {
 
   Future<void> saveLogicalReadCertificateJson(String value) async {
     await service.i.setString(_logicalReadCertificateKey, value);
+  }
+
+  String? loadNewGroupOperationJournalJson() => service.i.getString(_newGroupOperationJournalKey);
+
+  Future<String?> loadNewGroupOperationJournalJsonFresh() async {
+    await service.i.reloadCache();
+    return service.i.getString(_newGroupOperationJournalKey);
+  }
+
+  Future<void> saveNewGroupOperationJournalJson(String value) async {
+    await service.i.setString(_newGroupOperationJournalKey, value);
   }
 
   List<Map<String, dynamic>> loadLogicalAdmissionLedger() {

@@ -36,7 +36,9 @@ When ready to replace the legacy creator, update these two call sites:
 1. User sees `CupertinoSegmentedControl` (iMessage / SMS) at top
 2. User types in the "To:" field → 250ms debounce search updates "Conversations" + "Contacts" lists
 3. User selects a chat or contact → chip appears; iMessage status fetched async for chip color
-4. If selected handles match an existing chat → `MessagesView` replaces the search list (embedded preview)
+4. A multi-recipient match never auto-reuses a physical chat; the user must tap
+   that existing conversation before `MessagesView` replaces the search list
 5. User types a message in the text field at the bottom; replies + attachments work for existing chats
 6. On send to existing chat: header collapses (AnimatedSize + AnimatedOpacity), then navigates to `ConversationView` with `fromChatCreator: true` and the same `customService`; message is sent in `ConversationView.onInit`
-7. On send to new contact set: `HttpSvc.createChat(...)` → progress dialog → save → navigate
+7. A new 1:1 may use the incumbent create path; an unresolved group is checked
+   by `NewGroupBuild100UiGate` and cannot reach the raw create endpoint

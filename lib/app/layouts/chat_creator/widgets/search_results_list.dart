@@ -32,11 +32,7 @@ class SearchResultsList extends StatelessWidget {
 
   /// True when [query] is a standalone valid address not covered by any
   /// existing contact result or already-selected chip.
-  bool _shouldShowFallback(
-    String query,
-    List contacts,
-    List selected,
-  ) {
+  bool _shouldShowFallback(String query, List contacts, List selected) {
     if (query.isEmpty) return false;
     if (!query.isEmail && !query.isPhoneNumber) return false;
     // Already selected
@@ -83,18 +79,12 @@ class SearchResultsList extends StatelessWidget {
                 child: InkWell(
                   onTap: () {
                     final address = query.isEmail ? query : controller.normalizeToE164(query);
-                    controller.addSelected(
-                      SelectedContact(displayName: address, address: address),
-                    );
+                    controller.addSelected(SelectedContact(displayName: address, address: address));
                   },
                   child: ListTile(
                     leading: CircleAvatar(
                       backgroundColor: context.theme.colorScheme.primaryContainer,
-                      child: Icon(
-                        Icons.send,
-                        size: 20,
-                        color: context.theme.colorScheme.primary,
-                      ),
+                      child: Icon(Icons.send, size: 20, color: context.theme.colorScheme.primary),
                     ),
                     title: Text(
                       'Send to "${query.isEmail ? query : controller.normalizeToE164(query)}"',
@@ -102,9 +92,7 @@ class SearchResultsList extends StatelessWidget {
                     ),
                     subtitle: Text(
                       query.isEmail ? 'Email address' : 'Phone number',
-                      style: context.theme.textTheme.bodySmall?.copyWith(
-                        color: context.theme.colorScheme.outline,
-                      ),
+                      style: context.theme.textTheme.bodySmall?.copyWith(color: context.theme.colorScheme.outline),
                     ),
                   ),
                 ),
@@ -130,57 +118,47 @@ class SearchResultsList extends StatelessWidget {
             ),
 
           SliverList(
-            delegate: SliverChildBuilderDelegate(
-              (context, index) {
-                if (!chatsLoaded && chats.isEmpty) {
-                  return Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.all(8.0),
-                        child: Text(
-                          'Loading existing chats...',
-                          style: context.theme.textTheme.labelLarge,
-                        ),
-                      ),
-                      buildProgressIndicator(context, size: 15),
-                    ],
-                  );
-                }
-                final chat = chats[index];
-                return Obx(() {
-                  final chatState = ChatsSvc.getChatState(chat.guid);
-                  final title = chatState?.title.value ?? chat.getTitle();
-                  final subtitle = chatState?.chatCreatorSubtitle.value ?? chat.getChatCreatorSubtitle();
-                  return Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      onTap: () {
-                        final participants = chat.handles
-                            .where((h) =>
-                                controller.selectedContacts.firstWhereOrNull((c) => c.address == h.address) == null)
-                            .map(
-                              (h) => SelectedContact(
-                                displayName: h.displayName,
-                                address: h.address,
-                                serviceType: chat.service,
-                              ),
-                            )
-                            .toList();
-                        controller.addSelectedFromChat(participants);
-                      },
-                      child: ChatCreatorTile(
-                        key: ValueKey(chat.guid),
-                        title: title,
-                        subtitle: subtitle,
-                        chat: chat,
-                      ),
+            delegate: SliverChildBuilderDelegate((context, index) {
+              if (!chatsLoaded && chats.isEmpty) {
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.all(8.0),
+                      child: Text('Loading existing chats...', style: context.theme.textTheme.labelLarge),
                     ),
-                  );
-                });
-              },
-              childCount: (!chatsLoaded && chats.isEmpty ? 1 : chats.length),
-            ),
+                    buildProgressIndicator(context, size: 15),
+                  ],
+                );
+              }
+              final chat = chats[index];
+              return Obx(() {
+                final chatState = ChatsSvc.getChatState(chat.guid);
+                final title = chatState?.title.value ?? chat.getTitle();
+                final subtitle = chatState?.chatCreatorSubtitle.value ?? chat.getChatCreatorSubtitle();
+                return Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: () {
+                      final participants = chat.handles
+                          .where(
+                            (h) => controller.selectedContacts.firstWhereOrNull((c) => c.address == h.address) == null,
+                          )
+                          .map(
+                            (h) => SelectedContact(
+                              displayName: h.displayName,
+                              address: h.address,
+                              serviceType: chat.service,
+                            ),
+                          )
+                          .toList();
+                      controller.addSelectedFromChat(participants, explicitChat: chat);
+                    },
+                    child: ChatCreatorTile(key: ValueKey(chat.guid), title: title, subtitle: subtitle, chat: chat),
+                  ),
+                );
+              });
+            }, childCount: (!chatsLoaded && chats.isEmpty ? 1 : chats.length)),
           ),
 
           // ----------------------------------------------------------------
@@ -221,17 +199,11 @@ class SearchResultsList extends StatelessWidget {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(
-                      Icons.search_off_rounded,
-                      size: 48,
-                      color: context.theme.colorScheme.outline,
-                    ),
+                    Icon(Icons.search_off_rounded, size: 48, color: context.theme.colorScheme.outline),
                     const SizedBox(height: 12),
                     Text(
                       'No results for "$query"',
-                      style: context.theme.textTheme.bodyMedium?.copyWith(
-                        color: context.theme.colorScheme.outline,
-                      ),
+                      style: context.theme.textTheme.bodyMedium?.copyWith(color: context.theme.colorScheme.outline),
                       textAlign: TextAlign.center,
                     ),
                   ],

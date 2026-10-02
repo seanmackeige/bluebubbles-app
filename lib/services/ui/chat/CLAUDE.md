@@ -8,6 +8,9 @@
 | `logical_conversation_view.dart` | Fail-closed N-member read certificate, member provenance, excluded-candidate evidence, and deterministic projection helpers |
 | `logical_conversation_route.dart` | Separate current-evidence write qualification; read membership never grants execution authority |
 | `logical_execution_authority.dart` | Write-authority convergence: execution generations, frontier/era, corroboration, writer selection, bounded diagnostics |
+| `new_group_conversation.dart` | Offline fail-closed new-group intent, capability, exact-match, admission, ambiguity, and Apple-observation policy |
+| `new_group_provider_contract.dart` | Narrow provider adapter, durable full state machine, conditional authority, strong result reconciliation, and Build 100 UI gate |
+| `new_group_operation_store.dart` | Crash-durable preference journal and explicit non-executing production boundary |
 
 ---
 
@@ -95,6 +98,28 @@ GetIt singleton. Accessed via `ChatsSvc`.
     particular conversation; certificates carry membership data only.
 15. The composer shows nothing when send is ready; a block states its specific
     reason, with bounded diagnostics behind the info button.
+
+### New-group creation doctrine (`new_group_conversation.dart`)
+1. A new logical conversation has recipients, service, account/sender, draft,
+   attachments, and an operation identity, but no physical chat GUID or ROWID.
+2. Recipient normalization belongs to authoritative resolution. Admission never
+   repairs, drops, adds, or silently changes a normalized handle or service.
+3. An exact existing recipient/service/account match requires explicit human
+   selection; current, historical, and multiple matches are never auto-reused.
+4. A macOS version is not a capability. Private API, helper action, account and
+   sender binding, provider idempotency, and Apple observation are proven
+   independently and must all be current before admission.
+5. Admission and execution-started records must be durably persisted before a
+   transport call. Any interruption after execution starts becomes
+   `outcomeAmbiguous` and must not be retried automatically.
+6. Success requires one terminal first message and an Apple-created chat whose
+   exact recipients, service, account, sender, and content match the intent.
+7. This policy must remain transport-disconnected until the provider supports
+   explicit account/sender binding and conditional operation identity.
+8. Build 100 may inspect and explain current capability, but unresolved groups
+   never invoke `/chat/new`; the production execution boundary remains false.
+9. Existing exact-set groups activate only after explicit physical-chat
+   selection and remain existing-chat sends, never new-group creation.
 
 ---
 
