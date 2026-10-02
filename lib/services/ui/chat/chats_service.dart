@@ -3516,14 +3516,18 @@ class ChatsService {
         ..sort(compareLogicalMessagesDescending);
       if (latestMessages.isNotEmpty) {
         final latest = latestMessages.first;
-        presentationState.updateLatestMessageInternal(latest);
         final redacted = SettingsSvc.settings.redactedMode.value;
-        presentationState.updateSubtitleInternal(
-          latest.getNotificationText(
-            hideContactInfo: redacted && SettingsSvc.settings.hideContactInfo.value,
-            hideMessageContent: redacted && SettingsSvc.settings.hideMessageContent.value,
-          ),
+        final nextSubtitle = latest.getNotificationText(
+          hideContactInfo: redacted && SettingsSvc.settings.hideContactInfo.value,
+          hideMessageContent: redacted && SettingsSvc.settings.hideMessageContent.value,
         );
+        final currentLatest = presentationState.latestMessage.value;
+        if (currentLatest?.guid != latest.guid ||
+            currentLatest?.dateCreated != latest.dateCreated ||
+            presentationState.subtitle.value != nextSubtitle) {
+          presentationState.updateLatestMessageInternal(latest);
+        }
+        presentationState.updateSubtitleInternal(nextSubtitle);
       }
 
       final currentActive = activeChat;
@@ -4200,11 +4204,21 @@ class ChatsService {
     return !setEquals(currentParticipants, nextParticipants);
   }
 
+  bool _isLogicalPresentationRelevantUpdate(Chat current, Chat updated) {
+    return _registryEntryForChat(current) != null ||
+        _registryEntryForChat(updated) != null ||
+        isApprovedLogicalSource(current) ||
+        isApprovedLogicalSource(updated) ||
+        _logicalCandidateContextMatchForChat(current).kind != LogicalCandidateContextMatchKind.none ||
+        _logicalCandidateContextMatchForChat(updated).kind != LogicalCandidateContextMatchKind.none;
+  }
+
   bool updateChat(Chat updated, {bool override = false, bool immediate = true}) {
     if (headless) return false;
 
     final state = chatStates[updated.guid];
     if (state != null) {
+      final logicalPresentationRelevant = _isLogicalPresentationRelevantUpdate(state.chat, updated);
       final authorityShapeChanged = _logicalAuthorityShapeChanged(state, updated);
       if (authorityShapeChanged) {
         if (_canAffectBuild99WriterAuthority(state.chat) || _canAffectBuild99WriterAuthority(updated)) {
@@ -4239,7 +4253,12 @@ class ChatsService {
         _repositionChat(state.chat, immediate: immediate);
       }
 
-      _refreshLogicalPresentation(immediate: immediate);
+      // Ordinary-chat refreshes (notably the device-contact startup sweep) must
+      // not re-project every logical row. Build 101 turned that O(N) sweep into
+      // O(N x logical-entry x list-rebuild) work on the UI isolate.
+      if (logicalPresentationRelevant) {
+        _refreshLogicalPresentation(immediate: immediate);
+      }
 
       return true;
     }

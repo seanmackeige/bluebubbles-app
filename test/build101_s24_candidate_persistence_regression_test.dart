@@ -20,6 +20,21 @@ void main() {
       expect(fixture['firstBrokenTransition'], 'CONVERSATION_LIST_TO_CANDIDATE_PERSISTENCE_SIDE_EFFECTS');
     });
 
+    test('banks the Build 103 S24 contact-to-list rebuild storm', () {
+      final fixture =
+          (jsonDecode(File('test/fixtures/build103_s24_contact_logical_projection_storm.json').readAsStringSync())
+                  as Map)
+              .cast<String, dynamic>();
+      final provider = (fixture['contentProviderOperations'] as Map).cast<String, dynamic>();
+
+      expect(fixture['exitReason'], 'ANR_INPUT_DISPATCH_TIMEOUT');
+      expect(fixture['mainThreadState'], 'DART_UI_WIDGET_REBUILD');
+      expect(fixture['mainThreadCpuMs'], greaterThan(10000));
+      expect(provider['queries'], 621);
+      expect(provider['opens'], 450);
+      expect(fixture['containsPersonalContent'], isFalse);
+    });
+
     test('coalesces identical in-flight persistence and publishes only a real write', () {
       final coordinator = LogicalCandidatePersistenceCoordinator();
 
@@ -60,6 +75,17 @@ void main() {
         expect(readBoundary, isNot(contains('_materializeLogicalCandidateQuarantine')));
         expect(readBoundary, isNot(contains('stableFingerprintAt')));
       }
+    });
+
+    test('ordinary chat updates cannot refresh every logical presentation', () {
+      final source = File('lib/services/ui/chat/chats_service.dart').readAsStringSync();
+      final updateChat = source.substring(source.indexOf('bool updateChat('), source.indexOf('void updateChats('));
+      final refreshCall = updateChat.indexOf('_refreshLogicalPresentation');
+      final relevanceGuard = updateChat.indexOf('if (logicalPresentationRelevant)');
+
+      expect(relevanceGuard, greaterThanOrEqualTo(0));
+      expect(refreshCall, greaterThan(relevanceGuard));
+      expect(updateChat, contains('_isLogicalPresentationRelevantUpdate(state.chat, updated)'));
     });
   });
 }

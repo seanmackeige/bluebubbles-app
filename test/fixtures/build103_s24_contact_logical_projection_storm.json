@@ -1,0 +1,23 @@
+{
+  "device": "SM-S928U",
+  "buildNumber": 103,
+  "versionCode": 20002103,
+  "exitReason": "ANR_INPUT_DISPATCH_TIMEOUT",
+  "processRuntimeMs": 23541,
+  "mainThreadCpuMs": 12267,
+  "mainThreadState": "DART_UI_WIDGET_REBUILD",
+  "contentProviderOperations": {
+    "total": 1071,
+    "queries": 621,
+    "opens": 450,
+    "durationMs": 800
+  },
+  "mainStack": [
+    "Text.build",
+    "SliverMultiBoxAdaptorElement.performRebuild",
+    "BuildScope._flushDirtyElements",
+    "RenderSliverList.performLayout"
+  ],
+  "firstBrokenTransition": "CONTACT_REFRESH_TO_UNCONDITIONAL_LOGICAL_PRESENTATION_REFRESH",
+  "containsPersonalContent": false
+}
