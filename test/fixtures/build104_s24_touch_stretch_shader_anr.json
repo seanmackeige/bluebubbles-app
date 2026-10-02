@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "source": "sanitized exact-S24 Build 104 controlled touch reproduction",
+  "package": "com.mackeige.bluebubbles",
+  "versionCode": 20002104,
+  "deviceClass": "SM-S928U",
+  "androidVersion": 16,
+  "flutterVersion": "3.44.4",
+  "trigger": {
+    "kind": "single foreground touch",
+    "downTimestamp": "2026-10-02T14:49:08.105-07:00",
+    "upTimestamp": "2026-10-02T14:49:08.170-07:00",
+    "failedWithoutTouch": false
+  },
+  "exitReason": "ANR_INPUT_DISPATCH_TIMEOUT",
+  "inputTimeout": {
+    "event": "FocusEvent(hasFocus=false)",
+    "waitMs": 10013
+  },
+  "mainThreadState": "RUNNABLE_DART_AOT",
+  "mainThreadStack": [
+    "ListBase.removeWhere",
+    "FragmentProgram.fragmentShader",
+    "_StretchOverscrollEffectState.build",
+    "StatefulElement.build",
+    "ComponentElement.performRebuild",
+    "SliverMultiBoxAdaptorElement.createChild",
+    "RenderSliverList.performLayout",
+    "WidgetsBinding.drawFrame"
+  ],
+  "resourceEvidence": {
+    "anrCpuPercent": 137,
+    "anrRssKb": 452420,
+    "anrRssHighWaterKb": 505644,
+    "sampledRssPeakKb": 585060,
+    "processRuntimeMs": 92073
+  },
+  "firstBrokenTransition": "TOUCH_TO_SHADER_STRETCH_FRAME",
+  "containsPersonalContent": false
+}

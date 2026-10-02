@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:bluebubbles/services/ui/chat/logical_candidate_quarantine.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -33,6 +34,62 @@ void main() {
       expect(provider['queries'], 621);
       expect(provider['opens'], 450);
       expect(fixture['containsPersonalContent'], isFalse);
+    });
+
+    test('banks the Build 104 exact-S24 touch-triggered stretch shader ANR', () {
+      final fixture =
+          (jsonDecode(File('test/fixtures/build104_s24_touch_stretch_shader_anr.json').readAsStringSync()) as Map)
+              .cast<String, dynamic>();
+      final trigger = (fixture['trigger'] as Map).cast<String, dynamic>();
+      final resources = (fixture['resourceEvidence'] as Map).cast<String, dynamic>();
+      final stack = (fixture['mainThreadStack'] as List).cast<String>();
+
+      expect(trigger['kind'], 'single foreground touch');
+      expect(trigger['failedWithoutTouch'], isFalse);
+      expect(fixture['exitReason'], 'ANR_INPUT_DISPATCH_TIMEOUT');
+      expect(fixture['firstBrokenTransition'], 'TOUCH_TO_SHADER_STRETCH_FRAME');
+      expect(
+        stack,
+        containsAllInOrder(<String>[
+          'ListBase.removeWhere',
+          'FragmentProgram.fragmentShader',
+          '_StretchOverscrollEffectState.build',
+        ]),
+      );
+      expect(resources['anrCpuPercent'], greaterThan(100));
+      expect(resources['sampledRssPeakKb'], greaterThan(500000));
+      expect(fixture['containsPersonalContent'], isFalse);
+    });
+
+    test('Android scroll behavior excludes the shader-backed stretch path', () {
+      final source = File('lib/main.dart').readAsStringSync();
+      final scrollBehavior = source.substring(
+        source.indexOf('scrollBehavior: const MaterialScrollBehavior()'),
+        source.indexOf('home: const Home()'),
+      );
+
+      expect(scrollBehavior, contains('overscroll: false'));
+    });
+
+    testWidgets('disabled overscroll decoration cannot construct a stretching indicator', (tester) async {
+      const marker = Key('bounded-scroll-child');
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ThemeData(platform: TargetPlatform.android, useMaterial3: true),
+          home: Builder(
+            builder: (context) => const MaterialScrollBehavior()
+                .copyWith(overscroll: false)
+                .buildOverscrollIndicator(
+                  context,
+                  const SizedBox(key: marker),
+                  const ScrollableDetails(direction: AxisDirection.down),
+                ),
+          ),
+        ),
+      );
+
+      expect(find.byKey(marker), findsOneWidget);
+      expect(find.byType(StretchingOverscrollIndicator), findsNothing);
     });
 
     test('coalesces identical in-flight persistence and publishes only a real write', () {

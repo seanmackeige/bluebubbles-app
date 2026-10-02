@@ -64,186 +64,199 @@ Future<Null> bubble() async {
 
 //ignore: prefer_void_to_null
 Future<Null> initApp(bool bubble, List<String> arguments) async {
-  runZonedGuarded<Future<void>>(() async {
-    WidgetsFlutterBinding.ensureInitialized();
+  runZonedGuarded<Future<void>>(
+    () async {
+      WidgetsFlutterBinding.ensureInitialized();
 
-    /* ----- DESKTOP NATIVE SPLASH STATUS ----- */
-    // Pushes startup status to the native splash; detached once it's dismissed.
-    void Function()? detachSplashStatus;
-    if (kIsDesktop && !bubble && arguments.firstOrNull != "minimized") {
-      const splashChannel = MethodChannel('bluebubbles/splash');
-      bool titleBarApplied = false;
-      void pushStatus() {
-        splashChannel.invokeMethod('setStatus', StartupTasks.status.value).catchError((_) => null);
+      /* ----- DESKTOP NATIVE SPLASH STATUS ----- */
+      // Pushes startup status to the native splash; detached once it's dismissed.
+      void Function()? detachSplashStatus;
+      if (kIsDesktop && !bubble && arguments.firstOrNull != "minimized") {
+        const splashChannel = MethodChannel('bluebubbles/splash');
+        bool titleBarApplied = false;
+        void pushStatus() {
+          splashChannel.invokeMethod('setStatus', StartupTasks.status.value).catchError((_) => null);
 
-        final phase = StartupTasks.status.value;
-        if (Platform.isLinux && !titleBarApplied && phase != "Starting..." && phase != "Loading settings...") {
-          titleBarApplied = true;
-          unawaited(() async {
-            await windowManager.ensureInitialized();
-            await windowManager.setTitleBarStyle(SettingsSvc.settings.titleBarStyle.value == BBTitleBarStyle.native
-                ? TitleBarStyle.normal
-                : TitleBarStyle.hidden);
-          }());
+          final phase = StartupTasks.status.value;
+          if (Platform.isLinux && !titleBarApplied && phase != "Starting..." && phase != "Loading settings...") {
+            titleBarApplied = true;
+            unawaited(() async {
+              await windowManager.ensureInitialized();
+              await windowManager.setTitleBarStyle(
+                SettingsSvc.settings.titleBarStyle.value == BBTitleBarStyle.native
+                    ? TitleBarStyle.normal
+                    : TitleBarStyle.hidden,
+              );
+            }());
+          }
         }
+
+        StartupTasks.status.addListener(pushStatus);
+        pushStatus();
+        detachSplashStatus = () => StartupTasks.status.removeListener(pushStatus);
       }
 
-      StartupTasks.status.addListener(pushStatus);
-      pushStatus();
-      detachSplashStatus = () => StartupTasks.status.removeListener(pushStatus);
-    }
+      await StartupTasks.initStartupServices(isBubble: bubble);
 
-    await StartupTasks.initStartupServices(isBubble: bubble);
+      /* ----- RANDOM STUFF INITIALIZATION ----- */
+      HttpOverrides.global = CustomHttpContext();
+      dynamic exception;
+      StackTrace? stacktrace;
 
-    /* ----- RANDOM STUFF INITIALIZATION ----- */
-    HttpOverrides.global = CustomHttpContext();
-    dynamic exception;
-    StackTrace? stacktrace;
+      FlutterError.onError = (details) {
+        Logger.error("Rendering Error: ${details.exceptionAsString()}", error: details.exception, trace: details.stack);
+      };
 
-    FlutterError.onError = (details) {
-      Logger.error("Rendering Error: ${details.exceptionAsString()}", error: details.exception, trace: details.stack);
-    };
+      try {
+        // Once all the services are initialized, we need to perform some
+        // startup tasks to ensure that the app has the information it needs.
+        StartupTasks.onStartup()
+            .then((_) {
+              Logger.info("Startup tasks completed");
+            })
+            .catchError((e, s) {
+              Logger.error("Failed to complete startup tasks!", error: e, trace: s);
+            });
 
-    try {
-      // Once all the services are initialized, we need to perform some
-      // startup tasks to ensure that the app has the information it needs.
-      StartupTasks.onStartup().then((_) {
-        Logger.info("Startup tasks completed");
-      }).catchError((e, s) {
-        Logger.error("Failed to complete startup tasks!", error: e, trace: s);
-      });
+        /* ----- DATE FORMATTING INITIALIZATION ----- */
+        Future.microtask(() => initializeDateFormatting());
 
-      /* ----- DATE FORMATTING INITIALIZATION ----- */
-      Future.microtask(() => initializeDateFormatting());
+        /* ----- MEDIAKIT INITIALIZATION ----- */
+        clearLeakedMpvWakeupCallbacks(); // must run first — see media_kit_hot_restart_fix.dart
+        MediaKit.ensureInitialized();
 
-      /* ----- MEDIAKIT INITIALIZATION ----- */
-      clearLeakedMpvWakeupCallbacks(); // must run first — see media_kit_hot_restart_fix.dart
-      MediaKit.ensureInitialized();
-
-      /* ----- SPLASH SCREEN INITIALIZATION ----- */
-      if (!SettingsSvc.settings.finishedSetup.value && !kIsWeb && !kIsDesktop) {
-        runApp(MaterialApp(
-            home: const SplashScreen(shouldNavigate: false),
-            theme: ThemeData(
-              colorScheme: ColorScheme.fromSwatch(
-                  backgroundColor:
-                      PlatformDispatcher.instance.platformBrightness == Brightness.dark ? Colors.black : Colors.white),
-            )));
-      }
-
-      /* ----- ANDROID SPECIFIC INITIALIZATION ----- */
-      if (!kIsWeb && !kIsDesktop) {
-        /* ----- TIME ZONE INITIALIZATION ----- */
-        tz.initializeTimeZones();
-        try {
-          tz.setLocalLocation(tz.getLocation((await FlutterTimezone.getLocalTimezone()).identifier));
-        } catch (_) {}
-
-        /* ----- MLKIT INITIALIZATION ----- */
-        // Defer MLKit model check - not critical for startup
-        Future.microtask(() async {
-          if (!await EntityExtractorModelManager().isModelDownloaded(EntityExtractorLanguage.english.name)) {
-            EntityExtractorModelManager().downloadModel(EntityExtractorLanguage.english.name, isWifiRequired: false);
-          }
-        });
-      }
-
-      /* ----- DESKTOP SPECIFIC INITIALIZATION ----- */
-      if (kIsDesktop) {
-        /* ----- WINDOW INITIALIZATION ----- */
-        await windowManager.ensureInitialized();
-        await windowManager.setPreventClose(SettingsSvc.settings.closeToTray.value);
-        await windowManager.setTitle('BlueBubbles');
-        await Window.initialize();
-        if (Platform.isWindows) {
-          await Window.hideWindowControls();
-        } else if (Platform.isLinux) {
-          await windowManager.setTitleBarStyle(SettingsSvc.settings.titleBarStyle.value == BBTitleBarStyle.native
-              ? TitleBarStyle.normal
-              : TitleBarStyle.hidden);
+        /* ----- SPLASH SCREEN INITIALIZATION ----- */
+        if (!SettingsSvc.settings.finishedSetup.value && !kIsWeb && !kIsDesktop) {
+          runApp(
+            MaterialApp(
+              home: const SplashScreen(shouldNavigate: false),
+              theme: ThemeData(
+                colorScheme: ColorScheme.fromSwatch(
+                  backgroundColor: PlatformDispatcher.instance.platformBrightness == Brightness.dark
+                      ? Colors.black
+                      : Colors.white,
+                ),
+              ),
+            ),
+          );
         }
-        windowManager.addListener(DesktopWindowListener.instance);
-        doWhenWindowReady(() async {
-          await windowManager.setMinimumSize(const Size(300, 300));
-          Display primary = await ScreenRetriever.instance.getPrimaryDisplay();
 
-          double width = PrefsSvc.desktop.getWindowWidth() ?? 1280;
-          double height = PrefsSvc.desktop.getWindowHeight() ?? 720;
-
-          width = width.clamp(300, max(300, primary.size.width));
-          height = height.clamp(300, max(300, primary.size.height));
-
-          if (isWaylandSession) {
-            // Wayland forbids a client from positioning itself, so only restore
-            // the size and leave placement to the compositor.
-            await windowManager.setSize(Size(width, height));
-          } else {
-            // Restore position otherwise
-            final centered = await calcWindowPosition(Size(width, height), Alignment.center);
-            double posX = PrefsSvc.desktop.getWindowX() ?? centered.dx;
-            double posY = PrefsSvc.desktop.getWindowY() ?? centered.dy;
-            posX = posX.clamp(0, max(0, primary.size.width - width));
-            posY = posY.clamp(0, max(0, primary.size.height - height));
-            await windowManager.setBounds(Rect.fromLTWH(posX, posY, width, height));
-            await PrefsSvc.desktop.setWindowOffsets(x: posX, y: posY);
-          }
-          await PrefsSvc.desktop.setWindowDimensions(width: width, height: height);
-
-          await windowManager.setTitle('BlueBubbles');
-          if (arguments.firstOrNull != "minimized") {
-            await windowManager.show();
-          } else {
-            await windowManager.hide();
-          }
+        /* ----- ANDROID SPECIFIC INITIALIZATION ----- */
+        if (!kIsWeb && !kIsDesktop) {
+          /* ----- TIME ZONE INITIALIZATION ----- */
+          tz.initializeTimeZones();
           try {
-            await const MethodChannel('bluebubbles/splash').invokeMethod('closeSplash');
+            tz.setLocalLocation(tz.getLocation((await FlutterTimezone.getLocalTimezone()).identifier));
           } catch (_) {}
-          detachSplashStatus?.call();
-          unawaited(ThemeSvc.initDynamicColorsDeferred()); // Linux: deferred past splash
-          bool shouldAuthenticate =
-              !Platform.isLinux && SettingsSvc.canAuthenticate && SettingsSvc.settings.shouldSecure.value;
-          if (!shouldAuthenticate) {
-            ChatsSvc.init();
-            SocketSvc.init();
-          }
-        });
 
-        await dotenv.load();
+          /* ----- MLKIT INITIALIZATION ----- */
+          // Defer MLKit model check - not critical for startup
+          Future.microtask(() async {
+            if (!await EntityExtractorModelManager().isModelDownloaded(EntityExtractorLanguage.english.name)) {
+              EntityExtractorModelManager().downloadModel(EntityExtractorLanguage.english.name, isWifiRequired: false);
+            }
+          });
+        }
+
+        /* ----- DESKTOP SPECIFIC INITIALIZATION ----- */
+        if (kIsDesktop) {
+          /* ----- WINDOW INITIALIZATION ----- */
+          await windowManager.ensureInitialized();
+          await windowManager.setPreventClose(SettingsSvc.settings.closeToTray.value);
+          await windowManager.setTitle('BlueBubbles');
+          await Window.initialize();
+          if (Platform.isWindows) {
+            await Window.hideWindowControls();
+          } else if (Platform.isLinux) {
+            await windowManager.setTitleBarStyle(
+              SettingsSvc.settings.titleBarStyle.value == BBTitleBarStyle.native
+                  ? TitleBarStyle.normal
+                  : TitleBarStyle.hidden,
+            );
+          }
+          windowManager.addListener(DesktopWindowListener.instance);
+          doWhenWindowReady(() async {
+            await windowManager.setMinimumSize(const Size(300, 300));
+            Display primary = await ScreenRetriever.instance.getPrimaryDisplay();
+
+            double width = PrefsSvc.desktop.getWindowWidth() ?? 1280;
+            double height = PrefsSvc.desktop.getWindowHeight() ?? 720;
+
+            width = width.clamp(300, max(300, primary.size.width));
+            height = height.clamp(300, max(300, primary.size.height));
+
+            if (isWaylandSession) {
+              // Wayland forbids a client from positioning itself, so only restore
+              // the size and leave placement to the compositor.
+              await windowManager.setSize(Size(width, height));
+            } else {
+              // Restore position otherwise
+              final centered = await calcWindowPosition(Size(width, height), Alignment.center);
+              double posX = PrefsSvc.desktop.getWindowX() ?? centered.dx;
+              double posY = PrefsSvc.desktop.getWindowY() ?? centered.dy;
+              posX = posX.clamp(0, max(0, primary.size.width - width));
+              posY = posY.clamp(0, max(0, primary.size.height - height));
+              await windowManager.setBounds(Rect.fromLTWH(posX, posY, width, height));
+              await PrefsSvc.desktop.setWindowOffsets(x: posX, y: posY);
+            }
+            await PrefsSvc.desktop.setWindowDimensions(width: width, height: height);
+
+            await windowManager.setTitle('BlueBubbles');
+            if (arguments.firstOrNull != "minimized") {
+              await windowManager.show();
+            } else {
+              await windowManager.hide();
+            }
+            try {
+              await const MethodChannel('bluebubbles/splash').invokeMethod('closeSplash');
+            } catch (_) {}
+            detachSplashStatus?.call();
+            unawaited(ThemeSvc.initDynamicColorsDeferred()); // Linux: deferred past splash
+            bool shouldAuthenticate =
+                !Platform.isLinux && SettingsSvc.canAuthenticate && SettingsSvc.settings.shouldSecure.value;
+            if (!shouldAuthenticate) {
+              ChatsSvc.init();
+              SocketSvc.init();
+            }
+          });
+
+          await dotenv.load();
+        }
+
+        /* ----- EMOJI FONT INITIALIZATION ----- */
+        Future.microtask(() => FilesystemSvc.checkFont());
+      } catch (e, s) {
+        print(s.toString());
+        Logger.error("Failure during app initialization!", error: e, trace: s);
+        exception = e;
+        stacktrace = s;
       }
 
-      /* ----- EMOJI FONT INITIALIZATION ----- */
-      Future.microtask(() => FilesystemSvc.checkFont());
-    } catch (e, s) {
-      print(s.toString());
-      Logger.error("Failure during app initialization!", error: e, trace: s);
-      exception = e;
-      stacktrace = s;
-    }
+      if (exception == null) {
+        /* ----- THEME INITIALIZATION ----- */
+        ThemeData light = ThemeStruct.getLightTheme().data;
+        ThemeData dark = ThemeStruct.getDarkTheme().data;
 
-    if (exception == null) {
-      /* ----- THEME INITIALIZATION ----- */
-      ThemeData light = ThemeStruct.getLightTheme().data;
-      ThemeData dark = ThemeStruct.getDarkTheme().data;
+        final pair = ThemeSvc.getStructsFromData(light, dark);
+        light = pair.light;
+        dark = pair.dark;
 
-      final pair = ThemeSvc.getStructsFromData(light, dark);
-      light = pair.light;
-      dark = pair.dark;
-
-      runApp(MaterialApp(
-          home: Main(
-        lightTheme: light,
-        darkTheme: dark,
-        savedThemeMode: await AdaptiveTheme.getThemeMode(),
-      )));
-    } else {
-      runApp(FailureToStart(e: exception, s: stacktrace));
-      throw Exception("$exception $stacktrace");
-    }
-  }, (dynamic error, StackTrace stackTrace) {
-    print("Failure during app initialization: $error");
-    print(stackTrace);
-    Logger.error("Unhandled Exception", trace: stackTrace, error: error);
-  });
+        runApp(
+          MaterialApp(
+            home: Main(lightTheme: light, darkTheme: dark, savedThemeMode: await AdaptiveTheme.getThemeMode()),
+          ),
+        );
+      } else {
+        runApp(FailureToStart(e: exception, s: stacktrace));
+        throw Exception("$exception $stacktrace");
+      }
+    },
+    (dynamic error, StackTrace stackTrace) {
+      print("Failure during app initialization: $error");
+      print(stackTrace);
+      Logger.error("Unhandled Exception", trace: stackTrace, error: error);
+    },
+  );
 }
 
 bool get isWaylandSession =>
@@ -310,9 +323,11 @@ class Main extends StatelessWidget {
   Widget build(BuildContext context) {
     return AdaptiveTheme(
       light: lightTheme.copyWith(
-          textSelectionTheme: TextSelectionThemeData(selectionColor: lightTheme.colorScheme.primary)),
-      dark:
-          darkTheme.copyWith(textSelectionTheme: TextSelectionThemeData(selectionColor: darkTheme.colorScheme.primary)),
+        textSelectionTheme: TextSelectionThemeData(selectionColor: lightTheme.colorScheme.primary),
+      ),
+      dark: darkTheme.copyWith(
+        textSelectionTheme: TextSelectionThemeData(selectionColor: darkTheme.colorScheme.primary),
+      ),
       initial: savedThemeMode ?? AdaptiveThemeMode.system,
       builder: (theme, darkTheme) => GetMaterialApp(
         debugShowCheckedModeBanner: false,
@@ -334,6 +349,13 @@ class Main extends StatelessWidget {
         navigatorKey: NavigationSvc.key,
         navigatorObservers: [routeObserver],
         scrollBehavior: const MaterialScrollBehavior().copyWith(
+          // Flutter 3.44's shader-backed Android stretch effect recreates a
+          // FragmentShader on every animated frame. On the production S24 a
+          // single touch left that path scanning its growing weak-reference
+          // registry on the Dart UI isolate until Android raised an input ANR.
+          // Scrolling itself remains enabled; only the decorative overscroll
+          // effect is suppressed until the framework implementation is bounded.
+          overscroll: false,
           // Specifically for GNU/Linux & Android-x86 family, where touch isn't interpreted as a drag device by Flutter apparently.
           dragDevices: Platform.isLinux || Platform.isAndroid ? PointerDeviceKind.values.toSet() : null,
           // Prevent scrolling with multiple fingers accelerating the scrolling
@@ -405,22 +427,22 @@ class Main extends StatelessWidget {
                               isAuthing = true;
                               localAuth
                                   .authenticate(
-                                localizedReason: 'Please authenticate to unlock BlueBubbles',
-                                persistAcrossBackgrounding: true,
-                              )
+                                    localizedReason: 'Please authenticate to unlock BlueBubbles',
+                                    persistAcrossBackgrounding: true,
+                                  )
                                   .then((result) {
-                                isAuthing = false;
-                                if (result) {
-                                  if (!context.mounted) return;
-                                  SecureApplicationProvider.of(context, listen: false)!.authSuccess(unlock: true);
-                                  if (kIsDesktop) {
-                                    Future.delayed(Duration.zero, () {
-                                      ChatsSvc.init();
-                                      SocketSvc.init();
-                                    });
-                                  }
-                                }
-                              });
+                                    isAuthing = false;
+                                    if (result) {
+                                      if (!context.mounted) return;
+                                      SecureApplicationProvider.of(context, listen: false)!.authSuccess(unlock: true);
+                                      if (kIsDesktop) {
+                                        Future.delayed(Duration.zero, () {
+                                          ChatsSvc.init();
+                                          SocketSvc.init();
+                                        });
+                                      }
+                                    }
+                                  });
                             }
                             return Container(
                               color: context.theme.colorScheme.surface,
@@ -442,9 +464,10 @@ class Main extends StatelessWidget {
                                         color: context.theme.colorScheme.primary, // button color
                                         child: InkWell(
                                           child: SizedBox(
-                                              width: 60,
-                                              height: 60,
-                                              child: Icon(Icons.lock_open, color: context.theme.colorScheme.onPrimary)),
+                                            width: 60,
+                                            height: 60,
+                                            child: Icon(Icons.lock_open, color: context.theme.colorScheme.onPrimary),
+                                          ),
                                           onTap: () async {
                                             final localAuth = LocalAuthentication();
                                             bool didAuthenticate = await localAuth.authenticate(
@@ -517,9 +540,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver, TrayListener {
 
       ErrorWidget.builder = (FlutterErrorDetails error) {
         Logger.error("An unexpected error occurred when rendering.", error: error.exception, trace: error.stack);
-        return CustomErrorWidget(
-          "An unexpected error occurred when rendering.",
-        );
+        return CustomErrorWidget("An unexpected error occurred when rendering.");
       };
       /* ----- SERVER VERSION CHECK ----- */
       if (kIsWeb && SettingsSvc.settings.finishedSetup.value) {
@@ -658,31 +679,31 @@ class _HomeState extends State<Home> with WidgetsBindingObserver, TrayListener {
         StartIncrementalSyncIntent: StartIncrementalSyncAction(),
         GoBackIntent: GoBackAction(context),
       },
-      child: Obx(() => BBScaffold(
-            backgroundColor: context.theme.colorScheme.surface.themeOpacity(context),
-            body: Builder(
-              builder: (BuildContext context) {
-                if (SettingsSvc.settings.finishedSetup.value) {
-                  if (!serverCompatible && kIsWeb) {
-                    return const FailureToStart(
-                      otherTitle: "Server version too low, please upgrade!",
-                      e: "Required Server Version: v0.2.0",
-                    );
-                  }
-                  return ConversationList(
-                    showArchivedChats: false,
-                    showUnknownSenders: false,
-                  );
-                } else {
-                  return PopScope(
-                    canPop: false,
-                    child: TitleBarWrapper(
-                        child: kIsWeb || kIsDesktop ? const SetupView() : SplashScreen(shouldNavigate: fullyLoaded)),
+      child: Obx(
+        () => BBScaffold(
+          backgroundColor: context.theme.colorScheme.surface.themeOpacity(context),
+          body: Builder(
+            builder: (BuildContext context) {
+              if (SettingsSvc.settings.finishedSetup.value) {
+                if (!serverCompatible && kIsWeb) {
+                  return const FailureToStart(
+                    otherTitle: "Server version too low, please upgrade!",
+                    e: "Required Server Version: v0.2.0",
                   );
                 }
-              },
-            ),
-          )),
+                return ConversationList(showArchivedChats: false, showUnknownSenders: false);
+              } else {
+                return PopScope(
+                  canPop: false,
+                  child: TitleBarWrapper(
+                    child: kIsWeb || kIsDesktop ? const SetupView() : SplashScreen(shouldNavigate: fullyLoaded),
+                  ),
+                );
+              }
+            },
+          ),
+        ),
+      ),
     );
   }
 }
@@ -705,11 +726,13 @@ Future<void> initSystemTray() async {
 }
 
 Future<void> setSystemTrayContextMenu({bool windowHidden = false}) async {
-  await trayManager.setContextMenu(Menu(
-    items: [
-      MenuItem(label: windowHidden ? 'Show App' : 'Hide App', key: windowHidden ? 'show_app' : 'hide_app'),
-      MenuItem.separator(),
-      MenuItem(label: 'Close App', key: 'close_app'),
-    ],
-  ));
+  await trayManager.setContextMenu(
+    Menu(
+      items: [
+        MenuItem(label: windowHidden ? 'Show App' : 'Hide App', key: windowHidden ? 'show_app' : 'hide_app'),
+        MenuItem.separator(),
+        MenuItem(label: 'Close App', key: 'close_app'),
+      ],
+    ),
+  );
 }
