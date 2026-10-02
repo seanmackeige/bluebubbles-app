@@ -1,0 +1,41 @@
+{
+  "device": {
+    "serial": "R5CWC3KQD9K",
+    "model": "SM-S928U",
+    "device": "e3q"
+  },
+  "package": "com.mackeige.bluebubbles",
+  "versionCode": 20002105,
+  "trigger": {
+    "kind": "foreground MotionEvent input deadline",
+    "role": "ANR_DETECTOR_NOT_PROVEN_WORKLOAD_INITIATOR",
+    "idleLaunchCompleted": true,
+    "inputTimeoutMs": 10000
+  },
+  "exitReason": "ANR_INPUT_DISPATCH_TIMEOUT",
+  "processRuntimeMs": 85883,
+  "resourceEvidence": {
+    "preInputCpuSamplesPercent": [127, 103, 71.4],
+    "preInputRssSamplesKb": [479000, 545000, 552000],
+    "instantProcessCpuPercent": 100,
+    "rssKb": 434812,
+    "rssHighWaterKb": 438668
+  },
+  "mainThreadStack": [
+    "_RegExp._ExecuteMatch",
+    "_RegExp.firstMatch",
+    "MessageHelper.shouldShowBigEmoji",
+    "Message.isBigEmoji",
+    "_TextBubbleState.build",
+    "SliverMultiBoxAdaptorElement.createChild",
+    "RenderSliverList.performLayout",
+    "WidgetsBinding.drawFrame"
+  ],
+  "inputShape": {
+    "content": "REDACTED",
+    "codeUnitLength": "UNKNOWN_PRIVATE_APP_STATE_UNAVAILABLE",
+    "correctionCoverage": "ALL_INPUT_LENGTHS_BY_BOUNDED_GRAPHEME_CLASSIFICATION"
+  },
+  "firstBrokenTransition": "CONVERSATION_TIMELINE_LAYOUT_TO_UNBOUNDED_MESSAGE_EMOJI_REGEXP",
+  "containsPersonalContent": false
+}
