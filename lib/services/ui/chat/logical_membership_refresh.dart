@@ -1,3 +1,4 @@
+@pragma('vm:entry-point')
 const logicalMembershipRefreshContract = 'LOGICAL_MEMBERSHIP_REFRESH_V1_EXACT_IDENTITY';
 const logicalMembershipAdvancedEvent = 'logical-membership-advanced';
 

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:bluebubbles/services/ui/chat/logical_conversation_identity.dart';
 import 'package:crypto/crypto.dart';
 
+@pragma('vm:entry-point')
 const logicalConversationRegistrySchema = 'LOGICAL_CONVERSATION_REGISTRY_V1';
 
 final RegExp _registryFingerprintPattern = RegExp(r'^[0-9a-f]{64}$');

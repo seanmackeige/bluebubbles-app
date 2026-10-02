@@ -1,3 +1,4 @@
+@pragma('vm:entry-point')
 const logicalMutationProtectionContract = 'LOGICAL_MUTATION_PROTECTION_V1_FAIL_CLOSED';
 
 /// Closed reasons why a physical conversation must not use ordinary mutation
