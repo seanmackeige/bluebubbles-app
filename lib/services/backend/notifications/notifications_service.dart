@@ -10,6 +10,9 @@ import 'package:bluebubbles/helpers/ui/facetime_helpers.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
+import 'package:bluebubbles/services/backend/notifications/logical_deferred_notification.dart';
+import 'package:bluebubbles/services/ui/chat/logical_conversation_identity.dart';
+import 'package:bluebubbles/services/ui/chat/logical_platform_cleanup.dart';
 import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' hide Notification;
@@ -32,10 +35,17 @@ class PendingToastItem {
   final String text;
   final bool isReaction;
   final bool isGroupEvent;
+  final bool allowMutatingActions;
 
   String get senderText => sender == null ? text : "$sender: $text";
 
-  PendingToastItem({required this.sender, required this.text, required this.isReaction, required this.isGroupEvent});
+  PendingToastItem({
+    required this.sender,
+    required this.text,
+    required this.isReaction,
+    required this.isGroupEvent,
+    required this.allowMutatingActions,
+  });
 }
 
 class NotificationsService {
@@ -63,6 +73,7 @@ class NotificationsService {
   static Map<String, Timer> debounceTimers = {};
   static Map<String, List<PendingToastItem>> pendingMessages = {};
   static final Lock _lock = Lock();
+  static final Lock _deferredLogicalNotificationLock = Lock();
   static Player? _desktopNotificationPlayer;
 
   static const int maxLines = 4;
@@ -164,13 +175,117 @@ class NotificationsService {
     );
   }
 
-  Future<void> createNotification(Chat chat, Message message) async {
+  LogicalProtectedNotificationDisposition _protectedNotificationDisposition(Chat chat) =>
+      resolveProtectedLogicalNotification(
+        isPotentialLogicalSource: ChatsSvc.isPotentialLogicalSource(chat),
+        isCertifiedLogicalConversation: ChatsSvc.isLogicalConversation(chat),
+        candidatePhase: ChatsSvc.logicalCandidateQuarantinePhaseFor(chat),
+      );
+
+  Future<void> _deferProtectedNotification(Chat chat, Message message) async {
+    final messageGuid = message.guid;
+    if (messageGuid == null || messageGuid.isEmpty || chat.guid.isEmpty) return;
+    await _deferredLogicalNotificationLock.synchronized(() async {
+      final LogicalDeferredNotificationLedger current;
+      try {
+        current = LogicalDeferredNotificationLedger.decode(PrefsSvc.messaging.loadLogicalDeferredNotificationJson());
+      } catch (error, trace) {
+        Logger.warn(
+          'Deferred logical notification ledger is unreadable; preserving it without emitting',
+          error: error,
+          trace: trace,
+          tag: 'NotificationsService',
+        );
+        return;
+      }
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final updated = current.defer(
+        LogicalDeferredNotification(
+          messageGuid: messageGuid,
+          sourceChatGuid: chat.guid,
+          enqueuedAtEpochMilliseconds: now,
+        ),
+        nowEpochMilliseconds: now,
+      );
+      await PrefsSvc.messaging.saveLogicalDeferredNotificationJson(updated.encode());
+    });
+  }
+
+  /// Replays only events whose current conversation identity is no longer in
+  /// quarantine. Exact message/source provenance is revalidated from the local
+  /// database; no provider operation or synthetic event is performed.
+  Future<void> reconcileDeferredLogicalNotifications() async {
+    await _deferredLogicalNotificationLock.synchronized(() async {
+      final LogicalDeferredNotificationLedger restored;
+      try {
+        restored = LogicalDeferredNotificationLedger.decode(PrefsSvc.messaging.loadLogicalDeferredNotificationJson());
+      } catch (error, trace) {
+        Logger.warn(
+          'Deferred logical notification ledger is unreadable; reconciliation remains fail closed',
+          error: error,
+          trace: trace,
+          tag: 'NotificationsService',
+        );
+        return;
+      }
+      final now = DateTime.now().millisecondsSinceEpoch;
+      var updated = restored.prune(nowEpochMilliseconds: now);
+      for (final event in List<LogicalDeferredNotification>.from(updated.entries)) {
+        final source =
+            ChatsSvc.findChatByGuid(event.sourceChatGuid) ??
+            (!kIsWeb ? Chat.findOne(guid: event.sourceChatGuid) : null);
+        final message = !kIsWeb ? Message.findOne(guid: event.messageGuid) : null;
+        if (source == null || message == null) continue;
+        final exactSource = message.chat.target;
+        if (exactSource?.guid != event.sourceChatGuid) continue;
+        if (_protectedNotificationDisposition(source) == LogicalProtectedNotificationDisposition.defer) continue;
+        if ((message.isFromMe ?? false) || message.dateCreated == null || !message.handleRelation.hasValue) {
+          updated = updated.remove(event.key);
+          continue;
+        }
+        try {
+          final consumed = await createNotification(source, message, allowDeferral: false);
+          if (consumed) updated = updated.remove(event.key);
+        } catch (error, trace) {
+          Logger.warn(
+            'Deferred logical notification emission failed; exact event remains reserved',
+            error: error,
+            trace: trace,
+            tag: 'NotificationsService',
+          );
+        }
+      }
+      await PrefsSvc.messaging.saveLogicalDeferredNotificationJson(updated.encode());
+    });
+  }
+
+  Future<bool> createNotification(Chat chat, Message message, {bool allowDeferral = true}) async {
     if (GetIt.I.isRegistered<LifecycleService>()) {
       await GetIt.I.isReady<LifecycleService>();
     }
 
-    if (chat.shouldMuteNotification(message) || message.isFromMe!) return;
-    final notificationChat = ChatsSvc.presentationChatFor(chat);
+    if (message.isFromMe ?? false) return true;
+    final protectedDisposition = _protectedNotificationDisposition(chat);
+    if (protectedDisposition == LogicalProtectedNotificationDisposition.defer) {
+      if (allowDeferral) await _deferProtectedNotification(chat, message);
+      return false;
+    }
+    final allowMutatingActions = protectedDisposition != LogicalProtectedNotificationDisposition.emitReadOnly;
+    final presentationChat = ChatsSvc.presentationChatFor(chat);
+    final notificationChat = ChatsSvc.getChatState(presentationChat.guid)?.chat ?? presentationChat;
+    if (ChatsSvc.shouldMuteConversationNotification(notificationChat, message)) return true;
+    final conversationIdentity = ChatsSvc.conversationIdentityFor(notificationChat);
+    final conversationKey = ChatsSvc.conversationKeyFor(notificationChat);
+    final isLogicalConversation = ChatsSvc.isLogicalConversation(notificationChat);
+    final certifiedLogicalId = isLogicalConversation ? conversationIdentity : null;
+    final notificationId = LogicalNotificationIdentity.androidIdForConversation(
+      ordinaryPhysicalChatId: notificationChat.id!,
+      certifiedLogicalId: certifiedLogicalId,
+    );
+    final notificationTag = LogicalNotificationIdentity.androidTagForConversation(
+      ordinaryTag: NEW_MESSAGE_TAG,
+      certifiedLogicalId: certifiedLogicalId,
+    );
     final isGroup = notificationChat.isGroup;
     final guid = notificationChat.guid;
     final contactName = message.handleRelation.target?.displayName ?? "Unknown";
@@ -194,13 +309,24 @@ class NotificationsService {
     } else if (kIsDesktop) {
       // Avatar loading is deferred to _buildAndShowToast — don't load it here.
       _lock.synchronized(
-        () => showDesktopNotif(text, notificationChat, title, contactName, message, isReaction, message.isGroupEvent),
+        () => showDesktopNotif(
+          text,
+          notificationChat,
+          title,
+          contactName,
+          message,
+          isReaction,
+          message.isGroupEvent,
+          conversationKey,
+          chat.guid,
+          allowMutatingActions,
+        ),
       );
     } else {
       if (message.guid != null && message.dateCreated != null) {
         if (!GetIt.I.isRegistered<MethodChannelService>()) {
           Logger.warn('MethodChannelService not registered; skipping incoming message notification');
-          return;
+          return false;
         }
 
         final personIcon = (await rootBundle.load("assets/images/person64.png")).buffer.asUint8List();
@@ -224,15 +350,19 @@ class NotificationsService {
         final bool showReactionAction =
             SettingsSvc.settings.enablePrivateAPI.value &&
             SettingsSvc.settings.notificationReactionAction.value &&
-            !ChatsSvc.isLogicalConversation(notificationChat) &&
+            !isLogicalConversation &&
+            !ChatsSvc.isPotentialLogicalSource(chat) &&
             message.associatedMessageGuid == null;
         final String reactionType = SettingsSvc.settings.notificationReactionActionType.value;
 
         await GetIt.I.isReady<MethodChannelService>();
         await MethodChannelSvc.actions.createIncomingMessageNotification(
           channelId: NEW_MESSAGE_CHANNEL,
-          chatId: notificationChat.id,
+          chatId: notificationId,
           chatGuid: guid,
+          conversationKey: conversationKey,
+          sourceChatGuid: chat.guid,
+          notificationTag: notificationTag,
           chatIsGroup: isGroup,
           chatTitle: title,
           chatIcon: isGroup ? chatIcon : contactIcon,
@@ -242,11 +372,23 @@ class NotificationsService {
           messageText: text,
           messageDate: message.dateCreated!.millisecondsSinceEpoch,
           messageIsFromMe: false,
+          allowMutatingActions: allowMutatingActions,
           showReactionAction: showReactionAction,
           reactionType: reactionType,
         );
+        if (certifiedLogicalId != null) {
+          final staleTargets = LogicalPlatformCleanupPlan.notificationTargets(
+            logicalId: certifiedLogicalId,
+            legacyPhysicalIds: ChatsSvc.logicalSourceChatsFor(notificationChat).map((source) => source.id),
+            ordinaryTag: NEW_MESSAGE_TAG,
+          ).where((target) => target.id != notificationId || target.tag != notificationTag);
+          for (final target in staleTargets) {
+            await MethodChannelSvc.actions.deleteNotification(notificationId: target.id, tag: target.tag);
+          }
+        }
       }
     }
+    return true;
   }
 
   Future<void> tryCreateNewMessageNotification(Message message, Chat chat) async {
@@ -261,7 +403,6 @@ class NotificationsService {
       return;
     }
     if (message.isKeptAudio) return;
-    if (chat.shouldMuteNotification(message)) return;
     if (!headless && LifecycleSvc.isAlive) {
       if (ChatsSvc.isChatActive(chat.guid)) return;
       if (ChatsSvc.activeChat == null &&
@@ -388,42 +529,49 @@ class NotificationsService {
     Message message,
     bool isReaction,
     bool isGroupEvent,
+    String conversationKey,
+    String sourceChatGuid,
+    bool allowMutatingActions,
   ) {
     if (kIsDesktop && !SettingsSvc.settings.desktopNotifications.value) return;
 
-    final String guid = chat.guid;
+    pendingMessages[conversationKey] ??= [];
 
-    pendingMessages[guid] ??= [];
-
-    pendingMessages[guid]!.add(
+    pendingMessages[conversationKey]!.add(
       PendingToastItem(
         sender: chat.isGroup && !isReaction ? contactName.split(" ").first : null,
         text: text,
         isReaction: isReaction,
         isGroupEvent: isGroupEvent,
+        allowMutatingActions: allowMutatingActions,
       ),
     );
 
     // Cancel and clean up old timer
-    final oldTimer = debounceTimers[guid];
+    final oldTimer = debounceTimers[conversationKey];
     oldTimer?.cancel();
-    debounceTimers[guid] = Timer(
+    debounceTimers[conversationKey] = Timer(
       const Duration(milliseconds: 300),
-      () async => await _buildAndShowToast(chat, title, message),
+      () async => await _buildAndShowToast(chat, title, message, conversationKey, sourceChatGuid),
     );
   }
 
-  Future<void> _buildAndShowToast(Chat chat, String title, Message message) async {
-    final String guid = chat.guid;
-    if (pendingMessages[guid]?.isEmpty ?? true) return;
+  Future<void> _buildAndShowToast(
+    Chat chat,
+    String title,
+    Message message,
+    String conversationKey,
+    String sourceChatGuid,
+  ) async {
+    if (pendingMessages[conversationKey]?.isEmpty ?? true) return;
 
     int usedLines = 0;
     int numToShow = 0;
-    int numMessages = pendingMessages[guid]!.length;
+    int numMessages = pendingMessages[conversationKey]!.length;
 
-    final int numSenders = pendingMessages[guid]!.map((p) => p.sender).nonNulls.toSet().length;
+    final int numSenders = pendingMessages[conversationKey]!.map((p) => p.sender).nonNulls.toSet().length;
     for (int i = numMessages - 1; i >= 0; i--) {
-      final PendingToastItem item = pendingMessages[guid]![i];
+      final PendingToastItem item = pendingMessages[conversationKey]![i];
       final String displayText = numSenders > 1 ? item.senderText : item.text;
       final int newLines = _estimateLines(displayText);
       if (usedLines + newLines > maxLines) {
@@ -438,13 +586,14 @@ class NotificationsService {
     }
 
     final int overflowCount = numMessages - numToShow;
-    final String body = pendingMessages[guid]!
+    final String body = pendingMessages[conversationKey]!
         .slice(overflowCount)
         .map((PendingToastItem e) => numSenders > 1 ? e.senderText : e.text)
         .join("\n");
 
-    final PendingToastItem lastItem = pendingMessages[guid]!.last;
+    final PendingToastItem lastItem = pendingMessages[conversationKey]!.last;
     final bool multipleMessages = numMessages > 1;
+    final bool allowMutatingActions = pendingMessages[conversationKey]!.every((item) => item.allowMutatingActions);
 
     String displayTitle;
     if (numSenders == 1 && !lastItem.isReaction && !lastItem.isGroupEvent) {
@@ -457,17 +606,19 @@ class NotificationsService {
 
     final papi = SettingsSvc.settings.enablePrivateAPI.value;
     final List<int> selectedIndices = SettingsSvc.settings.selectedActionIndices;
-    final List<String> actionValues = SettingsSvc.settings.actionList
-        .whereIndexed((i, e) => selectedIndices.contains(i))
-        .map(
-          (action) => action == "Mark Read"
-              ? 'mark-read'
-              : !lastItem.isReaction && !lastItem.isGroupEvent && papi
-              ? action
-              : null,
-        )
-        .nonNulls
-        .toList();
+    final List<String> actionValues = allowMutatingActions
+        ? SettingsSvc.settings.actionList
+              .whereIndexed((i, e) => selectedIndices.contains(i))
+              .map(
+                (action) => action == "Mark Read"
+                    ? 'mark-read'
+                    : !lastItem.isReaction && !lastItem.isGroupEvent && papi
+                    ? action
+                    : null,
+              )
+              .nonNulls
+              .toList()
+        : <String>[];
 
     final bool showMarkRead = actionValues.contains('mark-read');
     final List<String> actionLabels = multipleMessages
@@ -479,7 +630,9 @@ class NotificationsService {
               .toList();
     final List<String> toastActions = multipleMessages && showMarkRead ? const ['mark-read'] : actionValues;
     final DesktopMessageData messageData = DesktopMessageData(
-      chatGuid: guid,
+      chatGuid: chat.guid,
+      conversationKey: conversationKey,
+      sourceChatGuid: sourceChatGuid,
       messageGuid: message.guid,
       actions: toastActions,
     );
@@ -490,30 +643,30 @@ class NotificationsService {
 
     await playDesktopNotificationSound();
 
-    int? existingToast = activeToasts.remove(guid);
+    int? existingToast = activeToasts.remove(conversationKey);
     if (existingToast != null && attribution != null) {
       await DesktopNotifications.cancel(existingToast);
       existingToast = null;
     }
     if (existingToast == null) {
-      await DesktopNotifications.cancelGroup(guid);
+      await DesktopNotifications.cancelGroup(conversationKey);
     }
 
     final int? id = await DesktopNotifications.showMessage(
-      group: guid,
+      group: conversationKey,
       replaceId: existingToast,
       avatarPath: path,
       title: displayTitle,
       body: body,
       attributionText: attribution,
       actionLabels: actionLabels,
-      replyInput: SettingsSvc.settings.showReplyField.value,
+      replyInput: allowMutatingActions && SettingsSvc.settings.showReplyField.value,
       silent: SettingsSvc.settings.desktopNotificationSoundPath.value != null,
       messageData: messageData,
     );
 
     if (id != null) {
-      activeToasts[guid] = id;
+      activeToasts[conversationKey] = id;
     }
 
     // No dismissal callback exists to clean up the temp avatar, so fall back to a delayed delete.
@@ -556,16 +709,33 @@ class NotificationsService {
 
   Future<void> _handleDesktopMessageInteraction(DesktopMessageInteraction interaction) async {
     final DesktopMessageData data = interaction.data;
-    final Chat? chat = ChatsSvc.findChatByGuid(data.chatGuid) ?? Chat.findOne(guid: data.chatGuid);
-    if (chat == null) {
-      Logger.warn(
-        'Cannot handle desktop notification: chat ${data.chatGuid} no longer exists',
-        tag: 'NotificationsService',
+    final Chat chat;
+    if (data.conversationKey != null) {
+      final route = ChatsSvc.admitNotificationConversation(
+        conversationKey: data.conversationKey,
+        sourceChatGuid: data.sourceChatGuid,
       );
-      return;
+      if (route == null) {
+        Logger.warn(
+          'Cannot handle desktop notification: exact conversation source is stale or unqualified',
+          tag: 'NotificationsService',
+        );
+        return;
+      }
+      chat = route.presentation;
+    } else {
+      final sourceChat = ChatsSvc.findChatByGuid(data.chatGuid) ?? Chat.findOne(guid: data.chatGuid);
+      if (sourceChat == null || ChatsSvc.isPotentialLogicalSource(sourceChat)) {
+        Logger.warn(
+          'Cannot handle legacy desktop notification: physical route is missing or mutation-protected',
+          tag: 'NotificationsService',
+        );
+        return;
+      }
+      chat = ChatsSvc.presentationChatFor(sourceChat);
     }
 
-    _cleanNotificationState(data.chatGuid);
+    _cleanNotificationState(data.effectiveConversationKey);
     if (interaction.reply != null) {
       final Message reply = Message(
         dateCreated: DateTime.now(),
@@ -574,7 +744,7 @@ class NotificationsService {
         hasDdResults: true,
       );
       reply.generateTempGuid();
-      OutgoingMsgHandler.queue(
+      await OutgoingMsgHandler.queue(
         OutgoingMessage(
           chat: chat,
           message: reply,
@@ -588,7 +758,19 @@ class NotificationsService {
     }
 
     if (interaction.action == 'mark-read') {
-      chat.toggleHasUnreadAsync(false);
+      if (ChatsSvc.isApprovedLogicalSource(chat)) {
+        final decision = await ChatsSvc.markLogicalConversationRead(chat);
+        final outcome = ChatsSvc.logicalMarkReadOutcomeFor(chat);
+        if (!decision.isQualified || outcome == LogicalMarkReadOutcome.partial) {
+          Logger.warn(
+            'Cannot mark logical conversation read: route is unqualified or partially acknowledged',
+            tag: 'NotificationsService',
+          );
+          return;
+        }
+      } else {
+        await chat.toggleHasUnreadAsync(false);
+      }
       EventDispatcher().emit('refresh', null);
       return;
     }
@@ -610,7 +792,7 @@ class NotificationsService {
         dateCreated: DateTime.now(),
         handleId: 0,
       );
-      OutgoingMsgHandler.queue(
+      await OutgoingMsgHandler.queue(
         OutgoingReaction(
           chat: chat,
           message: reactionMessage,
@@ -771,13 +953,14 @@ class NotificationsService {
 
   Future<void> clearDesktopNotificationsForChat(String chatGuid) async {
     await _lock.synchronized(() async {
-      final int? toastId = activeToasts[chatGuid];
+      final conversationKey = ChatsSvc.conversationKeyForGuid(chatGuid);
+      final int? toastId = activeToasts[conversationKey];
       if (toastId != null) await DesktopNotifications.cancel(toastId);
-      await DesktopNotifications.cancelGroup(chatGuid);
-      _cleanNotificationState(chatGuid);
-      debounceTimers[chatGuid]?.cancel();
-      debounceTimers.remove(chatGuid);
-      pendingMessages.remove(chatGuid);
+      await DesktopNotifications.cancelGroup(conversationKey);
+      _cleanNotificationState(conversationKey);
+      debounceTimers[conversationKey]?.cancel();
+      debounceTimers.remove(conversationKey);
+      pendingMessages.remove(conversationKey);
     });
   }
 }

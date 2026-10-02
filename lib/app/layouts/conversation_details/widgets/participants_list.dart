@@ -12,11 +12,9 @@ import 'package:get/get.dart';
 /// Widget that handles rendering the participants list with show more/less functionality
 class ParticipantsList extends StatefulWidget {
   final Chat chat;
+  final bool readOnly;
 
-  const ParticipantsList({
-    super.key,
-    required this.chat,
-  });
+  const ParticipantsList({super.key, required this.chat, this.readOnly = false});
 
   @override
   State<ParticipantsList> createState() => _ParticipantsListState();
@@ -65,102 +63,85 @@ class _ParticipantsListState extends State<ParticipantsList> with ThemeHelpers {
     final participants = clippedParticipants;
 
     return SliverList(
-      delegate: SliverChildBuilderDelegate(
-        (context, index) {
-          final addMember = ListTile(
-            mouseCursor: MouseCursor.defer,
-            title: Text(
-              "Add ${iOS ? "Member" : "people"}",
-              style: context.theme.textTheme.bodyLarge!.copyWith(
-                color: context.theme.colorScheme.primary,
-              ),
+      delegate: SliverChildBuilderDelegate((context, index) {
+        final addMember = ListTile(
+          mouseCursor: MouseCursor.defer,
+          title: Text(
+            "Add ${iOS ? "Member" : "people"}",
+            style: context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.primary),
+          ),
+          leading: Container(
+            width: 40 * SettingsSvc.settings.avatarScale.value,
+            height: 40 * SettingsSvc.settings.avatarScale.value,
+            decoration: BoxDecoration(
+              color: !iOS ? null : context.theme.colorScheme.surfaceContainerHighest,
+              shape: BoxShape.circle,
+              border: iOS ? null : Border.all(color: context.theme.colorScheme.primary, width: 3),
             ),
-            leading: Container(
-              width: 40 * SettingsSvc.settings.avatarScale.value,
-              height: 40 * SettingsSvc.settings.avatarScale.value,
-              decoration: BoxDecoration(
-                color: !iOS ? null : context.theme.colorScheme.surfaceContainerHighest,
-                shape: BoxShape.circle,
-                border: iOS
-                    ? null
-                    : Border.all(
-                        color: context.theme.colorScheme.primary,
-                        width: 3,
-                      ),
-              ),
-              child: Icon(
-                Icons.add,
-                color: context.theme.colorScheme.primary,
-                size: 20,
-              ),
-            ),
-            onTap: () {
-              showAddParticipant(context, widget.chat);
-            },
-          );
+            child: Icon(Icons.add, color: context.theme.colorScheme.primary, size: 20),
+          ),
+          onTap: () {
+            showAddParticipant(context, widget.chat);
+          },
+        );
 
-          if (index > participants.length) {
-            if (SettingsSvc.settings.enablePrivateAPI.value &&
-                widget.chat.isIMessage &&
-                widget.chat.isGroup &&
-                shouldShowMore) {
-              return addMember;
-            } else {
-              return const SizedBox.shrink();
-            }
+        if (index > participants.length) {
+          if (!widget.readOnly &&
+              SettingsSvc.settings.enablePrivateAPI.value &&
+              widget.chat.isIMessage &&
+              widget.chat.isGroup &&
+              shouldShowMore) {
+            return addMember;
+          } else {
+            return const SizedBox.shrink();
           }
+        }
 
-          if (index == participants.length) {
-            if (shouldShowMore) {
-              return ListTile(
-                mouseCursor: MouseCursor.defer,
-                onTap: () {
-                  setState(() {
-                    showMoreParticipants = !showMoreParticipants;
-                  });
-                },
-                title: Text(
-                  showMoreParticipants ? "Show less" : "Show more",
-                  style: context.theme.textTheme.bodyLarge!.copyWith(
-                    color: context.theme.colorScheme.primary,
-                  ),
+        if (index == participants.length) {
+          if (shouldShowMore) {
+            return ListTile(
+              mouseCursor: MouseCursor.defer,
+              onTap: () {
+                setState(() {
+                  showMoreParticipants = !showMoreParticipants;
+                });
+              },
+              title: Text(
+                showMoreParticipants ? "Show less" : "Show more",
+                style: context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.primary),
+              ),
+              leading: Container(
+                width: 40 * SettingsSvc.settings.avatarScale.value,
+                height: 40 * SettingsSvc.settings.avatarScale.value,
+                decoration: BoxDecoration(
+                  color: !iOS ? null : context.theme.colorScheme.surfaceContainerHighest,
+                  shape: BoxShape.circle,
+                  border: iOS ? null : Border.all(color: context.theme.colorScheme.primary, width: 3),
                 ),
-                leading: Container(
-                  width: 40 * SettingsSvc.settings.avatarScale.value,
-                  height: 40 * SettingsSvc.settings.avatarScale.value,
-                  decoration: BoxDecoration(
-                    color: !iOS ? null : context.theme.colorScheme.surfaceContainerHighest,
-                    shape: BoxShape.circle,
-                    border: iOS
-                        ? null
-                        : Border.all(
-                            color: context.theme.colorScheme.primary,
-                            width: 3,
-                          ),
-                  ),
-                  child: Icon(
-                    Icons.more_horiz,
-                    color: context.theme.colorScheme.primary,
-                    size: 20,
-                  ),
-                ),
-              );
-            } else if (SettingsSvc.settings.enablePrivateAPI.value && widget.chat.isIMessage && widget.chat.isGroup) {
-              return addMember;
-            } else {
-              return const SizedBox.shrink();
-            }
+                child: Icon(Icons.more_horiz, color: context.theme.colorScheme.primary, size: 20),
+              ),
+            );
+          } else if (!widget.readOnly &&
+              SettingsSvc.settings.enablePrivateAPI.value &&
+              widget.chat.isIMessage &&
+              widget.chat.isGroup) {
+            return addMember;
+          } else {
+            return const SizedBox.shrink();
           }
+        }
 
-          return ContactTile(
-            key: Key(participants[index].address),
-            handle: participants[index],
-            chat: widget.chat,
-            canBeRemoved: widget.chat.isGroup && SettingsSvc.settings.enablePrivateAPI.value && widget.chat.isIMessage,
-          );
-        },
-        childCount: participants.length + 2,
-      ),
+        return ContactTile(
+          key: Key(participants[index].address),
+          handle: participants[index],
+          chat: widget.chat,
+          canBeRemoved:
+              !widget.readOnly &&
+              widget.chat.isGroup &&
+              SettingsSvc.settings.enablePrivateAPI.value &&
+              widget.chat.isIMessage,
+        );
+      }, childCount: participants.length + 2),
     );
   }
 }

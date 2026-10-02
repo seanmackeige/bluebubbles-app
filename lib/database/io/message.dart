@@ -134,6 +134,14 @@ class Message {
   bool get isSticker => associatedMessageType == "sticker" && associatedMessageGuid != null;
 
   @Transient()
+  bool get isTapback =>
+      associatedMessageGuid != null &&
+      ReactionTypes.toList().contains((associatedMessageType ?? '').replaceAll('-', ''));
+
+  @Transient()
+  bool get isLogicalWriteAuthorityRelevant => isFromMe != false && !isTapback;
+
+  @Transient()
   bool get isNameChange => itemType == 2;
 
   @Transient()

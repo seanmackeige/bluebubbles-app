@@ -32,3 +32,12 @@ Displayed as a right-side panel on tablet or pushed screen on mobile.
 - `sections/links/` — shared URLs list + search helper
 - `sections/documents/` — shared files list + search helper
 - `sections/locations/` — shared location messages list
+
+## Logical Conversation Details
+
+- Canonicalize any physical source to `ChatsSvc.presentationChatFor` before rendering details.
+- Logical details are read-only: never expose rename, icon, participant, leave, or general option mutation controls.
+- Logical health diagnostics appear only for a certified logical conversation and expose closed states/counts only;
+  never render physical GUIDs/ROWIDs, handles, message content, or mutation controls.
+- Attachment and link sections aggregate every `ChatsSvc.logicalSourceChatsFor` member.
+- Deduplicate only exact message/attachment identities; content equality must not collapse distinct provider records.

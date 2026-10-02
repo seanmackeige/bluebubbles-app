@@ -1,5 +1,6 @@
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/ui/chat/logical_conversation_route.dart';
+import 'package:bluebubbles/services/ui/chat/logical_conversation_certificate_binding.dart';
 import 'package:bluebubbles/services/ui/chat/logical_conversation_view.dart';
 import 'package:bluebubbles/services/isolates/global_isolate.dart';
 import 'package:bluebubbles/services/services.dart';
@@ -12,8 +13,11 @@ import 'package:bluebubbles/services/services.dart';
 ///
 class SendMessageActions {
   static Future<bool> _refreshLogicalCertificate() async {
-    final raw = await PrefsSvc.messaging.loadLogicalReadCertificateJsonFresh();
-    return LogicalConversationViewPolicy.hydrateRuntimeCertificate(raw);
+    final authority = await PrefsSvc.messaging.loadLogicalReadAuthorityFresh();
+    return LogicalConversationDatabaseCertificateBinding.bindPersistedCertificates(
+      persistedLedgerJson: authority.ledgerJson,
+      legacyCertificateJson: authority.legacyFallbackJson,
+    );
   }
 
   static Future<void> _refreshLogicalCertificateForRequest(Map<String, dynamic> map) async {

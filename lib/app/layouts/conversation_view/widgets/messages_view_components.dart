@@ -185,7 +185,10 @@ class SmartRepliesRow extends StatelessWidget {
       child: InkWell(
         borderRadius: BorderRadius.circular(19),
         onTap: () {
-          if (ChatsSvc.isLogicalConversation(controller.chat)) {
+          if (ChatsSvc.isPotentialLogicalSource(controller.chat)) {
+            if (!ChatsSvc.hasBuild99WriterCapability(controller.chat)) {
+              return;
+            }
             controller.textController.text = suggestion;
             controller.textController.selection = TextSelection.collapsed(offset: suggestion.length);
             controller.focusNode.requestFocus();

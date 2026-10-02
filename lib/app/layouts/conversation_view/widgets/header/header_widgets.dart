@@ -6,6 +6,7 @@ import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
+import 'package:bluebubbles/services/ui/chat/logical_message_chronology.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
@@ -28,26 +29,34 @@ class ManualMarkState extends State<ManualMark> with ThemeHelpers {
 
   @override
   Widget build(BuildContext context) {
+    if (ChatsSvc.isPotentialLogicalSource(chat) && !ChatsSvc.isLogicalConversation(chat)) {
+      return const SizedBox.shrink();
+    }
     if (ChatsSvc.isLogicalConversation(chat)) {
       return Obx(() {
         final unread = ChatsSvc.logicalSourceChatsFor(chat).any(
           (source) => ChatsSvc.getChatState(source.guid)?.hasUnreadMessage.value ?? source.hasUnreadMessage == true,
         );
-        if (!unread) return const SizedBox.shrink();
+        // Keep the compatibility projection as a reactive trigger, while the
+        // displayed truth remains scoped to this logical conversation.
+        ChatsSvc.logicalReadSyncPending.value;
+        final pending = ChatsSvc.logicalReadSyncPendingFor(chat);
+        if (!unread && !pending) return const SizedBox.shrink();
         return IconButton(
           icon: Icon(
             marking
                 ? (iOS ? CupertinoIcons.arrow_2_circlepath : Icons.sync)
                 : (iOS ? CupertinoIcons.app_badge : Icons.mark_chat_read_outlined),
+            color: pending ? context.theme.colorScheme.error : null,
           ),
-          tooltip: marking ? null : 'Mark logical conversation read',
+          tooltip: marking ? null : (pending ? 'Read sync pending — tap to retry' : 'Mark conversation read'),
           onPressed: marking
               ? null
               : () async {
                   setState(() => marking = true);
                   final decision = await ChatsSvc.markLogicalConversationRead(chat);
                   if (!decision.isQualified && context.mounted) {
-                    showSnackbar('ROUTE_NOT_PROVEN', decision.reason);
+                    showSnackbar('Read sync blocked', 'The current source set could not be verified.');
                   }
                   if (mounted) setState(() => marking = false);
                 },
@@ -87,6 +96,10 @@ class ManualMarkState extends State<ManualMark> with ThemeHelpers {
                 : "Mark Read",
             onPressed: () async {
               if (widget.controller.inSelectMode.value) {
+                if (ChatsSvc.isPotentialLogicalSource(chat)) {
+                  showSnackbar('Delete unavailable', 'This conversation is protected while its identity is verified.');
+                  return;
+                }
                 for (Message m in widget.controller.selected) {
                   await MessagesSvc(chat.guid).softDeleteMessage(m);
                 }
@@ -98,6 +111,10 @@ class ManualMarkState extends State<ManualMark> with ThemeHelpers {
               setState(() {
                 marking = true;
               });
+              if (ChatsSvc.isPotentialLogicalSource(chat)) {
+                if (mounted) setState(() => marking = false);
+                return;
+              }
               if (!marked) {
                 await HttpSvc.chat.markRead(chat.guid);
               } else {
@@ -118,7 +135,8 @@ class ManualMarkState extends State<ManualMark> with ThemeHelpers {
               onPressed: () async {
                 List<PlatformFile> attachments = [];
                 String text = "";
-                widget.controller.selected.sort((a, b) => Message.sort(a, b, descending: false));
+                final logical = ChatsSvc.isLogicalConversation(widget.controller.chat);
+                widget.controller.selected.sort((a, b) => compareApplicationMessagesAscending(a, b, logical: logical));
                 for (Message m in widget.controller.selected) {
                   final _attachments = m.dbAttachments
                       .where((e) => AttachmentsSvc.getContent(e, autoDownload: false) is PlatformFile)
@@ -252,13 +270,13 @@ class HeaderProgressIndicator extends StatelessWidget {
     final chat = ChatStateScope.chatOf(context);
     return Obx(
       () => TweenAnimationBuilder<double>(
-        duration: chat.sendProgress.value == 0
+        duration: OutgoingMsgHandler.sendProgressForChat(chat) == 0
             ? Duration.zero
-            : chat.sendProgress.value == 1
+            : OutgoingMsgHandler.sendProgressForChat(chat) == 1
             ? const Duration(milliseconds: 250)
             : const Duration(seconds: 10),
-        curve: chat.sendProgress.value == 1 ? Curves.easeInOut : Curves.easeOutExpo,
-        tween: Tween<double>(begin: 0, end: chat.sendProgress.value),
+        curve: OutgoingMsgHandler.sendProgressForChat(chat) == 1 ? Curves.easeInOut : Curves.easeOutExpo,
+        tween: Tween<double>(begin: 0, end: OutgoingMsgHandler.sendProgressForChat(chat)),
         builder: (context, value, _) => AnimatedOpacity(
           opacity: value == 1 ? 0 : 1,
           duration: const Duration(milliseconds: 250),

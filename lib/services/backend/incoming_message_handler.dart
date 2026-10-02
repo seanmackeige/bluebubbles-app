@@ -243,7 +243,7 @@ class IncomingMessageHandler {
 
     final next = previous.then((_) => _dispatchPayload(payload)).catchError((e, st) {
       if (e.toString().contains('SOURCE_PROVENANCE_CONFLICT')) {
-        ChatsSvc.invalidateLogicalAuthority('SOURCE_PROVENANCE_CONFLICT');
+        ChatsSvc.invalidateBuild99LogicalAuthority(payload.chat, 'SOURCE_PROVENANCE_CONFLICT');
       }
       Logger.error(
         'Unhandled error processing ${payload.type.name} for ${payload.message.guid}',
@@ -648,16 +648,19 @@ class IncomingMessageHandler {
 
           // Rename the AttachmentState so UI listeners get the real GUID.
           final presentationGuid = ChatsSvc.presentationChatFor(chat).guid;
-          if (attachmentExistingGuid != newAttachment.guid &&
-              Get.isRegistered<MessagesService>(tag: presentationGuid)) {
+          final messageService = maybeFindMessagesSvc(presentationGuid);
+          if (attachmentExistingGuid != newAttachment.guid && messageService != null) {
             // Complete the attachment state at the temp key WITHOUT renaming the
             // map key.  The widget finds the state via part.attachments.first.guid
             // (always the temp GUID) so it must remain discoverable while its Obx
             // is live.  _syncAttachmentStates promotes the key to the real GUID
             // once updateMessage updates the message struct.
-            MessagesSvc(
-              presentationGuid,
-            ).notifyAttachmentSendComplete(existingGuid, replacement.guid!, attachmentExistingGuid, newAttachment);
+            messageService.notifyAttachmentSendComplete(
+              existingGuid,
+              replacement.guid!,
+              attachmentExistingGuid,
+              newAttachment,
+            );
           }
         }
         // MessagesService is notified once by _dispatchUpdatedMessage after all
@@ -676,13 +679,12 @@ class IncomingMessageHandler {
     // After all DB swaps complete, notify MessagesService so the MessageState
     // for this message gets the updated attachment list (real GUIDs replacing temp ones).
     final presentationGuid = ChatsSvc.presentationChatFor(chat).guid;
-    if (replacementAttachments.isNotEmpty && Get.isRegistered<MessagesService>(tag: presentationGuid)) {
+    final messageService = maybeFindMessagesSvc(presentationGuid);
+    if (replacementAttachments.isNotEmpty && messageService != null) {
       // Re-fetch from DB so the attachment relations reflect the post-swap state.
       final freshMessage = Message.findOne(guid: replacement.guid!);
       if (freshMessage != null) {
-        MessagesSvc(
-          presentationGuid,
-        ).updateMessage(freshMessage, oldGuid: existingGuid != freshMessage.guid ? existingGuid : null);
+        messageService.updateMessage(freshMessage, oldGuid: existingGuid != freshMessage.guid ? existingGuid : null);
       } else {
         Logger.warn(
           '[_replaceAttachments] could not reload message ${replacement.guid} from DB for MessagesService update',
@@ -707,16 +709,20 @@ class IncomingMessageHandler {
   /// An `EventDispatcherSvc.emit` is fired in both cases so chat tiles, badge
   /// counts, and any other cross-cutting listeners can react.
   Future<void> _dispatchNewMessage(Chat chat, Message message, {String? tempGuid}) async {
-    ChatsSvc.noteLogicalSourceEvent(chat.guid, authorityRelevant: message.isFromMe != false);
+    ChatsSvc.noteLogicalSourceEvent(
+      chat.guid,
+      authorityRelevant: message.isLogicalWriteAuthorityRelevant,
+      unreadRelevant: message.isFromMe == false && !message.isTapback && chat.hasUnreadMessage == true,
+      unreadEventWatermark: message.originalROWID,
+    );
     final presentationChat = ChatsSvc.presentationChatFor(chat);
     final presentationGuid = presentationChat.guid;
-    final msvcRegistered = Get.isRegistered<MessagesService>(tag: presentationGuid);
+    final svc = maybeFindMessagesSvc(presentationGuid);
     // A tempGuid in the payload means this was an outgoing send from *some*
     // BlueBubbles client, but not necessarily *this* device.  Only treat it as
     // a GUID swap (updateMessage) if the temp entry is already known to this
     // device's MessagesService.  If it isn't (sent from another client), fall
     // through and add it as a new message instead.
-    final svc = msvcRegistered ? MessagesSvc(presentationGuid) : null;
     final tempExistsLocally = tempGuid != null && svc != null && svc.struct.getMessage(tempGuid) != null;
     final realExistsLocally = message.guid != null && svc != null && svc.struct.getMessage(message.guid!) != null;
 
@@ -744,11 +750,9 @@ class IncomingMessageHandler {
 
   /// Notifies the UI layer about an update to an existing message.
   void _dispatchUpdatedMessage(Chat chat, Message message, {String? oldGuid}) {
-    ChatsSvc.noteLogicalSourceEvent(chat.guid, authorityRelevant: message.isFromMe != false);
+    ChatsSvc.noteLogicalSourceEvent(chat.guid, authorityRelevant: message.isLogicalWriteAuthorityRelevant);
     final presentationGuid = ChatsSvc.presentationChatFor(chat).guid;
-    if (Get.isRegistered<MessagesService>(tag: presentationGuid)) {
-      MessagesSvc(presentationGuid).updateMessage(message, oldGuid: oldGuid);
-    }
+    maybeFindMessagesSvc(presentationGuid)?.updateMessage(message, oldGuid: oldGuid);
 
     EventDispatcherSvc.emit('updated-message', {'chatGuid': presentationGuid, 'message': message, 'oldGuid': oldGuid});
   }

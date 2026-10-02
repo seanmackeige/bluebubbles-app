@@ -1,5 +1,6 @@
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/database/models.dart';
+import 'package:bluebubbles/services/ui/chat/logical_conversation_view.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:dio/dio.dart';
@@ -35,13 +36,28 @@ mixin ScheduledMessagesMixin<T extends StatefulWidget> on State<T> {
       return Response(requestOptions: RequestOptions(path: ''));
     });
     if (response.statusCode == 200 && response.data['data'] != null) {
-      scheduled.value =
-          (response.data['data'] as List).map((e) => ScheduledMessage.fromJson(e)).toList().cast<ScheduledMessage>();
+      scheduled.value = (response.data['data'] as List)
+          .map((e) => ScheduledMessage.fromJson(e))
+          .toList()
+          .cast<ScheduledMessage>();
       fetching.value = false;
     }
   }
 
+  bool _targetsProtectedLogicalConversation(ScheduledMessage item) {
+    final targetGuid = item.payload.chatGuid;
+    final chat = ChatsSvc.findChatByGuid(targetGuid) ?? Chat.findOne(guid: targetGuid);
+    if (chat == null) {
+      return LogicalConversationViewPolicy.certificateLedgerCorrupt;
+    }
+    return ChatsSvc.isPotentialLogicalSource(chat);
+  }
+
   void deleteMessage(ScheduledMessage item) async {
+    if (_targetsProtectedLogicalConversation(item)) {
+      showSnackbar("Action blocked", "Scheduled logical mutations are not certified.");
+      return;
+    }
     final response = await HttpSvc.message.deleteScheduled(item.id);
     if (response.statusCode == 200) {
       scheduled.remove(item);

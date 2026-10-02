@@ -24,6 +24,10 @@ abstract class OutgoingQueueItem extends QueueItem {
   String? logicalAttachmentContentFingerprint;
   Completer<void>? logicalDispatchReservationCompleter;
 
+  /// Awaited after final admission revalidation and immediately before the
+  /// first provider dispatch. A throw keeps execution on the zero-send side.
+  Future<void> Function()? beforeProviderDispatch;
+
   OutgoingQueueItem({
     required super.type,
     super.completer,
@@ -37,6 +41,7 @@ abstract class OutgoingQueueItem extends QueueItem {
     this.logicalDdScan,
     this.logicalAttachmentContentFingerprint,
     this.logicalDispatchReservationCompleter,
+    this.beforeProviderDispatch,
   });
 
   /// Whether this item is a user-initiated retry of a previously-failed send.
@@ -70,6 +75,7 @@ class OutgoingMessage extends OutgoingQueueItem {
     super.logicalDdScan,
     super.logicalAttachmentContentFingerprint,
     super.logicalDispatchReservationCompleter,
+    super.beforeProviderDispatch,
     this.isRetry = false,
     this.clearNotificationsIfFromMe = true,
   }) : super(type: QueueType.sendMessage);
@@ -98,6 +104,7 @@ class OutgoingReaction extends OutgoingQueueItem {
     super.logicalDdScan,
     super.logicalAttachmentContentFingerprint,
     super.logicalDispatchReservationCompleter,
+    super.beforeProviderDispatch,
     this.isRetry = false,
     this.clearNotificationsIfFromMe = true,
   }) : super(type: QueueType.sendReaction);
@@ -125,6 +132,7 @@ class OutgoingAttachment extends OutgoingQueueItem {
     super.logicalDdScan,
     super.logicalAttachmentContentFingerprint,
     super.logicalDispatchReservationCompleter,
+    super.beforeProviderDispatch,
     this.logicalRouteTargetMessageGuid,
     this.logicalPersistedExecutionSourceChatRowId,
     this.logicalPersistedExecutionSourceChatGuid,
@@ -151,6 +159,7 @@ class OutgoingMultipartMessage extends OutgoingQueueItem {
     super.logicalDdScan,
     super.logicalAttachmentContentFingerprint,
     super.logicalDispatchReservationCompleter,
+    super.beforeProviderDispatch,
     this.isRetry = false,
     this.clearNotificationsIfFromMe = true,
   }) : super(type: QueueType.sendMultipart);

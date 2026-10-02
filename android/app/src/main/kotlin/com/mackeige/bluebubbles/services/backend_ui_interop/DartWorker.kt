@@ -136,8 +136,13 @@ class DartWorker(context: Context, workerParams: WorkerParameters): ListenableWo
                     suspendCancellableCoroutine { cont ->
                         MethodChannel(engineToUse.dartExecutor.binaryMessenger, Constants.methodChannel).invokeMethod(method, gson.fromJson(data, TypeToken.getParameterized(HashMap::class.java, String::class.java, Any::class.java).type), object : MethodChannel.Result {
                             override fun success(result: Any?) {
-                                PersistentLog.d(applicationContext, Constants.logTag, "Worker with method $method completed successfully")
-                                if (cont.isActive) cont.resume(Result.success())
+                                val workerResult = if (DartWorkerResultPolicy.isConfirmedSuccess(result)) {
+                                    PersistentLog.d(applicationContext, Constants.logTag, "Worker with method $method completed successfully")
+                                    Result.success()
+                                } else {
+                                    retryOrFail(method, "Dart did not confirm completion (result type: ${result?.javaClass?.simpleName ?: "null"})")
+                                }
+                                if (cont.isActive) cont.resume(workerResult)
                                 closeEngineIfNeeded()
                             }
 

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:bluebubbles/app/components/custom_text_editing_controllers.dart';
 import 'package:bluebubbles/app/layouts/chat_creator/chat_creator_dialogs.dart';
 import 'package:bluebubbles/app/layouts/chat_creator/chat_creator_utils.dart';
+import 'package:bluebubbles/app/layouts/chat_creator/new_chat_recipient_resolver.dart';
 import 'package:bluebubbles/app/layouts/chat_creator/widgets/chat_list_section.dart';
 import 'package:bluebubbles/app/layouts/chat_creator/widgets/message_type_toggle.dart';
 import 'package:bluebubbles/app/layouts/chat_creator/widgets/selected_contact_chip.dart';
@@ -20,6 +21,7 @@ import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/services/backend/interfaces/sync_interface.dart';
 import 'package:bluebubbles/services/ui/chat/send_data.dart';
+import 'package:bluebubbles/services/ui/chat/new_group_safety_gate.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:bluebubbles/utils/string_utils.dart';
 import 'package:flutter/cupertino.dart';
@@ -29,7 +31,6 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:dio/dio.dart' show Response;
 import 'package:get/get.dart' hide Response;
-import 'package:slugify/slugify.dart';
 import 'package:bluebubbles/models/models.dart' show ContactSearchResult;
 
 class SelectedContact {
@@ -81,6 +82,7 @@ class ChatCreatorState extends State<ChatCreator> with ThemeHelpers {
   Timer? _debounce;
   Completer<void>? createCompleter;
   MessagesService? messagesService;
+  NewChatRecipientResolution? _lastRecipientResolution;
 
   bool canCreateGroupChats = SettingsSvc.canCreateGroupChatSync();
 
@@ -172,40 +174,46 @@ class ChatCreatorState extends State<ChatCreator> with ThemeHelpers {
   Future<Chat?> findExistingChat({bool checkDeleted = false, bool update = true}) async {
     // no selected items, remove message view
     if (selectedContacts.isEmpty) {
+      _lastRecipientResolution = null;
       await ChatsSvc.setAllInactive();
       fakeController.value = null;
       return null;
     }
-    if (selectedContacts.firstWhereOrNull((element) => element.serviceType.value == ChatServiceType.sms) != null) {
-      selectedService.value = ChatServiceType.sms;
-      filteredChats.value = List<Chat>.from(existingChats.where((e) => !e.isIMessage));
-    } else {
-      selectedService.value = ChatServiceType.iMessage;
-      filteredChats.value = List<Chat>.from(existingChats.where((e) => e.isIMessage));
-    }
-    Chat? existingChat;
-    // try and find the chat simply by identifier
+
+    // Keep the established single-recipient convenience, but never let a
+    // participant lookup silently rewrite a multi-recipient service request.
     if (selectedContacts.length == 1) {
-      final address = selectedContacts.first.address;
-      try {
-        if (kIsWeb) {
-          existingChat = await Chat.findOneWeb(chatIdentifier: slugify(address, delimiter: ''));
-        } else {
-          existingChat = Chat.findOne(chatIdentifier: slugify(address, delimiter: ''));
-        }
-      } catch (e, s) {
-        Logger.warn("Failed to find existing chat by identifier", error: e, trace: s, tag: 'ChatCreator');
+      final observedService = selectedContacts.single.serviceType.value;
+      if (observedService == ChatServiceType.iMessage || observedService == ChatServiceType.sms) {
+        selectedService.value = observedService!;
       }
     }
-    // match each selected contact to a participant in a chat
-    if (existingChat == null) {
-      for (Chat c in (checkDeleted ? Database.chats.getAll() : filteredChats)) {
-        if (ChatCreatorUtils.chatMatchesSelectedContacts(c, selectedContacts.map((e) => e.address).toList())) {
-          existingChat = c;
-          break;
-        }
-      }
-    }
+    filteredChats.value = List<Chat>.from(
+      existingChats.where((chat) => selectedService.value.isIMessageService == chat.isIMessage),
+    );
+
+    final searchList = List<Chat>.from(checkDeleted ? Database.chats.getAll() : existingChats);
+    final resolution = ChatCreatorUtils.resolveRecipientSelection(
+      recipients: selectedContacts
+          .map(
+            (contact) => NewChatRecipientSelection(
+              address: contact.address,
+              availability: ChatCreatorUtils.availabilityForRequestedService(
+                address: contact.address,
+                requestedService: selectedService.value,
+                observedService: contact.serviceType.value,
+              ),
+            ),
+          )
+          .toList(growable: false),
+      requestedService: selectedService.value,
+      chats: searchList,
+    );
+    _lastRecipientResolution = resolution;
+    final existingChat = resolution.canReuseExistingConversation
+        ? searchList.firstWhereOrNull((chat) => chat.guid == resolution.exactConversationId)
+        : null;
+
     // if match, show message view, otherwise hide it
     if (update) {
       if (existingChat != null) {
@@ -486,8 +494,17 @@ class ChatCreatorState extends State<ChatCreator> with ThemeHelpers {
                         hideMediaPicker: fakeController.value == null,
                         sendMessage: ({String? effect}) async {
                           addressOnSubmitted();
-                          Chat? chat =
-                              fakeController.value?.chat ?? await findExistingChat(checkDeleted: true, update: false);
+                          Chat? chat = await findExistingChat(checkDeleted: true, update: false);
+                          final recipientResolution = _lastRecipientResolution;
+                          if (recipientResolution == null || !recipientResolution.isAdmitted) {
+                            final title = recipientResolution?.blockedTitle ?? 'Check recipients';
+                            final explanation =
+                                recipientResolution?.blockedExplanation ?? 'Recipient resolution is unavailable.';
+                            showSnackbar(title, explanation);
+                            return;
+                          }
+                          final admittedService = selectedService.value;
+                          final admittedNormalizedRecipients = recipientResolution.normalizedRecipients;
 
                           // If no local chat and we have a single contact, try fetching from the
                           // server using the guessed GUID pattern before falling back to creation.
@@ -495,6 +512,22 @@ class ChatCreatorState extends State<ChatCreator> with ThemeHelpers {
                             final address = selectedContacts.first.address;
                             final service = selectedService.value.method;
                             chat = await ChatsSvc.fetchChat('$service;-;$address');
+                            if (chat != null) {
+                              final serverResolution = ChatCreatorUtils.resolveRecipientSelection(
+                                recipients: selectedContacts
+                                    .map((contact) => NewChatRecipientSelection(address: contact.address))
+                                    .toList(growable: false),
+                                requestedService: selectedService.value,
+                                chats: <Chat>[chat],
+                              );
+                              if (!serverResolution.canReuseExistingConversation) {
+                                Logger.warn(
+                                  'Ignoring server lookup result that does not exactly match the requested recipient and service',
+                                  tag: 'ChatCreator',
+                                );
+                                chat = null;
+                              }
+                            }
                           }
 
                           if (chat != null) {
@@ -570,6 +603,49 @@ class ChatCreatorState extends State<ChatCreator> with ThemeHelpers {
                             // and let the user pick an existing contact instead.
                             if (widget.initialAttachments.isNotEmpty) {
                               ChatCreatorDialogs.showCannotForwardAttachmentDialog(context);
+                              return;
+                            }
+
+                            // The singleton server lookup above is an async
+                            // boundary. Re-resolve immediately before the
+                            // physical create call and admit only a still-valid
+                            // ordinary one-to-one request.
+                            final executionResolution = ChatCreatorUtils.resolveRecipientSelection(
+                              recipients: selectedContacts
+                                  .map(
+                                    (contact) => NewChatRecipientSelection(
+                                      address: contact.address,
+                                      availability: ChatCreatorUtils.availabilityForRequestedService(
+                                        address: contact.address,
+                                        requestedService: selectedService.value,
+                                        observedService: contact.serviceType.value,
+                                      ),
+                                    ),
+                                  )
+                                  .toList(growable: false),
+                              requestedService: selectedService.value,
+                              chats: Database.chats.getAll(),
+                            );
+                            final admissionChanged =
+                                selectedService.value != admittedService ||
+                                !listEquals(executionResolution.normalizedRecipients, admittedNormalizedRecipients);
+                            if (!executionResolution.canCreateOneToOne || admissionChanged) {
+                              showSnackbar(
+                                admissionChanged ? 'Check recipients' : executionResolution.blockedTitle,
+                                admissionChanged
+                                    ? 'Recipients or service changed while resolving the conversation. Review them and try again.'
+                                    : executionResolution.blockedExplanation,
+                              );
+                              return;
+                            }
+
+                            final creationDisposition = NewGroupSafetyGate.evaluate(
+                              exactRecipientCount: selectedContacts.length,
+                              existingConversationResolved: false,
+                            );
+                            if (creationDisposition ==
+                                NewConversationExecutionDisposition.newGroupBlockedUnprovenSenderBinding) {
+                              showSnackbar(NewGroupSafetyGate.blockedTitle, NewGroupSafetyGate.blockedExplanation);
                               return;
                             }
 

@@ -9,6 +9,7 @@ import 'package:bluebubbles/database/database.dart';
 import 'package:bluebubbles/services/isolates/global_isolate.dart';
 import 'package:bluebubbles/services/isolates/incremental_sync_isolate.dart';
 import 'package:bluebubbles/services/services.dart';
+import 'package:bluebubbles/services/ui/chat/logical_conversation_certificate_binding.dart';
 import 'package:bluebubbles/services/ui/chat/logical_conversation_view.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:flutter/foundation.dart';
@@ -95,15 +96,6 @@ class StartupTasks {
     await GetIt.I.isReady<SharedPreferencesService>();
     debugPrint("SharedPreferencesService ready");
 
-    final logicalCertificateHydrated = LogicalConversationViewPolicy.hydrateRuntimeCertificate(
-      PrefsSvc.messaging.loadLogicalReadCertificateJson(),
-    );
-    debugPrint(
-      logicalCertificateHydrated
-          ? "Logical conversation certificate ready"
-          : "Logical conversation certificate unavailable; writes fail closed",
-    );
-
     debugPrint("Registering SettingsService...");
     GetIt.I.registerSingletonAsync<SettingsService>(() async {
       final settingsService = SettingsService();
@@ -121,6 +113,33 @@ class StartupTasks {
     });
     await GetIt.I.isReady<BaseLogger>();
     Logger.info("BaseLogger ready - switching to Logger for remaining logs");
+  }
+
+  static Future<void> _bindLogicalReadCertificateAfterDatabaseInit() async {
+    final bankedCertificateBound = LogicalConversationDatabaseCertificateBinding.bindPersistedCertificates(
+      persistedLedgerJson: PrefsSvc.messaging.loadLogicalReadCertificateLedgerJson(),
+      legacyCertificateJson: PrefsSvc.messaging.loadLogicalReadCertificateJson(),
+    );
+    if (LogicalConversationViewPolicy.certificateLedgerMigrationPending) {
+      try {
+        await PrefsSvc.messaging.saveLogicalReadCertificateLedgerJson(
+          LogicalConversationViewPolicy.encodeActiveCertificateLedger(),
+        );
+        LogicalConversationViewPolicy.markCertificateLedgerMigrationPersisted();
+      } catch (error, stack) {
+        Logger.warn(
+          'Logical certificate V1 migration could not be persisted; the legacy authority remains fail-closed',
+          error: error,
+          trace: stack,
+          tag: 'LogicalConversationView',
+        );
+      }
+    }
+    debugPrint(
+      bankedCertificateBound
+          ? "Logical conversation certificate ledger bound to current database"
+          : "Banked logical writer certificate binding unavailable; writes fail closed",
+    );
   }
 
   static Future<void> _initContactHandleChats({required bool headless}) async {
@@ -175,10 +194,7 @@ class StartupTasks {
     await setSplashStatus("Loading settings...");
     await _initCoreServices(headless: false);
 
-    final startupInteropReady = _preRegisterInteropServices(
-      headless: false,
-      isBubble: isBubble,
-    );
+    final startupInteropReady = _preRegisterInteropServices(headless: false, isBubble: isBubble);
 
     // Check if another instance is running (Linux Only).
     // Automatically handled on Windows (I think)
@@ -190,6 +206,7 @@ class StartupTasks {
     Logger.info("Initializing database...");
     await setSplashStatus("Opening database...");
     await Database.init();
+    await _bindLogicalReadCertificateAfterDatabaseInit();
     Logger.info("Database initialized");
     startupInteropReady.complete();
 
@@ -211,10 +228,7 @@ class StartupTasks {
     await _waitForInterop(lifecycle: true);
 
     Logger.info("Registering IncomingMessageHandler...");
-    GetIt.I.registerSingleton<IncomingMessageHandler>(
-      IncomingMessageHandler(),
-      dispose: (svc) => svc.dispose(),
-    );
+    GetIt.I.registerSingleton<IncomingMessageHandler>(IncomingMessageHandler(), dispose: (svc) => svc.dispose());
 
     // We then have to initialize all the services that the app will use.
     // Order matters here as some services may rely on others. For instance,
@@ -241,11 +255,7 @@ class StartupTasks {
     // Parallelize independent services for faster startup
     Logger.info("Waiting for services to be ready...");
     await setSplashStatus("Loading contacts...");
-    await Future.wait([
-      ThemeSvc.init(),
-      IntentsSvc.init(),
-      GetIt.I.isReady<ContactServiceV2>(),
-    ]);
+    await Future.wait([ThemeSvc.init(), IntentsSvc.init(), GetIt.I.isReady<ContactServiceV2>()]);
     Logger.info("All parallel services ready");
 
     Logger.info("Registering NavigatorService...");
@@ -270,14 +280,12 @@ class StartupTasks {
     await CustomGroupsSvc.init();
 
     Logger.info("Registering OutgoingMessageHandler...");
-    GetIt.I.registerSingleton<OutgoingMessageHandler>(
-      OutgoingMessageHandler(),
-      dispose: (svc) => svc.dispose(),
-    );
+    GetIt.I.registerSingleton<OutgoingMessageHandler>(OutgoingMessageHandler(), dispose: (svc) => svc.dispose());
 
     await setSplashStatus("Finishing up...");
     Logger.info(
-        "Startup services initialization complete! Running localhost detection then starting incremental sync...");
+      "Startup services initialization complete! Running localhost detection then starting incremental sync...",
+    );
 
     // Release any notification click that started the app. Deferred to the first frame
     // because opening the chat needs a widget tree, which doesn't exist yet here.
@@ -306,14 +314,11 @@ class StartupTasks {
 
     await _initCoreServices(headless: true);
 
-    final globalInteropReady = _preRegisterInteropServices(
-      headless: true,
-      isBubble: false,
-      binaryMessenger: messenger,
-    );
+    final globalInteropReady = _preRegisterInteropServices(headless: true, isBubble: false, binaryMessenger: messenger);
 
     Logger.info("Initializing database...");
     await Database.init();
+    await _bindLogicalReadCertificateAfterDatabaseInit();
     Logger.info("Database initialized");
     globalInteropReady.complete();
 
@@ -337,14 +342,11 @@ class StartupTasks {
 
     await _initCoreServices(headless: true);
 
-    final syncInteropReady = _preRegisterInteropServices(
-      headless: true,
-      isBubble: false,
-      binaryMessenger: messenger,
-    );
+    final syncInteropReady = _preRegisterInteropServices(headless: true, isBubble: false, binaryMessenger: messenger);
 
     Logger.info("Initializing database...");
     await Database.init();
+    await _bindLogicalReadCertificateAfterDatabaseInit();
     Logger.info("Database initialized");
     syncInteropReady.complete();
 
@@ -367,13 +369,11 @@ class StartupTasks {
 
     await _initCoreServices(headless: true);
 
-    final backgroundInteropReady = _preRegisterInteropServices(
-      headless: true,
-      isBubble: false,
-    );
+    final backgroundInteropReady = _preRegisterInteropServices(headless: true, isBubble: false);
 
     Logger.info("Initializing database...");
     await Database.init();
+    await _bindLogicalReadCertificateAfterDatabaseInit();
     Logger.info("Database initialized");
     backgroundInteropReady.complete();
 
@@ -383,10 +383,7 @@ class StartupTasks {
     await _waitForInterop(notifications: true);
 
     Logger.info("Registering IncomingMessageHandler...");
-    GetIt.I.registerSingleton<IncomingMessageHandler>(
-      IncomingMessageHandler(),
-      dispose: (svc) => svc.dispose(),
-    );
+    GetIt.I.registerSingleton<IncomingMessageHandler>(IncomingMessageHandler(), dispose: (svc) => svc.dispose());
 
     await _waitForInterop(methodChannel: true);
 
@@ -457,8 +454,8 @@ class StartupTasks {
   static Future<void> onAppResume() async {
     final LifecycleService? lifecycle =
         (GetIt.I.isRegistered<LifecycleService>() && GetIt.I.isReadySync<LifecycleService>())
-            ? GetIt.I<LifecycleService>()
-            : null;
+        ? GetIt.I<LifecycleService>()
+        : null;
 
     if (GetIt.I.isRegistered<ChatsService>()) {
       // Observer is permanently registered in init() and should never be removed
@@ -472,12 +469,17 @@ class StartupTasks {
         // is about to redirect us to a *different* chat.  pendingOpenChatGuid is
         // set synchronously in IntentsService.openChat before the first await, so
         // it is always visible here even though we are inside an async callback.
-        final pendingGuid = (!kIsWeb && !kIsDesktop && GetIt.I.isRegistered<IntentsService>())
+        final pendingKey = (!kIsWeb && !kIsDesktop && GetIt.I.isRegistered<IntentsService>())
             ? GetIt.I<IntentsService>().pendingOpenChatGuid
             : null;
-        final redirectingAway = pendingGuid != null && pendingGuid != activeChat.chat.guid;
+        final activeKey = ChatsSvc.conversationKeyFor(activeChat.chat);
+        final redirectingAway = pendingKey != null && pendingKey != activeKey;
         if (!redirectingAway) {
-          ChatsSvc.setChatHasUnread(activeChat.chat, false);
+          if (ChatsSvc.isLogicalConversation(activeChat.chat)) {
+            await ChatsSvc.markLogicalConversationRead(activeChat.chat);
+          } else {
+            await ChatsSvc.setChatHasUnread(activeChat.chat, false);
+          }
         }
 
         // On desktop, always restore focus when the app is resumed (window regains focus).
@@ -584,8 +586,7 @@ class StartupTasks {
       Logger.debug("Got Signal to go to foreground");
       doWhenWindowReady(() async {
         await windowManager.show();
-        List<WindowEntry?> widAndNames = await (await Process.start('wmctrl', ['-pl']))
-            .stdout
+        List<WindowEntry?> widAndNames = await (await Process.start('wmctrl', ['-pl'])).stdout
             .transform(utf8.decoder)
             .transform(const LineSplitter())
             .map((line) => line.replaceAll(RegExp(r"\s+"), " ").split(" "))

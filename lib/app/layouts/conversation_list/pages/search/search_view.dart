@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:bluebubbles/app/components/avatars/contact_avatar_group_widget.dart';
 import 'package:bluebubbles/app/components/bb_chip.dart';
 import 'package:bluebubbles/app/layouts/chat_selector_view/chat_selector_view.dart';
@@ -8,6 +10,7 @@ import 'package:bluebubbles/app/layouts/conversation_view/pages/conversation_vie
 import 'package:bluebubbles/app/layouts/settings/widgets/settings_widgets.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
+import 'package:bluebubbles/services/ui/chat/logical_membership_refresh.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -26,18 +29,11 @@ class SearchResult {
   final SearchMode mode;
   final List<SearchResultItem> results;
 
-  SearchResult({
-    required this.search,
-    required this.mode,
-    required this.results,
-    this.chatGuidFilter = "",
-  });
+  SearchResult({required this.search, required this.mode, required this.results, this.chatGuidFilter = ""});
 }
 
 class SearchView extends StatefulWidget {
-  const SearchView({
-    super.key,
-  });
+  const SearchView({super.key});
 
   @override
   SearchViewState createState() => SearchViewState();
@@ -48,6 +44,8 @@ class SearchViewState extends State<SearchView> with ThemeHelpers {
   final SlidingUpPanelController panelController = SlidingUpPanelController();
   final FocusNode focusNode = FocusNode();
   final List<SearchResult> pastSearches = [];
+  StreamSubscription? _membershipSubscription;
+  bool _membershipRefreshPending = false;
 
   final Rx<SearchResult?> currentSearch = Rx<SearchResult?>(null);
   final RxBool noResults = false.obs;
@@ -75,62 +73,124 @@ class SearchViewState extends State<SearchView> with ThemeHelpers {
         noResults.value = false;
       }
     });
+    _membershipSubscription = EventDispatcherSvc.stream.listen((event) {
+      if (event.type != logicalMembershipAdvancedEvent) return;
+      unawaited(_refreshForMembershipAdvance(event.data));
+    });
   }
 
-  Future<void> search(String newSearch) async {
+  String get _selectedConversationKey {
+    final chat = selectedChat.value;
+    return chat == null ? '' : ChatsSvc.conversationKeyFor(chat);
+  }
+
+  Future<void> _refreshForMembershipAdvance(Object? eventData) async {
+    final selected = selectedChat.value;
+    if (selected == null ||
+        !shouldRefreshLogicalMembershipProjection(
+          eventData: eventData,
+          currentLogicalId: ChatsSvc.logicalConversationIdFor(selected),
+        )) {
+      return;
+    }
+    final key = _selectedConversationKey;
+    pastSearches.removeWhere((search) => search.chatGuidFilter == key);
+    final term = currentSearchTerm.value;
+    if (term == null || term.length < 3) return;
+    if (isSearching.value) {
+      _membershipRefreshPending = true;
+      return;
+    }
+    await search(term, force: true);
+  }
+
+  Future<void> search(String newSearch, {bool force = false}) async {
     if (isSearching.value || isNullOrEmpty(newSearch) || newSearch.length < 3) return;
     focusNode.unfocus();
+    final conversationKey = _selectedConversationKey;
     noResults.value = false;
     currentSearchTerm.value = newSearch;
 
     // If we've already searched for the results and there are none, set no results and return
-    if (pastSearches
-            .firstWhereOrNull(
-              (e) => e.search == newSearch && e.mode == (local.value ? SearchMode.local : SearchMode.network),
-            )
-            ?.results
-            .isEmpty ??
-        false) {
+    if (!force &&
+        (pastSearches
+                .firstWhereOrNull(
+                  (e) =>
+                      e.search == newSearch &&
+                      e.mode == (local.value ? SearchMode.local : SearchMode.network) &&
+                      e.chatGuidFilter == conversationKey,
+                )
+                ?.results
+                .isEmpty ??
+            false)) {
       noResults.value = true;
       return;
     }
 
+    if (force) {
+      pastSearches.removeWhere(
+        (entry) =>
+            entry.search == newSearch &&
+            entry.mode == (local.value ? SearchMode.local : SearchMode.network) &&
+            entry.chatGuidFilter == conversationKey,
+      );
+    }
     isSearching.value = true;
 
-    final search = SearchResult(
+    final result = SearchResult(
       search: currentSearchTerm.value!,
       mode: local.value ? SearchMode.local : SearchMode.network,
       results: [],
+      chatGuidFilter: conversationKey,
     );
 
-    if (local.value) {
-      search.results.addAll(
-        await SearchQueryHelper.runLocal(
-          term: currentSearchTerm.value!,
-          selectedChat: selectedChat.value,
-          selectedHandle: selectedHandle.value,
-          isFromMe: isFromMe.value,
-          isNotFromMe: isNotFromMe.value,
-          sinceDate: sinceDate.value,
-        ),
-      );
-    } else {
-      search.results.addAll(
-        await SearchQueryHelper.runNetwork(
-          term: currentSearchTerm.value!,
-          selectedChat: selectedChat.value,
-          selectedHandle: selectedHandle.value,
-          isFromMe: isFromMe.value,
-          isNotFromMe: isNotFromMe.value,
-          sinceDate: sinceDate.value,
-        ),
-      );
-    }
+    try {
+      if (local.value) {
+        result.results.addAll(
+          await SearchQueryHelper.runLocal(
+            term: currentSearchTerm.value!,
+            selectedChat: selectedChat.value,
+            selectedHandle: selectedHandle.value,
+            isFromMe: isFromMe.value,
+            isNotFromMe: isNotFromMe.value,
+            sinceDate: sinceDate.value,
+          ),
+        );
+      } else {
+        result.results.addAll(
+          await SearchQueryHelper.runNetwork(
+            term: currentSearchTerm.value!,
+            selectedChat: selectedChat.value,
+            selectedHandle: selectedHandle.value,
+            isFromMe: isFromMe.value,
+            isNotFromMe: isNotFromMe.value,
+            sinceDate: sinceDate.value,
+          ),
+        );
+      }
 
-    pastSearches.add(search);
-    isSearching.value = false;
-    noResults.value = search.results.isEmpty;
-    currentSearch.value = search;
+      if (!mounted) return;
+      pastSearches.add(result);
+      noResults.value = result.results.isEmpty;
+      currentSearch.value = result;
+    } finally {
+      isSearching.value = false;
+      if (_membershipRefreshPending && mounted) {
+        _membershipRefreshPending = false;
+        final pendingTerm = currentSearchTerm.value;
+        if (pendingTerm != null && pendingTerm.length >= 3) {
+          unawaited(search(pendingTerm, force: true));
+        }
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _membershipSubscription?.cancel();
+    textEditingController.dispose();
+    focusNode.dispose();
+    super.dispose();
   }
 
   @override
@@ -146,17 +206,18 @@ class SearchViewState extends State<SearchView> with ThemeHelpers {
       bool showSenderFilter = !isNotFromMe.value && !isFromMe.value && (selectedChat.value?.isGroup ?? true);
 
       return PopScope(
-          canPop: false,
-          onPopInvokedWithResult: <T>(bool didPop, T? result) {
-            if (didPop) return;
-            if (panelController.status != SlidingUpPanelStatus.collapsed) {
-              panelController.collapse();
-            } else {
-              final NavigatorState navigator = Navigator.of(context);
-              navigator.pop();
-            }
-          },
-          child: Stack(children: [
+        canPop: false,
+        onPopInvokedWithResult: <T>(bool didPop, T? result) {
+          if (didPop) return;
+          if (panelController.status != SlidingUpPanelStatus.collapsed) {
+            panelController.collapse();
+          } else {
+            final NavigatorState navigator = Navigator.of(context);
+            navigator.pop();
+          }
+        },
+        child: Stack(
+          children: [
             SettingsScaffold(
               title: "Search",
               initialHeader: null,
@@ -181,70 +242,78 @@ class SearchViewState extends State<SearchView> with ThemeHelpers {
                           ),
                           const SizedBox(width: 10),
                           Expanded(
-                              child: Text(
-                            "Enter at least 3 characters to begin a search",
-                            style: context.theme.textTheme.bodySmall!
-                                .copyWith(color: context.theme.colorScheme.onSurfaceVariant),
-                          )),
+                            child: Text(
+                              "Enter at least 3 characters to begin a search",
+                              style: context.theme.textTheme.bodySmall!.copyWith(
+                                color: context.theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ),
                         ],
                       ),
                     ),
                     Padding(
                       padding: const EdgeInsets.only(left: 15, right: 15, top: 5),
-                      child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                        Flexible(
-                          child: ConversationSearchField(
-                            controller: textEditingController,
-                            focusNode: focusNode,
-                            isSearching: isSearching.value,
-                            onSubmitted: search,
-                            padding: EdgeInsets.zero,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Flexible(
+                            child: ConversationSearchField(
+                              controller: textEditingController,
+                              focusNode: focusNode,
+                              isSearching: isSearching.value,
+                              onSubmitted: search,
+                              padding: EdgeInsets.zero,
+                            ),
                           ),
-                        ),
-                        Container(
+                          Container(
                             margin: const EdgeInsets.only(left: 10),
                             width: 35,
                             height: 40,
-                            child: Stack(children: [
-                              if (filterCount > 0)
-                                Positioned(
-                                  top: -4,
-                                  right: 0,
-                                  child: Container(
-                                    padding: const EdgeInsets.all(5),
-                                    decoration: BoxDecoration(
-                                      color: context.theme.colorScheme.primary,
-                                      shape: BoxShape.circle,
+                            child: Stack(
+                              children: [
+                                if (filterCount > 0)
+                                  Positioned(
+                                    top: -4,
+                                    right: 0,
+                                    child: Container(
+                                      padding: const EdgeInsets.all(5),
+                                      decoration: BoxDecoration(
+                                        color: context.theme.colorScheme.primary,
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: Text(
+                                        filterCount.toString(),
+                                        style: context.theme.textTheme.bodySmall!.copyWith(
+                                          color: context.theme.colorScheme.onPrimary,
+                                        ),
+                                      ),
                                     ),
-                                    child: Text(
-                                      filterCount.toString(),
-                                      style: context.theme.textTheme.bodySmall!
-                                          .copyWith(color: context.theme.colorScheme.onPrimary),
+                                  ),
+                                Container(
+                                  margin: const EdgeInsets.only(left: 5),
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(top: 10),
+                                    child: InkWell(
+                                      onTap: () {
+                                        HapticFeedback.lightImpact();
+                                        if (focusNode.hasFocus) {
+                                          focusNode.unfocus();
+                                        }
+
+                                        if (panelController.status != SlidingUpPanelStatus.expanded) {
+                                          panelController.expand();
+                                        }
+                                      },
+                                      child: Icon(Icons.tune, color: context.theme.colorScheme.primary),
                                     ),
                                   ),
                                 ),
-                              Container(
-                                  margin: const EdgeInsets.only(left: 5),
-                                  child: Padding(
-                                      padding: const EdgeInsets.only(top: 10),
-                                      child: InkWell(
-                                        onTap: () {
-                                          HapticFeedback.lightImpact();
-                                          if (focusNode.hasFocus) {
-                                            focusNode.unfocus();
-                                          }
-
-                                          if (panelController.status != SlidingUpPanelStatus.expanded) {
-                                            panelController.expand();
-                                          }
-                                        },
-                                        child: Icon(
-                                          Icons.tune,
-                                          color: context.theme.colorScheme.primary,
-                                        ),
-                                      )))
-                            ]))
-                      ]),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                     if (!kIsWeb)
                       Obx(() {
@@ -275,19 +344,13 @@ class SearchViewState extends State<SearchView> with ThemeHelpers {
                             children: [
                               const Row(
                                 children: [
-                                  Padding(
-                                    padding: EdgeInsets.all(8.0),
-                                    child: Text("Search Device"),
-                                  ),
+                                  Padding(padding: EdgeInsets.all(8.0), child: Text("Search Device")),
                                   Icon(Icons.storage_outlined, size: 16),
                                 ],
                               ),
                               const Row(
                                 children: [
-                                  Padding(
-                                    padding: EdgeInsets.all(8.0),
-                                    child: Text("Search Mac"),
-                                  ),
+                                  Padding(padding: EdgeInsets.all(8.0), child: Text("Search Mac")),
                                   Icon(Icons.cloud_outlined, size: 16),
                                 ],
                               ),
@@ -298,122 +361,112 @@ class SearchViewState extends State<SearchView> with ThemeHelpers {
                     Divider(color: context.theme.colorScheme.outline.withValues(alpha: 0.75)),
                     if (!isSearching.value && noResults.value)
                       Padding(
-                          padding: const EdgeInsets.only(top: 25.0),
-                          child: Center(child: Text("No results found!", style: context.theme.textTheme.bodyLarge))),
+                        padding: const EdgeInsets.only(top: 25.0),
+                        child: Center(child: Text("No results found!", style: context.theme.textTheme.bodyLarge)),
+                      ),
                   ]),
                 ),
                 if (!isSearching.value && currentSearch.value != null)
                   SliverList(
-                    delegate: SliverChildBuilderDelegate(
-                      (context, index) {
-                        TextStyle subtitleStyle = context.theme.textTheme.bodySmall!
-                            .copyWith(color: context.theme.colorScheme.outline, height: 1.5)
-                            .apply(fontSizeFactor: SettingsSvc.settings.skin.value == Skins.Material ? 1.05 : 1.0);
+                    delegate: SliverChildBuilderDelegate((context, index) {
+                      TextStyle subtitleStyle = context.theme.textTheme.bodySmall!
+                          .copyWith(color: context.theme.colorScheme.outline, height: 1.5)
+                          .apply(fontSizeFactor: SettingsSvc.settings.skin.value == Skins.Material ? 1.05 : 1.0);
 
-                        final chat = currentSearch.value!.results[index].chat;
-                        final message = currentSearch.value!.results[index].message;
+                      final result = currentSearch.value!.results[index];
+                      final chat = result.presentationChat;
+                      final message = result.message;
 
-                        // Create the textspans
-                        List<InlineSpan> spans = [];
+                      // Create the textspans
+                      List<InlineSpan> spans = [];
 
-                        // Get the current position of the search term
-                        int termStart = message.fullText.toLowerCase().indexOf(currentSearchTerm.value!.toLowerCase());
-                        int termEnd = termStart + currentSearchTerm.value!.length;
+                      // Get the current position of the search term
+                      int termStart = message.fullText.toLowerCase().indexOf(currentSearchTerm.value!.toLowerCase());
+                      int termEnd = termStart + currentSearchTerm.value!.length;
 
-                        if (termStart >= 0) {
-                          // We only want a snippet of the text, so only get a 50x50 range
-                          // of characters from the string, with the search term in the middle
-                          String subText = message.fullText.substring(
-                            (termStart - 50).clamp(0, double.infinity).toInt(),
-                            (termEnd + 50).clamp(0, message.fullText.length),
-                          );
+                      if (termStart >= 0) {
+                        // We only want a snippet of the text, so only get a 50x50 range
+                        // of characters from the string, with the search term in the middle
+                        String subText = message.fullText.substring(
+                          (termStart - 50).clamp(0, double.infinity).toInt(),
+                          (termEnd + 50).clamp(0, message.fullText.length),
+                        );
 
-                          // Recalculate the term position in the snippet
-                          termStart = subText.toLowerCase().indexOf(currentSearchTerm.value!.toLowerCase());
-                          termEnd = termStart + currentSearchTerm.value!.length;
+                        // Recalculate the term position in the snippet
+                        termStart = subText.toLowerCase().indexOf(currentSearchTerm.value!.toLowerCase());
+                        termEnd = termStart + currentSearchTerm.value!.length;
 
-                          // Add the beginning string
-                          spans.add(TextSpan(text: subText.substring(0, termStart).trimLeft(), style: subtitleStyle));
+                        // Add the beginning string
+                        spans.add(TextSpan(text: subText.substring(0, termStart).trimLeft(), style: subtitleStyle));
 
-                          // Add the search term (bolded with color)
-                          spans.add(
-                            TextSpan(
-                                text: subText.substring(termStart, termEnd),
-                                style:
-                                    subtitleStyle.apply(color: context.theme.colorScheme.primary, fontWeightDelta: 2)),
-                          );
-
-                          // Add the ending string
-                          spans.add(TextSpan(
-                              text: subText.substring(termEnd, subText.length).trimRight(), style: subtitleStyle));
-                        } else {
-                          spans.add(TextSpan(text: message.text, style: subtitleStyle));
-                        }
-
-                        return Container(
-                          decoration: BoxDecoration(
-                            border: !SettingsSvc.settings.hideDividers.value
-                                ? Border(
-                                    bottom: BorderSide(
-                                      color: context.theme.colorScheme.surface.oppositeLightenOrDarken(15),
-                                      width: 0.5,
-                                    ),
-                                  )
-                                : null,
-                          ),
-                          child: ListTile(
-                            mouseCursor: MouseCursor.defer,
-                            title: RichText(
-                              text: TextSpan(
-                                children: MessageHelper.buildEmojiText(
-                                  ChatsSvc.getChatState(chat.guid)?.title.value ?? chat.getTitle(),
-                                  context.theme.textTheme.bodyLarge!,
-                                ),
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            subtitle: RichText(
-                              text: TextSpan(
-                                children: spans,
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                              maxLines: SettingsSvc.settings.denseChatTiles.value
-                                  ? 1
-                                  : material
-                                      ? 3
-                                      : 2,
-                            ),
-                            leading: ContactAvatarGroupWidget(
-                              chat: chat,
-                              size: 40,
-                              editable: false,
-                            ),
-                            trailing: Text(
-                              buildDate(message.dateCreated),
-                              textAlign: TextAlign.right,
-                              style: context.theme.textTheme.bodySmall,
-                              overflow: TextOverflow.clip,
-                            ),
-                            onTap: () {
-                              final service = maybeFindMessagesSvc(chat.guid) ?? MessagesService(chat.guid);
-                              service.method = local.value ? SearchMode.local.name : SearchMode.network.name;
-                              service.struct.addMessages([message]);
-                              NavigationSvc.pushAndRemoveUntil(
-                                context,
-                                ConversationView(
-                                  chat: chat,
-                                  customService: service,
-                                  initialScrollToGuid: message.guid,
-                                ),
-                                (route) => route.isFirst,
-                              );
-                            },
+                        // Add the search term (bolded with color)
+                        spans.add(
+                          TextSpan(
+                            text: subText.substring(termStart, termEnd),
+                            style: subtitleStyle.apply(color: context.theme.colorScheme.primary, fontWeightDelta: 2),
                           ),
                         );
-                      },
-                      childCount: currentSearch.value!.results.length,
-                    ),
-                  )
+
+                        // Add the ending string
+                        spans.add(
+                          TextSpan(text: subText.substring(termEnd, subText.length).trimRight(), style: subtitleStyle),
+                        );
+                      } else {
+                        spans.add(TextSpan(text: message.text, style: subtitleStyle));
+                      }
+
+                      return Container(
+                        decoration: BoxDecoration(
+                          border: !SettingsSvc.settings.hideDividers.value
+                              ? Border(
+                                  bottom: BorderSide(
+                                    color: context.theme.colorScheme.surface.oppositeLightenOrDarken(15),
+                                    width: 0.5,
+                                  ),
+                                )
+                              : null,
+                        ),
+                        child: ListTile(
+                          mouseCursor: MouseCursor.defer,
+                          title: RichText(
+                            text: TextSpan(
+                              children: MessageHelper.buildEmojiText(
+                                ChatsSvc.getChatState(chat.guid)?.title.value ?? chat.getTitle(),
+                                context.theme.textTheme.bodyLarge!,
+                              ),
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          subtitle: RichText(
+                            text: TextSpan(children: spans),
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: SettingsSvc.settings.denseChatTiles.value
+                                ? 1
+                                : material
+                                ? 3
+                                : 2,
+                          ),
+                          leading: ContactAvatarGroupWidget(chat: chat, size: 40, editable: false),
+                          trailing: Text(
+                            buildDate(message.dateCreated),
+                            textAlign: TextAlign.right,
+                            style: context.theme.textTheme.bodySmall,
+                            overflow: TextOverflow.clip,
+                          ),
+                          onTap: () {
+                            final service = maybeFindMessagesSvc(chat.guid) ?? MessagesService(chat.guid);
+                            service.method = local.value ? SearchMode.local.name : SearchMode.network.name;
+                            service.struct.addMessages([message]);
+                            NavigationSvc.pushAndRemoveUntil(
+                              context,
+                              ConversationView(chat: chat, customService: service, initialScrollToGuid: message.guid),
+                              (route) => route.isFirst,
+                            );
+                          },
+                        ),
+                      );
+                    }, childCount: currentSearch.value!.results.length),
+                  ),
               ],
             ),
             SlidingUpPanelWidget(
@@ -421,33 +474,31 @@ class SearchViewState extends State<SearchView> with ThemeHelpers {
               anchor: 1,
               controlHeight: 0,
               enableOnTap: false,
-              child: Column(children: [
-                Expanded(
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTapUp: (a_) {
-                      if (panelController.status != SlidingUpPanelStatus.collapsed) {
-                        panelController.collapse();
-                      }
-                    },
+              child: Column(
+                children: [
+                  Expanded(
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTapUp: (a_) {
+                        if (panelController.status != SlidingUpPanelStatus.collapsed) {
+                          panelController.collapse();
+                        }
+                      },
+                    ),
                   ),
-                ),
-                Container(
-                  decoration: BoxDecoration(
-                    borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-                    color: tileColor,
-                  ),
-                  height: 255,
-                  padding: const EdgeInsets.only(left: 10, right: 10, bottom: 20, top: 20),
-                  child: Column(children: [
-                    Center(
-                        child: Text(
-                      "Search Filters",
-                      style: context.theme.textTheme.headlineSmall,
-                    )),
-                    Material(
-                        color: Colors.transparent,
-                        child: Padding(
+                  Container(
+                    decoration: BoxDecoration(
+                      borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+                      color: tileColor,
+                    ),
+                    height: 255,
+                    padding: const EdgeInsets.only(left: 10, right: 10, bottom: 20, top: 20),
+                    child: Column(
+                      children: [
+                        Center(child: Text("Search Filters", style: context.theme.textTheme.headlineSmall)),
+                        Material(
+                          color: Colors.transparent,
+                          child: Padding(
                             padding: const EdgeInsets.only(top: 10),
                             child: Wrap(
                               direction: Axis.horizontal,
@@ -468,15 +519,20 @@ class SearchViewState extends State<SearchView> with ThemeHelpers {
                                       ? Text(
                                           "Since ${buildFullDate(sinceDate.value!, includeTime: sinceDate.value!.isToday(), useTodayYesterday: true)}",
                                           style: TextStyle(
-                                              fontSize: 14,
-                                              fontWeight: FontWeight.normal,
-                                              color: context.theme.colorScheme.onSurface),
-                                          overflow: TextOverflow.ellipsis)
-                                      : Text('Filter by Date',
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.normal,
+                                            color: context.theme.colorScheme.onSurface,
+                                          ),
+                                          overflow: TextOverflow.ellipsis,
+                                        )
+                                      : Text(
+                                          'Filter by Date',
                                           style: TextStyle(
-                                              fontSize: 14,
-                                              fontWeight: FontWeight.normal,
-                                              color: context.theme.colorScheme.onSurface)),
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.normal,
+                                            color: context.theme.colorScheme.onSurface,
+                                          ),
+                                        ),
                                   onDeleted: sinceDate.value == null
                                       ? null
                                       : () {
@@ -486,17 +542,20 @@ class SearchViewState extends State<SearchView> with ThemeHelpers {
                                           currentSearch.value = null;
                                         },
                                   onPressed: () async {
-                                    sinceDate.value = await showTimeframePicker("Since When?", context,
-                                        customTimeframes: {
-                                          "1 Hour": 1,
-                                          "1 Day": 24,
-                                          "1 Week": 168,
-                                          "1 Month": 720,
-                                          "6 Months": 4320,
-                                          "1 Year": 8760,
-                                        },
-                                        selectionSuffix: "Ago",
-                                        useTodayYesterday: true);
+                                    sinceDate.value = await showTimeframePicker(
+                                      "Since When?",
+                                      context,
+                                      customTimeframes: {
+                                        "1 Hour": 1,
+                                        "1 Day": 24,
+                                        "1 Week": 168,
+                                        "1 Month": 720,
+                                        "6 Months": 4320,
+                                        "1 Year": 8760,
+                                      },
+                                      selectionSuffix: "Ago",
+                                      useTodayYesterday: true,
+                                    );
                                     isSearching.value = false;
                                     noResults.value = false;
                                     currentSearch.value = null;
@@ -506,27 +565,33 @@ class SearchViewState extends State<SearchView> with ThemeHelpers {
                                   avatar: CircleAvatar(
                                     backgroundColor: context.theme.colorScheme.primaryContainer,
                                     child: Padding(
-                                        padding: const EdgeInsets.only(left: 1, top: 1),
-                                        child: Icon(
-                                          Icons.chat_bubble_outline_rounded,
-                                          color: context.theme.colorScheme.primary,
-                                          size: 12,
-                                        )),
+                                      padding: const EdgeInsets.only(left: 1, top: 1),
+                                      child: Icon(
+                                        Icons.chat_bubble_outline_rounded,
+                                        color: context.theme.colorScheme.primary,
+                                        size: 12,
+                                      ),
+                                    ),
                                   ),
                                   label: selectedChat.value != null
                                       ? Text(
                                           ChatsSvc.getChatState(selectedChat.value!.guid)?.title.value ??
                                               selectedChat.value!.getTitle(),
                                           style: TextStyle(
-                                              fontSize: 14,
-                                              fontWeight: FontWeight.normal,
-                                              color: context.theme.colorScheme.onSurface),
-                                          overflow: TextOverflow.ellipsis)
-                                      : Text('Filter by Chat',
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.normal,
+                                            color: context.theme.colorScheme.onSurface,
+                                          ),
+                                          overflow: TextOverflow.ellipsis,
+                                        )
+                                      : Text(
+                                          'Filter by Chat',
                                           style: TextStyle(
-                                              fontSize: 14,
-                                              fontWeight: FontWeight.normal,
-                                              color: context.theme.colorScheme.onSurface)),
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.normal,
+                                            color: context.theme.colorScheme.onSurface,
+                                          ),
+                                        ),
                                   onDeleted: selectedChat.value == null
                                       ? null
                                       : () {
@@ -537,14 +602,17 @@ class SearchViewState extends State<SearchView> with ThemeHelpers {
                                         },
                                   onPressed: () {
                                     // Push a route that allows the user to select a chat
-                                    NavigationSvc.push(context, ChatSelectorView(
-                                      onSelect: (chat) {
-                                        selectedChat.value = chat;
-                                        isSearching.value = false;
-                                        noResults.value = false;
-                                        currentSearch.value = null;
-                                      },
-                                    ));
+                                    NavigationSvc.push(
+                                      context,
+                                      ChatSelectorView(
+                                        onSelect: (chat) {
+                                          selectedChat.value = chat;
+                                          isSearching.value = false;
+                                          noResults.value = false;
+                                          currentSearch.value = null;
+                                        },
+                                      ),
+                                    );
                                   },
                                 ),
                                 if (showSenderFilter)
@@ -558,17 +626,23 @@ class SearchViewState extends State<SearchView> with ThemeHelpers {
                                       ),
                                     ),
                                     label: selectedHandle.value != null
-                                        ? Text(selectedHandle.value!.displayName,
+                                        ? Text(
+                                            selectedHandle.value!.displayName,
                                             style: TextStyle(
-                                                fontSize: 14,
-                                                fontWeight: FontWeight.normal,
-                                                color: context.theme.colorScheme.onSurface),
-                                            overflow: TextOverflow.ellipsis)
-                                        : Text('Filter by Sender',
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.normal,
+                                              color: context.theme.colorScheme.onSurface,
+                                            ),
+                                            overflow: TextOverflow.ellipsis,
+                                          )
+                                        : Text(
+                                            'Filter by Sender',
                                             style: TextStyle(
-                                                fontSize: 14,
-                                                fontWeight: FontWeight.normal,
-                                                color: context.theme.colorScheme.onSurface)),
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.normal,
+                                              color: context.theme.colorScheme.onSurface,
+                                            ),
+                                          ),
                                     onDeleted: selectedHandle.value == null
                                         ? null
                                         : () {
@@ -580,16 +654,17 @@ class SearchViewState extends State<SearchView> with ThemeHelpers {
                                     onPressed: () {
                                       // Push a route that allows the user to select a chat
                                       NavigationSvc.push(
-                                          context,
-                                          HandleSelectorView(
-                                            forChat: selectedChat.value,
-                                            onSelect: (handle) {
-                                              selectedHandle.value = handle;
-                                              isSearching.value = false;
-                                              noResults.value = false;
-                                              currentSearch.value = null;
-                                            },
-                                          ));
+                                        context,
+                                        HandleSelectorView(
+                                          forChat: selectedChat.value,
+                                          onSelect: (handle) {
+                                            selectedHandle.value = handle;
+                                            isSearching.value = false;
+                                            noResults.value = false;
+                                            currentSearch.value = null;
+                                          },
+                                        ),
+                                      );
                                     },
                                   ),
                                 if (selectedHandle.value == null && !isNotFromMe.value)
@@ -597,11 +672,14 @@ class SearchViewState extends State<SearchView> with ThemeHelpers {
                                     showCheckmark: true,
                                     selected: isFromMe.value,
                                     checkmarkColor: context.theme.colorScheme.primary,
-                                    label: Text('From You',
-                                        style: TextStyle(
-                                            fontSize: 14,
-                                            fontWeight: FontWeight.normal,
-                                            color: context.theme.colorScheme.onSurface)),
+                                    label: Text(
+                                      'From You',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.normal,
+                                        color: context.theme.colorScheme.onSurface,
+                                      ),
+                                    ),
                                     onSelected: (selected) {
                                       isFromMe.value = selected;
                                       isSearching.value = false;
@@ -614,11 +692,14 @@ class SearchViewState extends State<SearchView> with ThemeHelpers {
                                     showCheckmark: true,
                                     selected: isNotFromMe.value,
                                     checkmarkColor: context.theme.colorScheme.primary,
-                                    label: Text('Not From You',
-                                        style: TextStyle(
-                                            fontSize: 14,
-                                            fontWeight: FontWeight.normal,
-                                            color: context.theme.colorScheme.onSurface)),
+                                    label: Text(
+                                      'Not From You',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.normal,
+                                        color: context.theme.colorScheme.onSurface,
+                                      ),
+                                    ),
                                     onSelected: (selected) {
                                       isNotFromMe.value = selected;
                                       isSearching.value = false;
@@ -627,12 +708,18 @@ class SearchViewState extends State<SearchView> with ThemeHelpers {
                                     },
                                   ),
                               ],
-                            ))),
-                  ]),
-                )
-              ]),
-            )
-          ]));
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
     });
   }
 }

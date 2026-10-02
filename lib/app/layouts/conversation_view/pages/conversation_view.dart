@@ -15,6 +15,7 @@ import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/services/ui/chat/logical_conversation_route.dart';
 import 'package:bluebubbles/services/ui/chat/logical_conversation_view.dart';
+import 'package:bluebubbles/services/ui/chat/logical_operator_explanations.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -41,7 +42,7 @@ class ConversationView extends StatefulWidget {
 }
 
 class ConversationViewState extends State<ConversationView> with ThemeHelpers<ConversationView>, RouteAware {
-  late final ConversationViewController controller = cvc(chat, tag: widget.customService?.tag);
+  late final ConversationViewController controller = cvc(widget.chat, tag: widget.customService?.tag);
 
   // Cache actions map to avoid rebuilding on every frame
   late final Map<Type, Action<Intent>> _actionsMap;
@@ -55,7 +56,7 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
   late final Widget _bodyContent;
   late final PreferredSizeWidget _appBar;
 
-  Chat get chat => widget.chat;
+  Chat get chat => controller.chat;
 
   void _onPanUpdate(DragUpdateDetails details) {
     if (!mounted) return;
@@ -75,7 +76,7 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
     ChatsSvc.setActiveChatSync(chat);
     ChatsSvc.activeChat?.controller = controller;
     Logger.debug("Conversation View initialized for ${chat.guid}");
-    if (ChatsSvc.isApprovedLogicalSource(chat)) {
+    if (ChatsSvc.hasBuild99WriterCapability(chat)) {
       unawaited(ChatsSvc.prepareLogicalRoute(chat, force: true));
     }
 
@@ -149,7 +150,7 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
                       child: Stack(
                         children: [
                           MessagesView(
-                            key: Key(chat.guid),
+                            key: Key(ChatsSvc.conversationKeyFor(chat)),
                             customService: widget.customService,
                             initialScrollToGuid: widget.initialScrollToGuid,
                             controller: controller,
@@ -192,6 +193,15 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
   }
 
   @override
+  void didUpdateWidget(covariant ConversationView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.chat, widget.chat)) {
+      controller.rebindPresentation(widget.chat);
+      ChatsSvc.setActiveChatSync(controller.chat, clearNotifications: false, save: false);
+    }
+  }
+
+  @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     final route = ModalRoute.of(context);
@@ -221,67 +231,101 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
 
   @override
   Widget build(BuildContext context) {
-    final windowEffect = SettingsSvc.settings.windowEffect.value;
-    final chatState = ChatsSvc.getOrCreateChatState(chat);
-    return ChatStateScope(
-      chatState: chatState,
-      child: Obx(() {
-        final isDark = ThemeSvc.inDarkMode(context);
-        chatState.themeVersion.value;
-        final themeName = isDark ? chatState.customThemeDark.value : chatState.customThemeLight.value;
-        final baseTheme = ThemeStruct.resolveByName(themeName, isDark ? Brightness.dark : Brightness.light).data;
+    return Obx(() {
+      final windowEffect = SettingsSvc.settings.windowEffect.value;
+      final chatState = ChatsSvc.getOrCreateChatState(controller.chat);
+      return ChatStateScope(
+        chatState: chatState,
+        child: Builder(
+          builder: (context) {
+            final isDark = ThemeSvc.inDarkMode(context);
+            chatState.themeVersion.value;
+            final themeName = isDark ? chatState.customThemeDark.value : chatState.customThemeLight.value;
+            final baseTheme = ThemeStruct.resolveByName(themeName, isDark ? Brightness.dark : Brightness.light).data;
 
-        final colorScheme = baseTheme.colorScheme;
-        final bubbleColors = baseTheme.extensions[BubbleColors] as BubbleColors?;
-        final bubbleColor = bubbleColors != null
-            ? (chat.isIMessage
-                  ? bubbleColors.iMessageBubbleColor ?? colorScheme.iMessageBubble
-                  : bubbleColors.smsBubbleColor ?? colorScheme.smsBubble)
-            : colorScheme.bubble(context, chat.isIMessage);
-        final onBubbleColor = bubbleColors != null
-            ? (chat.isIMessage
-                  ? bubbleColors.oniMessageBubbleColor ?? colorScheme.oniMessageBubble
-                  : bubbleColors.onSmsBubbleColor ?? colorScheme.onSmsBubble)
-            : colorScheme.onBubble(context, chat.isIMessage);
+            final colorScheme = baseTheme.colorScheme;
+            final bubbleColors = baseTheme.extensions[BubbleColors] as BubbleColors?;
+            final bubbleColor = bubbleColors != null
+                ? (chat.isIMessage
+                      ? bubbleColors.iMessageBubbleColor ?? colorScheme.iMessageBubble
+                      : bubbleColors.smsBubbleColor ?? colorScheme.smsBubble)
+                : colorScheme.bubble(context, chat.isIMessage);
+            final onBubbleColor = bubbleColors != null
+                ? (chat.isIMessage
+                      ? bubbleColors.oniMessageBubbleColor ?? colorScheme.oniMessageBubble
+                      : bubbleColors.onSmsBubbleColor ?? colorScheme.onSmsBubble)
+                : colorScheme.onBubble(context, chat.isIMessage);
 
-        return Theme(
-          data: baseTheme.copyWith(
-            // Override primary color with our custom bubble color.
-            primaryColor: bubbleColor,
-            colorScheme: colorScheme.copyWith(primary: bubbleColor, onPrimary: onBubbleColor),
-          ),
-          child: PopScope(
-            canPop: false,
-            onPopInvokedWithResult: <T>(bool didPop, T? result) async {
-              if (didPop) return;
-              if (controller.inSelectMode.value) {
-                controller.inSelectMode.value = false;
-                controller.selected.clear();
-                return;
-              }
-              if (controller.showAttachmentPicker.value) {
-                controller.showAttachmentPicker.value = false;
-                controller.updateWidgets<ConversationTextField>(null);
-                return;
-              }
-              if (LifecycleSvc.isBubble) {
-                SystemNavigator.pop();
-              }
-              controller.close();
-              if (LifecycleSvc.isBubble) return;
-              return Navigator.of(context).pop();
-            },
-            child: BBScaffold(
-              backgroundColor: windowEffect != WindowEffect.disabled ? Colors.transparent : colorScheme.surface,
-              extendBodyBehindAppBar: true,
-              appBar: _appBar,
-              body: Actions(actions: _actionsMap, child: _bodyContent),
+            return Theme(
+              data: baseTheme.copyWith(
+                // Override primary color with our custom bubble color.
+                primaryColor: bubbleColor,
+                colorScheme: colorScheme.copyWith(primary: bubbleColor, onPrimary: onBubbleColor),
+              ),
+              child: PopScope(
+                canPop: false,
+                onPopInvokedWithResult: <T>(bool didPop, T? result) async {
+                  if (didPop) return;
+                  if (controller.inSelectMode.value) {
+                    controller.inSelectMode.value = false;
+                    controller.selected.clear();
+                    return;
+                  }
+                  if (controller.showAttachmentPicker.value) {
+                    controller.showAttachmentPicker.value = false;
+                    controller.updateWidgets<ConversationTextField>(null);
+                    return;
+                  }
+                  if (LifecycleSvc.isBubble) {
+                    SystemNavigator.pop();
+                  }
+                  controller.close();
+                  if (LifecycleSvc.isBubble) return;
+                  return Navigator.of(context).pop();
+                },
+                child: BBScaffold(
+                  backgroundColor: windowEffect != WindowEffect.disabled ? Colors.transparent : colorScheme.surface,
+                  extendBodyBehindAppBar: true,
+                  appBar: _appBar,
+                  body: Actions(actions: _actionsMap, child: _bodyContent),
+                ),
+              ),
+            );
+          },
+        ),
+      );
+    });
+  }
+}
+
+/// Fixed, non-interactive write boundary for a certified conversation that
+/// has read identity but no banked Build 99 writer capability.
+class CertifiedLogicalWriteUnavailableBanner extends StatelessWidget {
+  const CertifiedLogicalWriteUnavailableBanner({super.key});
+
+  @override
+  Widget build(BuildContext context) => const SafeArea(
+    top: false,
+    bottom: false,
+    child: Padding(
+      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: <Widget>[
+          Icon(Icons.lock_outline, size: 18),
+          SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              'Sending unavailable — this certified conversation is read-only',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
             ),
           ),
-        );
-      }),
-    );
-  }
+        ],
+      ),
+    ),
+  );
 }
 
 class _LogicalComposerGate extends StatelessWidget {
@@ -291,20 +335,7 @@ class _LogicalComposerGate extends StatelessWidget {
   final GestureDragUpdateCallback onPanUpdate;
 
   static String _blockedReason(LogicalRouteRuntimeStatus status) {
-    switch (status.reason) {
-      case 'CURRENT_GENERATION_EXECUTION_UNCORROBORATED':
-        return 'no current writer: latest send not yet confirmed';
-      case 'CURRENT_WRITER_ROUTE_EXECUTION_UNCORROBORATED':
-        return 'no current writer: route never confirmed';
-      case 'CURRENT_GENERATION_HAS_NO_CANONICAL_ROUTE':
-        return 'no current writer: no writable route';
-      case 'NO_SUCCESSFUL_OUTBOUND_EXECUTION_PROVENANCE':
-        return 'no current writer: no confirmed send yet';
-    }
-    if (status.authorityState == 'SEND_BLOCKED_TRUE_MULTI_WRITER_AMBIGUITY') {
-      return 'two current writers';
-    }
-    return status.reason;
+    return logicalRouteOperatorReason(status.reason, authorityState: status.authorityState);
   }
 
   static void _showDiagnostics(BuildContext context, LogicalRouteRuntimeStatus status) {
@@ -321,9 +352,7 @@ class _LogicalComposerGate extends StatelessWidget {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Send authority'),
-        content: SingleChildScrollView(
-          child: SelectableText(const JsonEncoder.withIndent('  ').convert(payload)),
-        ),
+        content: SingleChildScrollView(child: SelectableText(const JsonEncoder.withIndent('  ').convert(payload))),
         actions: [TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close'))],
       ),
     );
@@ -331,15 +360,18 @@ class _LogicalComposerGate extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (!ChatsSvc.hasBuild99WriterCapability(controller.chat)) {
+      return const CertifiedLogicalWriteUnavailableBanner();
+    }
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         Obx(() {
-          final status = ChatsSvc.logicalRouteRuntimeStatus.value;
+          final status = ChatsSvc.logicalRouteRuntimeStatusFor(controller.chat);
           final ledger = LogicalAdmissionLedger.fromEntries(PrefsSvc.messaging.loadLogicalAdmissionLedger());
           final ambiguousOutcome =
               !ledger.isCorrupt &&
-              ledger.hasAmbiguousOutcomeForLogical(LogicalConversationViewPolicy.comcastNodeUpdates.id);
+              ledger.hasAmbiguousOutcomeForLogical(LogicalConversationViewPolicy.bankedLogicalConversationId);
           final transportBlocked =
               status.isQualified && status.sendDisposition == LogicalTransportSendDisposition.blocked;
           if (status.isQualified && !transportBlocked && !ambiguousOutcome) {

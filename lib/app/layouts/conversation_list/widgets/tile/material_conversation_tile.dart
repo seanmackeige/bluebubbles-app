@@ -33,38 +33,35 @@ class _MaterialConversationTileState extends CustomState<MaterialConversationTil
     final leading = ChatLeading(controller: controller);
     final child = Material(
       color: Colors.transparent,
-      borderRadius: const BorderRadius.only(
-        topLeft: Radius.circular(25),
-        bottomLeft: Radius.circular(25),
-      ),
+      borderRadius: const BorderRadius.only(topLeft: Radius.circular(25), bottomLeft: Radius.circular(25)),
       child: InkWell(
         mouseCursor: MouseCursor.defer,
         onTap: () => controller.onTap(context),
         onSecondaryTapUp: (details) => controller.onSecondaryTap(Get.context!, details),
         onLongPress: controller.onLongPress,
-        borderRadius: const BorderRadius.only(
-          topLeft: Radius.circular(20),
-          bottomLeft: Radius.circular(20),
-        ),
+        borderRadius: const BorderRadius.only(topLeft: Radius.circular(20), bottomLeft: Radius.circular(20)),
         child: ListTile(
           mouseCursor: MouseCursor.defer,
           dense: SettingsSvc.settings.denseChatTiles.value,
           visualDensity: SettingsSvc.settings.denseChatTiles.value ? VisualDensity.compact : null,
           minVerticalPadding: SettingsSvc.settings.denseChatTiles.value ? 7.5 : 10,
-          title: Obx(() => ChatTitle(
-                parentController: controller,
-                style: context.theme.textTheme.bodyLarge!
-                    .copyWith(
-                      fontWeight: controller.shouldHighlight.value
-                          ? FontWeight.w500
-                          : (ChatsSvc.getChatState(controller.chat.guid)?.hasUnreadMessage.value ?? false)
-                              ? FontWeight.bold
-                              : null,
-                      color: ThemeSvc.isAnyMaterialYouSelected ? context.theme.colorScheme.onSurface : null,
-                    )
-                    .apply(fontSizeFactor: 1.1),
-              )),
-          subtitle: controller.subtitle ??
+          title: Obx(
+            () => ChatTitle(
+              parentController: controller,
+              style: context.theme.textTheme.bodyLarge!
+                  .copyWith(
+                    fontWeight: controller.shouldHighlight.value
+                        ? FontWeight.w500
+                        : (ChatsSvc.getChatState(controller.chat.guid)?.hasUnreadMessage.value ?? false)
+                        ? FontWeight.bold
+                        : null,
+                    color: ThemeSvc.isAnyMaterialYouSelected ? context.theme.colorScheme.onSurface : null,
+                  )
+                  .apply(fontSizeFactor: 1.1),
+            ),
+          ),
+          subtitle:
+              controller.subtitle ??
               Obx(() {
                 final unread = ChatsSvc.getChatState(controller.chat.guid)?.hasUnreadMessage.value ?? false;
                 final isMonet = ThemeSvc.isAnyMaterialYouSelected;
@@ -75,11 +72,11 @@ class _MaterialConversationTileState extends CustomState<MaterialConversationTil
                         fontWeight: unread ? FontWeight.w500 : null,
                         color: controller.shouldHighlight.value || unread
                             ? isMonet
-                                ? context.theme.colorScheme.onSurface
-                                : context.textTheme.bodyMedium!.color
+                                  ? context.theme.colorScheme.onSurface
+                                  : context.textTheme.bodyMedium!.color
                             : isMonet
-                                ? context.theme.colorScheme.onSurfaceVariant
-                                : context.theme.colorScheme.outline,
+                            ? context.theme.colorScheme.onSurfaceVariant
+                            : context.theme.colorScheme.outline,
                         height: 1.5,
                       )
                       .apply(fontSizeFactor: 1.05),
@@ -100,19 +97,16 @@ class _MaterialConversationTileState extends CustomState<MaterialConversationTil
           padding: const EdgeInsets.only(left: 10),
           clipBehavior: Clip.antiAlias,
           decoration: BoxDecoration(
-            borderRadius: const BorderRadius.only(
-              topLeft: Radius.circular(20),
-              bottomLeft: Radius.circular(20),
-            ),
+            borderRadius: const BorderRadius.only(topLeft: Radius.circular(20), bottomLeft: Radius.circular(20)),
             color: controller.isSelected
                 ? context.theme.colorScheme.primaryContainer.withValues(alpha: 0.5)
                 : shouldPartialHighlight
-                    ? context.theme.colorScheme.surfaceContainerHighest
-                    : shouldHighlight
-                        ? context.theme.colorScheme.primaryContainer
-                        : ThemeSvc.isMaterialYouActive(context)
-                            ? context.theme.colorScheme.surface
-                            : null,
+                ? context.theme.colorScheme.surfaceContainerHighest
+                : shouldHighlight
+                ? context.theme.colorScheme.primaryContainer
+                : ThemeSvc.isMaterialYouActive(context)
+                ? context.theme.colorScheme.surface
+                : null,
           ),
           duration: const Duration(milliseconds: 100),
           child: NavigationSvc.isAvatarOnly(context)
@@ -121,10 +115,7 @@ class _MaterialConversationTileState extends CustomState<MaterialConversationTil
                   onTap: () => controller.onTap(context),
                   onSecondaryTapUp: (details) => controller.onSecondaryTap(Get.context!, details),
                   onLongPress: controller.onLongPress,
-                  borderRadius: const BorderRadius.only(
-                    topLeft: Radius.circular(20),
-                    bottomLeft: Radius.circular(20),
-                  ),
+                  borderRadius: const BorderRadius.only(topLeft: Radius.circular(20), bottomLeft: Radius.circular(20)),
                   child: Padding(
                     padding: const EdgeInsets.symmetric(vertical: 10.0, horizontal: 15.0),
                     child: Center(child: leading),
@@ -156,7 +147,8 @@ class _MaterialTrailingState extends CustomState<MaterialTrailing, void, Convers
         final indicator = computeIndicatorText(chatState.latestMessageStatus.value, controller.chat.isGroup);
         final hasError = (message?.error ?? 0) > 0;
         final unread = chatState.hasUnreadMessage.value;
-        final muteType = chatState.muteType.value;
+        final isMuted = ChatsSvc.isConversationMuted(controller.chat);
+        final isPinned = ChatsSvc.isConversationPinned(controller.chat);
         return Column(
           crossAxisAlignment: CrossAxisAlignment.end,
           mainAxisAlignment: MainAxisAlignment.center,
@@ -176,13 +168,13 @@ class _MaterialTrailingState extends CustomState<MaterialTrailing, void, Convers
                         color: hasError
                             ? context.theme.colorScheme.error
                             : controller.shouldHighlight.value || unread
-                                ? context.theme.colorScheme.onSurface
-                                : context.theme.colorScheme.outline,
+                            ? context.theme.colorScheme.onSurface
+                            : context.theme.colorScheme.outline,
                         fontWeight: unread
                             ? FontWeight.w600
                             : controller.shouldHighlight.value
-                                ? FontWeight.w500
-                                : null,
+                            ? FontWeight.w500
+                            : null,
                       )
                       .apply(fontSizeFactor: 1.1),
                   overflow: TextOverflow.clip,
@@ -195,21 +187,17 @@ class _MaterialTrailingState extends CustomState<MaterialTrailing, void, Convers
               mainAxisAlignment: MainAxisAlignment.end,
               mainAxisSize: MainAxisSize.min,
               children: [
-                if (chatState.isPinned.value)
-                  Icon(Icons.push_pin_outlined, size: 18, color: context.theme.colorScheme.outline),
-                if (muteType != "mute" && unread) ...[
-                  if (chatState.isPinned.value) const SizedBox(width: 5),
+                if (isPinned) Icon(Icons.push_pin_outlined, size: 18, color: context.theme.colorScheme.outline),
+                if (!isMuted && unread) ...[
+                  if (isPinned) const SizedBox(width: 5),
                   Container(
                     width: 13,
                     height: 13,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: context.theme.colorScheme.primary,
-                    ),
+                    decoration: BoxDecoration(shape: BoxShape.circle, color: context.theme.colorScheme.primary),
                   ),
                 ],
-                if (muteType == "mute") const SizedBox(width: 5),
-                if (muteType == "mute")
+                if (isMuted) const SizedBox(width: 5),
+                if (isMuted)
                   Icon(
                     Icons.notifications_off_outlined,
                     color: controller.shouldHighlight.value || unread
@@ -245,18 +233,20 @@ class _UnreadIconState extends CustomState<UnreadIcon, void, ConversationTileCon
 
   @override
   Widget build(BuildContext context) {
-    return Obx(() => Padding(
-          padding: const EdgeInsets.only(left: 5.0, right: 5.0),
-          child: (ChatsSvc.getChatState(controller.chat.guid)?.hasUnreadMessage.value ?? false)
-              ? Container(
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(35),
-                    color: context.theme.colorScheme.primary,
-                  ),
-                  width: 10,
-                  height: 10,
-                )
-              : const SizedBox(width: 10),
-        ));
+    return Obx(
+      () => Padding(
+        padding: const EdgeInsets.only(left: 5.0, right: 5.0),
+        child: (ChatsSvc.getChatState(controller.chat.guid)?.hasUnreadMessage.value ?? false)
+            ? Container(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(35),
+                  color: context.theme.colorScheme.primary,
+                ),
+                width: 10,
+                height: 10,
+              )
+            : const SizedBox(width: 10),
+      ),
+    );
   }
 }

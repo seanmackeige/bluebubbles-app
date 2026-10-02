@@ -4,6 +4,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import androidx.core.app.NotificationCompat
@@ -16,6 +17,7 @@ import com.mackeige.bluebubbles.MainActivity
 import com.mackeige.bluebubbles.R
 import com.mackeige.bluebubbles.models.MethodCallHandlerImpl
 import com.mackeige.bluebubbles.services.intents.InternalIntentReceiver
+import com.mackeige.bluebubbles.services.intents.NotificationReactionActionPolicy
 import com.mackeige.bluebubbles.services.system.PushShareTargetsHandler
 import com.mackeige.bluebubbles.utils.Utils
 import io.flutter.plugin.common.MethodCall
@@ -36,6 +38,9 @@ class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
         val channelId: String = call.argument("channel_id")!!
         // chat details
         val chatGuid: String = call.argument("chat_guid")!!
+        val conversationKey: String = call.argument<String>("conversation_key") ?: chatGuid
+        val sourceChatGuid: String = call.argument<String>("source_chat_guid") ?: chatGuid
+        val notificationTag: String = call.argument<String>("notification_tag") ?: Constants.newMessageNotificationTag
         val chatTitle: String = call.argument("chat_title")!!
         val chatIsGroup: Boolean = call.argument("chat_is_group")!!
         val chatIcon: ByteArray? = call.argument("chat_icon")
@@ -52,22 +57,47 @@ class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
         // reaction settings
         val showReactionAction: Boolean = call.argument("show_reaction_action") ?: false
         val reactionType: String = call.argument("reaction_type") ?: "like"
+        val allowNativeReactionAction = showReactionAction &&
+            NotificationReactionActionPolicy.mayDispatch(
+                NotificationReactionActionPolicy.CURRENT_CONTRACT,
+                NotificationReactionActionPolicy.CURRENT_INTENT_ACTION,
+                conversationKey,
+                chatGuid
+            )
+        val mutationDecision = NotificationMutationPolicy.decide(
+            allowMutatingActions = call.argument<Boolean>("allow_mutating_actions") ?: true,
+            showReactionAction = allowNativeReactionAction,
+        )
 
         // calculate a notification ID based on the chat database ID
         val notificationId: Int = call.argument("chat_id")!!
 
         val notificationManager = context.getSystemService(NotificationManager::class.java)
         
-        // Synchronize to prevent duplicate notifications from concurrent calls
+        // Serialize inspection, style merge, and notify as one native critical
+        // section. Exact duplicate events and distinct concurrent messages
+        // cannot race between activeNotifications and notify().
         synchronized(notificationLock) {
-            // check if the message has already been posted as a notification
-            val notificationPostedAlready = notificationManager.activeNotifications.firstOrNull { it.notification.extras.getString("chatGuid") == chatGuid && it.notification.extras.getString("messageGuid") == messageGuid } != null
-            // don't double post a notification
-            if (notificationPostedAlready) return result.success(null)
-        }
-        
-        // this is used to copy the style, since the notification already exists
-        val chatNotification = notificationManager.activeNotifications.lastOrNull { it.notification.extras.getString("chatGuid") == chatGuid && it.notification.extras.getString("channelId") == channelId }
+            val conversationNotification = notificationManager.activeNotifications.lastOrNull {
+                (it.notification.extras.getString("conversationKey")
+                    ?: it.notification.extras.getString("chatGuid")) == conversationKey
+            }
+            val previousExtras = conversationNotification?.notification?.extras
+            val historyDecision = NotificationEventHistoryPolicy.decide(
+                previousExtras?.getStringArrayList(NotificationEventHistoryPolicy.EXTRA_KEY),
+                previousExtras?.getString("sourceChatGuid") ?: previousExtras?.getString("chatGuid"),
+                previousExtras?.getString("messageGuid"),
+                sourceChatGuid,
+                messageGuid
+            )
+            if (historyDecision.admission != NotificationEventHistoryPolicy.Admission.ADMIT) {
+                return result.success(null)
+            }
+
+            // this is used to copy the style, since the notification already exists
+            val chatNotification = conversationNotification?.takeIf {
+                it.notification.extras.getString("channelId") == channelId
+            }
 
         // build the sender object and push the share target again
         val sender = Person.Builder()
@@ -75,7 +105,9 @@ class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
             .setIcon(contactBitmap)
             .setImportant(true)
             .build()
-        PushShareTargetsHandler().pushShareTarget(context, chatTitle, chatGuid, chatIcon)
+        if (mutationDecision.shareTarget) {
+            PushShareTargetsHandler().pushShareTarget(context, chatTitle, chatGuid, chatIcon, conversationKey)
+        }
 
         // get or create a messaging style
         val style = if (chatNotification != null) {
@@ -98,9 +130,19 @@ class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
         // create a bundle for extra info
         val extras = Bundle()
         extras.putString("chatGuid", chatGuid)
+        extras.putString("conversationKey", conversationKey)
+        extras.putString("sourceChatGuid", sourceChatGuid)
         extras.putString("messageGuid", messageGuid)
+        extras.putString("messageEventHistoryContract", NotificationEventHistoryPolicy.CONTRACT)
+        extras.putString("notificationMutationContract", NotificationMutationPolicy.CONTRACT)
+        extras.putBoolean("allowMutatingActions", mutationDecision.markRead || mutationDecision.reply)
+        extras.putStringArrayList(
+            NotificationEventHistoryPolicy.EXTRA_KEY,
+            ArrayList(historyDecision.encodedHistory)
+        )
+        extras.putString("reactionActionContract", NotificationReactionActionPolicy.CURRENT_CONTRACT)
         extras.putString("channelId", channelId)
-        extras.putString("tag", Constants.newMessageNotificationTag)
+        extras.putString("tag", notificationTag)
         extras.putBoolean("reactionSent", false) // Track if reaction has been sent
 
         // intent to open the conversation in-app
@@ -111,8 +153,9 @@ class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
                 .putExtras(extras)
                 .putExtra("notificationId", notificationId)
                 .putExtra("bubble", false)
+                .setData(Uri.parse("bluebubbles://notification/${Uri.encode(conversationKey)}/open"))
                 .setType("OpenChat"),
-            PendingIntent.FLAG_IMMUTABLE
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
         // intent to swipe away the notification
@@ -122,8 +165,9 @@ class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
             Intent(context, InternalIntentReceiver::class.java)
                 .putExtras(extras)
                 .putExtra("notificationId", notificationId)
+                .setData(Uri.parse("bluebubbles://notification/${Uri.encode(conversationKey)}/delete"))
                 .setType("DeleteNotification"),
-            PendingIntent.FLAG_IMMUTABLE
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
         // intent and action for 'mark as read'
@@ -133,6 +177,7 @@ class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
             Intent(context, InternalIntentReceiver::class.java)
                 .putExtras(extras)
                 .putExtra("notificationId", notificationId)
+                .setData(Uri.parse("bluebubbles://notification/${Uri.encode(conversationKey)}/read"))
                 .setType("MarkChatRead"),
             PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
@@ -148,6 +193,7 @@ class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
             Intent(context, InternalIntentReceiver::class.java)
                 .putExtras(extras)
                 .putExtra("notificationId", notificationId)
+                .setData(Uri.parse("bluebubbles://notification/${Uri.encode(conversationKey)}/reply"))
                 .setType("ReplyChat"),
             PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
@@ -168,8 +214,10 @@ class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
                 .putExtra("notificationId", notificationId)
                 .putExtra("messageText", messageText)
                 .putExtra("reactionType", reactionType)
+                .setAction(NotificationReactionActionPolicy.CURRENT_INTENT_ACTION)
+                .setData(Uri.parse("bluebubbles://notification/${Uri.encode(conversationKey)}/reaction"))
                 .setType("LikeMessage"),
-            PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         val likeActionTitle = if (reactionType == "love") "Love" else "Like"
         val likeAction = NotificationCompat.Action.Builder(0, likeActionTitle, likeIntent)
@@ -185,6 +233,7 @@ class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
                 .putExtras(extras)
                 .putExtra("notificationId", notificationId)
                 .putExtra("bubble", true)
+                .setData(Uri.parse("bluebubbles://notification/${Uri.encode(conversationKey)}/bubble"))
                 .setType("OpenChat"),
             PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
@@ -201,29 +250,33 @@ class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
             .setContentIntent(openConversationIntent)
             .setDeleteIntent(deleteNotificationIntent)
             .setStyle(style)
-            .setAllowSystemGeneratedContextualActions(true)
+            .setAllowSystemGeneratedContextualActions(mutationDecision.reply)
             .setColor(4888294)
-            .addAction(markAsReadAction)
-            .addAction(replyAction)
             .addPerson(sender)
             .addExtras(extras)
+        if (mutationDecision.markRead) {
+            notificationBuilder.addAction(markAsReadAction)
+        }
+        if (mutationDecision.reply) {
+            notificationBuilder.addAction(replyAction)
+        }
 
         // Conditionally add reaction action if enabled
-        if (showReactionAction) {
+        if (mutationDecision.reaction) {
             notificationBuilder.addAction(likeAction)
         }
 
         // Build wearable extender
         val wearableExtender = NotificationCompat.WearableExtender()
-            .addAction(markAsReadAction)
-            .addAction(replyAction)
-        if (showReactionAction) {
+        if (mutationDecision.markRead) wearableExtender.addAction(markAsReadAction)
+        if (mutationDecision.reply) wearableExtender.addAction(replyAction)
+        if (mutationDecision.reaction) {
             wearableExtender.addAction(likeAction)
         }
         notificationBuilder.extend(wearableExtender)
 
         // Only set bubble metadata on Android 11+ (API 29+) where it's supported
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        if (mutationDecision.bubble && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val bubbleMetadata = NotificationCompat.BubbleMetadata.Builder(bubbleIntent, chatBitmap ?: IconCompat.createWithResource(context, R.mipmap.ic_stat_icon))
                 .setDesiredHeight(600)
                 .setDeleteIntent(deleteNotificationIntent)
@@ -232,8 +285,8 @@ class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
         }
         
         // Only set shortcut ID on API 29+ where dynamic shortcuts are better supported
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            notificationBuilder.setShortcutId(chatGuid)
+        if (mutationDecision.shortcut && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            notificationBuilder.setShortcutId(conversationKey)
         }
 
         // intent to open the main app
@@ -260,7 +313,8 @@ class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
             .setColor(4888294)
 
         notificationManager.notify(Constants.newMessageNotificationTag, 0, summaryNotificationBuilder.build())
-        notificationManager.notify(Constants.newMessageNotificationTag, notificationId, notificationBuilder.build())
+        notificationManager.notify(notificationTag, notificationId, notificationBuilder.build())
         result.success(null)
+        }
     }
 }

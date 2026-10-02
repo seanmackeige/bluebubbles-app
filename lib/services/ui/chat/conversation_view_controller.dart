@@ -10,6 +10,7 @@ import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_keyboard_visibility/flutter_keyboard_visibility.dart';
 import 'package:get/get.dart';
+import 'package:get_it/get_it.dart';
 import 'package:google_mlkit_entity_extraction/google_mlkit_entity_extraction.dart';
 import 'package:metadata_fetch/metadata_fetch.dart';
 import 'package:scroll_to_index/scroll_to_index.dart';
@@ -24,21 +25,44 @@ class MessageEditEntry {
   const MessageEditEntry({required this.message, required this.part, required this.controller});
 }
 
-ConversationViewController cvc(Chat chat, {String? tag}) =>
-    Get.isRegistered<ConversationViewController>(tag: tag ?? chat.guid)
-    ? Get.find<ConversationViewController>(tag: tag ?? chat.guid)
-    : Get.put(ConversationViewController(chat, tag_: tag), tag: tag ?? chat.guid);
+String conversationControllerTag(Chat chat, {String? explicitTag}) {
+  if (explicitTag != null) return explicitTag;
+  if (!GetIt.I.isRegistered<ChatsService>()) return chat.guid;
+  return ChatsSvc.conversationKeyFor(chat);
+}
+
+ConversationViewController cvc(Chat chat, {String? tag}) {
+  final conversationTag = conversationControllerTag(chat, explicitTag: tag);
+  if (Get.isRegistered<ConversationViewController>(tag: conversationTag)) {
+    final existing = Get.find<ConversationViewController>(tag: conversationTag);
+    existing.rebindPresentation(chat);
+    return existing;
+  }
+  return Get.put(ConversationViewController(chat, tag_: conversationTag), tag: conversationTag);
+}
 
 class ConversationViewController extends StatefulController with GetSingleTickerProviderStateMixin {
-  final Chat chat;
+  final Rx<Chat> _chat;
+  Chat get chat => _chat.value;
   late final String tag;
   bool fromChatCreator = false;
   bool fromSearchResult = false;
   bool addedRecentPhotoReply = false;
   final AutoScrollController scrollController = AutoScrollController();
 
-  ConversationViewController(this.chat, {String? tag_}) {
-    tag = tag_ ?? chat.guid;
+  ConversationViewController(Chat chat, {String? tag_}) : _chat = chat.obs {
+    tag = conversationControllerTag(chat, explicitTag: tag_);
+  }
+
+  void rebindPresentation(Chat next) {
+    final nextTag = conversationControllerTag(next);
+    if (nextTag != tag) {
+      throw StateError('CONVERSATION_VIEW_REBIND_IDENTITY_MISMATCH');
+    }
+    if (identical(_chat.value, next)) return;
+    _chat.value = next;
+    mentionables = next.handles.map((handle) => Mentionable(handle: handle)).toList();
+    textController.mentionables = mentionables;
   }
 
   // caching items
@@ -98,7 +122,7 @@ class ConversationViewController extends StatefulController with GetSingleTicker
     }
   }
 
-  late final mentionables = chat.handles.map((e) => Mentionable(handle: e)).toList();
+  late List<Mentionable> mentionables = chat.handles.map((e) => Mentionable(handle: e)).toList();
 
   bool keyboardOpen = false;
   double _keyboardOffset = 0;

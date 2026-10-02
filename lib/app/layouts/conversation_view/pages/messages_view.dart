@@ -12,6 +12,7 @@ import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/services/ui/chat/logical_conversation_view.dart';
+import 'package:bluebubbles/services/ui/chat/logical_message_chronology.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:collection/collection.dart';
 import 'package:defer_pointer/defer_pointer.dart';
@@ -67,11 +68,7 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
 
   int _canonicalMessageCompare(Message left, Message right) {
     if (ChatsSvc.isLogicalConversation(chat)) {
-      final leftCreated = left.dateCreated?.millisecondsSinceEpoch ?? 0;
-      final rightCreated = right.dateCreated?.millisecondsSinceEpoch ?? 0;
-      final byCreated = rightCreated.compareTo(leftCreated);
-      if (byCreated != 0) return byCreated;
-      return (left.guid ?? '').compareTo(right.guid ?? '');
+      return compareLogicalMessagesDescending(left, right);
     }
     final byChronology = Message.sort(left, right);
     if (byChronology != 0) return byChronology;
@@ -125,12 +122,40 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
         );
         if (!mounted) return;
         setState(() {});
+      } else if (e.type == 'logical-membership-advanced') {
+        final data = e.data;
+        final logicalId = data is Map ? data['logicalId'] : null;
+        if (logicalId is! String || logicalId != ChatsSvc.logicalConversationIdFor(chat)) return;
+        final service = maybeFindMessagesSvc(chat.guid);
+        if (service == null) return;
+        final reloadDepth = service.resetLogicalProjectionForMembershipChange();
+        if (reloadDepth == 0) return;
+        noMoreMessages = false;
+        fetching = true;
+        _messages = <Message>[];
+        _messageKeys.clear();
+        _listKey = GlobalKey<SliverAnimatedListState>();
+        if (mounted) setState(() {});
+        try {
+          await service.loadChunk(0, controller, limit: reloadDepth);
+          if (!mounted) return;
+          _messages = service.struct.messages;
+          _messages.sort(_canonicalMessageCompare);
+          _listKey = GlobalKey<SliverAnimatedListState>();
+        } finally {
+          fetching = false;
+          if (mounted) setState(() {});
+        }
       } else if (e.type == "add-custom-smartreply") {
         if (!mounted) return;
         if (e.data != null && internalSmartReplies['attach-recent'] == null) {
           internalSmartReplies['attach-recent'] = _buildReply(
             "Attach recent photo",
             onTap: () async {
+              if (ChatsSvc.isPotentialLogicalSource(controller.chat) &&
+                  !ChatsSvc.hasBuild99WriterCapability(controller.chat)) {
+                return;
+              }
               controller.pickedAttachments.add(e.data);
               internalSmartReplies.clear();
             },
@@ -229,7 +254,7 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
   @override
   void dispose() {
     // Clean up managers
-    if (_messages.isNotEmpty) {
+    if (_messages.isNotEmpty && !ChatsSvc.isPotentialLogicalSource(chat)) {
       chat.lastReadMessageGuid = _messages.first.guid;
       chat.saveAsync(updateLastReadMessageGuid: true);
     }
@@ -556,7 +581,10 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
           onTap:
               onTap ??
               () {
-                if (ChatsSvc.isLogicalConversation(controller.chat)) {
+                if (ChatsSvc.isPotentialLogicalSource(controller.chat)) {
+                  if (!ChatsSvc.hasBuild99WriterCapability(controller.chat)) {
+                    return;
+                  }
                   controller.textController.text = text;
                   controller.textController.selection = TextSelection.collapsed(offset: text.length);
                   controller.focusNode.requestFocus();

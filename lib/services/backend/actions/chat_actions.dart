@@ -3,7 +3,9 @@ import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/backend/interfaces/contact_v2_interface.dart';
 import 'package:bluebubbles/services/services.dart';
+import 'package:bluebubbles/services/ui/chat/logical_conversation_certificate_binding.dart';
 import 'package:bluebubbles/services/ui/chat/logical_conversation_view.dart';
+import 'package:bluebubbles/services/ui/chat/logical_conversation_identity.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart';
@@ -11,7 +13,22 @@ import 'package:flutter/foundation.dart';
 class ChatActions {
   static Future<bool> activateLogicalReadCertificate(dynamic data) async {
     final raw = (data as Map<String, dynamic>)['certificate'] as String?;
-    return LogicalConversationViewPolicy.hydrateRuntimeCertificate(raw);
+    LogicalConversationId? expectedLogicalId;
+    if (raw != null) {
+      try {
+        expectedLogicalId = LogicalConversationViewPolicy.logicalIdForRuntimeCertificate(raw);
+      } catch (_) {
+        return false;
+      }
+    }
+    final authority = await PrefsSvc.messaging.loadLogicalReadAuthorityFresh();
+    final bound = LogicalConversationDatabaseCertificateBinding.bindPersistedCertificates(
+      persistedLedgerJson: authority.ledgerJson,
+      legacyCertificateJson: authority.legacyFallbackJson,
+    );
+    if (expectedLogicalId == null) return bound;
+    return LogicalConversationViewPolicy.certificateLedgerValid &&
+        LogicalConversationViewPolicy.certificateForLogicalId(expectedLogicalId) != null;
   }
 
   static Future<void> clearNotificationForChat(dynamic data) async {

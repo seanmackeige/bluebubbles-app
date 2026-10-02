@@ -1,10 +1,13 @@
 import 'dart:convert';
 
+import 'package:bluebubbles/services/ui/chat/logical_conversation_certificate_ledger.dart';
+import 'package:bluebubbles/services/ui/chat/logical_conversation_identity.dart';
 import 'package:crypto/crypto.dart';
 
 const logicalConversationReadCertificateSchema = 'LOGICAL_CONVERSATION_READ_CERTIFICATE_V2_N_MEMBER';
 const incrementalLogicalProjectionSchema = 'INCREMENTAL_LOGICAL_PROJECTION_V1';
-const logicalConversationRuntimeCertificateSchema = 'LOGICAL_CONVERSATION_RUNTIME_CERTIFICATE_V1';
+const logicalConversationLegacyRuntimeCertificateSchema = 'LOGICAL_CONVERSATION_RUNTIME_CERTIFICATE_V1';
+const logicalConversationRuntimeCertificateSchema = 'LOGICAL_CONVERSATION_RUNTIME_CERTIFICATE_V2_GUID_BINDING';
 
 enum LogicalProjectionEventClass {
   normalMessage,
@@ -388,22 +391,403 @@ class LogicalConversationReadCertificate {
   }
 }
 
+/// Read-only observation used to bind a stable provider GUID fingerprint to the
+/// current local database identity. The raw GUID is consumed and discarded.
+class LogicalConversationPhysicalChatBinding {
+  const LogicalConversationPhysicalChatBinding.fromGuidSha256({
+    required this.sourceChatRowId,
+    required this.sourceChatGuidSha256,
+    this.physicalRef,
+  });
+
+  factory LogicalConversationPhysicalChatBinding.fromProviderGuid({
+    required int sourceChatRowId,
+    required String sourceChatGuid,
+  }) {
+    return LogicalConversationPhysicalChatBinding.fromGuidSha256(
+      sourceChatRowId: sourceChatRowId,
+      sourceChatGuidSha256: sha256.convert(utf8.encode('logical-provider-guid-v1\u0000$sourceChatGuid')).toString(),
+      physicalRef: PhysicalConversationRef.fromStablePhysicalGuid(sourceChatGuid),
+    );
+  }
+
+  final int sourceChatRowId;
+  final String sourceChatGuidSha256;
+  final PhysicalConversationRef? physicalRef;
+
+  bool get isValid => sourceChatRowId > 0 && RegExp(r'^[0-9a-f]{64}$').hasMatch(sourceChatGuidSha256);
+}
+
+/// One member in a banked certificate. Every relationship is expressed using
+/// stable GUID fingerprints; local database ROWIDs are deliberately absent.
+class LogicalConversationMemberTrustAnchor {
+  const LogicalConversationMemberTrustAnchor({
+    required this.sourceChatGuidHmacSha256,
+    required this.sourceChatGuidSha256,
+    required this.admissionReceiptCommit,
+    this.admissionEvidenceSha256 = '',
+    required this.evidence,
+    required this.pairwiseComparedSourceGuidSha256,
+    required this.directRelationshipPeerGuidSha256,
+    required this.minimumStructuredRelationshipCount,
+    required this.explanation,
+  });
+
+  final String sourceChatGuidHmacSha256;
+  final String sourceChatGuidSha256;
+  final String admissionReceiptCommit;
+  final String admissionEvidenceSha256;
+  final Set<LogicalConversationMemberEvidenceKind> evidence;
+  final Set<String> pairwiseComparedSourceGuidSha256;
+  final Set<String> directRelationshipPeerGuidSha256;
+  final int minimumStructuredRelationshipCount;
+  final String explanation;
+
+  bool get isValid {
+    final hash = RegExp(r'^[0-9a-f]{64}$');
+    final receipt = RegExp(r'^[0-9a-f]{40}$');
+    return hash.hasMatch(sourceChatGuidSha256) &&
+        (hash.hasMatch(sourceChatGuidHmacSha256) || sourceChatGuidHmacSha256.isEmpty) &&
+        (receipt.hasMatch(admissionReceiptCommit) || hash.hasMatch(admissionEvidenceSha256)) &&
+        evidence.contains(LogicalConversationMemberEvidenceKind.exactNormalizedExternalParticipants) &&
+        evidence.contains(LogicalConversationMemberEvidenceKind.completePairwiseDifferential) &&
+        evidence.contains(LogicalConversationMemberEvidenceKind.structuredCrossChatRelationship) &&
+        evidence.contains(LogicalConversationMemberEvidenceKind.passiveNaturalProduction) &&
+        (evidence.contains(LogicalConversationMemberEvidenceKind.appleBlueBubblesGuidParity) ||
+            evidence.contains(LogicalConversationMemberEvidenceKind.stableProviderBackedAppleIdentity)) &&
+        directRelationshipPeerGuidSha256.isNotEmpty &&
+        minimumStructuredRelationshipCount > 0 &&
+        explanation.isNotEmpty;
+  }
+}
+
+/// Stable, row-independent root of trust. Binding is a pure operation over a
+/// caller-supplied read-only provider snapshot and succeeds only when every
+/// member fingerprint has exactly one current local row.
+class LogicalConversationBankedCertificateTrustAnchor {
+  const LogicalConversationBankedCertificateTrustAnchor({
+    required this.schema,
+    required this.id,
+    required this.members,
+    required this.presentationSourceChatGuidSha256,
+  });
+
+  final String schema;
+  final String id;
+  final List<LogicalConversationMemberTrustAnchor> members;
+  final String presentationSourceChatGuidSha256;
+
+  Set<String> get sourceChatGuidSha256 => members.map((member) => member.sourceChatGuidSha256).toSet();
+
+  LogicalConversationMemberTrustAnchor? proofForGuidSha256(String guidSha256) {
+    for (final member in members) {
+      if (member.sourceChatGuidSha256 == guidSha256) return member;
+    }
+    return null;
+  }
+
+  bool get isValid {
+    if (schema != logicalConversationReadCertificateSchema || id.isEmpty || members.length < 2) return false;
+    final sources = sourceChatGuidSha256;
+    if (sources.length != members.length || !sources.contains(presentationSourceChatGuidSha256)) return false;
+    for (final member in members) {
+      if (!member.isValid) return false;
+      final expectedPeers = sources.difference({member.sourceChatGuidSha256});
+      if (member.pairwiseComparedSourceGuidSha256.length != expectedPeers.length ||
+          !member.pairwiseComparedSourceGuidSha256.containsAll(expectedPeers) ||
+          !expectedPeers.containsAll(member.pairwiseComparedSourceGuidSha256) ||
+          !expectedPeers.containsAll(member.directRelationshipPeerGuidSha256)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  String get revision {
+    final ordered = members.toList()
+      ..sort((left, right) => left.sourceChatGuidSha256.compareTo(right.sourceChatGuidSha256));
+    final payload = <String, dynamic>{
+      'schema': schema,
+      'id': id,
+      'presentationSourceChatGuidSha256': presentationSourceChatGuidSha256,
+      'members': [
+        for (final member in ordered)
+          <String, dynamic>{
+            'sourceChatGuidHmacSha256': member.sourceChatGuidHmacSha256,
+            'sourceChatGuidSha256': member.sourceChatGuidSha256,
+            'admissionReceiptCommit': member.admissionReceiptCommit,
+            'admissionEvidenceSha256': member.admissionEvidenceSha256,
+            'evidence': member.evidence.map((value) => value.name).toList()..sort(),
+            'pairwiseComparedSourceGuidSha256': member.pairwiseComparedSourceGuidSha256.toList()..sort(),
+            'directRelationshipPeerGuidSha256': member.directRelationshipPeerGuidSha256.toList()..sort(),
+            'minimumStructuredRelationshipCount': member.minimumStructuredRelationshipCount,
+            'explanation': member.explanation,
+          },
+      ],
+    };
+    return sha256.convert(utf8.encode(jsonEncode(payload))).toString();
+  }
+
+  LogicalConversationReadCertificate? bind(Iterable<LogicalConversationPhysicalChatBinding> physicalChats) {
+    if (!isValid) return null;
+    final byGuid = <String, List<LogicalConversationPhysicalChatBinding>>{};
+    for (final chat in physicalChats) {
+      if (!chat.isValid) return null;
+      byGuid.putIfAbsent(chat.sourceChatGuidSha256, () => <LogicalConversationPhysicalChatBinding>[]).add(chat);
+    }
+    final selected = <String, LogicalConversationPhysicalChatBinding>{};
+    for (final fingerprint in sourceChatGuidSha256) {
+      final matches = byGuid[fingerprint];
+      if (matches == null || matches.length != 1) return null;
+      selected[fingerprint] = matches.single;
+    }
+    final selectedRows = selected.values.map((binding) => binding.sourceChatRowId).toSet();
+    if (selectedRows.length != selected.length) return null;
+
+    int rowFor(String fingerprint) => selected[fingerprint]!.sourceChatRowId;
+    final certificate = LogicalConversationReadCertificate(
+      schema: schema,
+      id: id,
+      presentationSourceChatRowId: rowFor(presentationSourceChatGuidSha256),
+      members: [
+        for (final member in members)
+          LogicalConversationMemberProof(
+            sourceChatRowId: rowFor(member.sourceChatGuidSha256),
+            sourceChatGuidHmacSha256: member.sourceChatGuidHmacSha256,
+            sourceChatGuidSha256: member.sourceChatGuidSha256,
+            admissionReceiptCommit: member.admissionReceiptCommit,
+            admissionEvidenceSha256: member.admissionEvidenceSha256,
+            evidence: member.evidence,
+            pairwiseComparedSourceRowIds: member.pairwiseComparedSourceGuidSha256.map(rowFor).toSet(),
+            directRelationshipPeerRowIds: member.directRelationshipPeerGuidSha256.map(rowFor).toSet(),
+            minimumStructuredRelationshipCount: member.minimumStructuredRelationshipCount,
+            explanation: member.explanation,
+          ),
+      ],
+    );
+    return certificate.isValid ? certificate : null;
+  }
+
+  factory LogicalConversationBankedCertificateTrustAnchor.fromBoundCertificate(
+    LogicalConversationReadCertificate certificate,
+  ) {
+    if (!certificate.isValid) throw const FormatException('BOUND_CERTIFICATE_INVALID');
+    final byRow = <int, LogicalConversationMemberProof>{
+      for (final member in certificate.members) member.sourceChatRowId: member,
+    };
+    if (byRow.length != certificate.members.length) {
+      throw const FormatException('BOUND_CERTIFICATE_DUPLICATE_ROW');
+    }
+    String fingerprintForRow(int rowId) {
+      final fingerprint = byRow[rowId]?.sourceChatGuidSha256;
+      if (fingerprint == null || !RegExp(r'^[0-9a-f]{64}$').hasMatch(fingerprint)) {
+        throw const FormatException('BOUND_CERTIFICATE_GUID_FINGERPRINT_MISSING');
+      }
+      return fingerprint;
+    }
+
+    final anchor = LogicalConversationBankedCertificateTrustAnchor(
+      schema: certificate.schema,
+      id: certificate.id,
+      presentationSourceChatGuidSha256: fingerprintForRow(certificate.presentationSourceChatRowId),
+      members: [
+        for (final member in certificate.members)
+          LogicalConversationMemberTrustAnchor(
+            sourceChatGuidHmacSha256: member.sourceChatGuidHmacSha256,
+            sourceChatGuidSha256: member.sourceChatGuidSha256,
+            admissionReceiptCommit: member.admissionReceiptCommit,
+            admissionEvidenceSha256: member.admissionEvidenceSha256,
+            evidence: member.evidence,
+            pairwiseComparedSourceGuidSha256: member.pairwiseComparedSourceRowIds.map(fingerprintForRow).toSet(),
+            directRelationshipPeerGuidSha256: member.directRelationshipPeerRowIds.map(fingerprintForRow).toSet(),
+            minimumStructuredRelationshipCount: member.minimumStructuredRelationshipCount,
+            explanation: member.explanation,
+          ),
+      ],
+    );
+    if (!anchor.isValid) throw const FormatException('BOUND_CERTIFICATE_TRUST_ANCHOR_INVALID');
+    return anchor;
+  }
+}
+
+Map<String, dynamic> _trustAnchorPayload(LogicalConversationBankedCertificateTrustAnchor anchor) {
+  final members = anchor.members.toList()
+    ..sort((left, right) => left.sourceChatGuidSha256.compareTo(right.sourceChatGuidSha256));
+  return <String, dynamic>{
+    'schema': anchor.schema,
+    'id': anchor.id,
+    'revision': anchor.revision,
+    'presentationSourceChatGuidSha256': anchor.presentationSourceChatGuidSha256,
+    'members': <Map<String, dynamic>>[
+      for (final member in members)
+        <String, dynamic>{
+          'sourceChatGuidHmacSha256': member.sourceChatGuidHmacSha256,
+          'sourceChatGuidSha256': member.sourceChatGuidSha256,
+          'admissionReceiptCommit': member.admissionReceiptCommit,
+          'admissionEvidenceSha256': member.admissionEvidenceSha256,
+          'evidence': member.evidence.map((value) => value.name).toList()..sort(),
+          'pairwiseComparedSourceGuidSha256': member.pairwiseComparedSourceGuidSha256.toList()..sort(),
+          'directRelationshipPeerGuidSha256': member.directRelationshipPeerGuidSha256.toList()..sort(),
+          'minimumStructuredRelationshipCount': member.minimumStructuredRelationshipCount,
+          'explanation': member.explanation,
+        },
+    ],
+  };
+}
+
+Map<String, dynamic> _runtimeEnvelopeForAnchor(LogicalConversationBankedCertificateTrustAnchor anchor) =>
+    <String, dynamic>{
+      'schema': logicalConversationRuntimeCertificateSchema,
+      'certificate': _trustAnchorPayload(anchor),
+    };
+
+Set<LogicalConversationMemberEvidenceKind> _evidenceFromJson(dynamic raw) {
+  if (raw is! List || raw.any((value) => value is! String)) {
+    throw const FormatException('RUNTIME_CERTIFICATE_EVIDENCE_INVALID');
+  }
+  try {
+    return raw.cast<String>().map(LogicalConversationMemberEvidenceKind.values.byName).toSet();
+  } catch (_) {
+    throw const FormatException('RUNTIME_CERTIFICATE_EVIDENCE_INVALID');
+  }
+}
+
+Set<String> _fingerprintSetFromJson(dynamic raw) {
+  if (raw is! List || raw.any((value) => value is! String)) {
+    throw const FormatException('RUNTIME_CERTIFICATE_FINGERPRINT_SET_INVALID');
+  }
+  final values = raw.cast<String>().toSet();
+  if (values.length != raw.length || values.any((value) => !RegExp(r'^[0-9a-f]{64}$').hasMatch(value))) {
+    throw const FormatException('RUNTIME_CERTIFICATE_FINGERPRINT_SET_INVALID');
+  }
+  return values;
+}
+
+LogicalConversationBankedCertificateTrustAnchor _trustAnchorFromPayload(Map<String, dynamic> payload) {
+  final rawMembers = payload['members'];
+  if (rawMembers is! List) throw const FormatException('RUNTIME_CERTIFICATE_PAYLOAD_INVALID');
+  final members = <LogicalConversationMemberTrustAnchor>[];
+  try {
+    for (final rawMember in rawMembers) {
+      if (rawMember is! Map) throw const FormatException('RUNTIME_CERTIFICATE_MEMBER_INVALID');
+      final member = rawMember.cast<String, dynamic>();
+      members.add(
+        LogicalConversationMemberTrustAnchor(
+          sourceChatGuidHmacSha256: member['sourceChatGuidHmacSha256'] as String,
+          sourceChatGuidSha256: member['sourceChatGuidSha256'] as String,
+          admissionReceiptCommit: member['admissionReceiptCommit'] as String,
+          admissionEvidenceSha256: member['admissionEvidenceSha256'] as String,
+          evidence: _evidenceFromJson(member['evidence']),
+          pairwiseComparedSourceGuidSha256: _fingerprintSetFromJson(member['pairwiseComparedSourceGuidSha256']),
+          directRelationshipPeerGuidSha256: _fingerprintSetFromJson(member['directRelationshipPeerGuidSha256']),
+          minimumStructuredRelationshipCount: member['minimumStructuredRelationshipCount'] as int,
+          explanation: member['explanation'] as String,
+        ),
+      );
+    }
+    final anchor = LogicalConversationBankedCertificateTrustAnchor(
+      schema: payload['schema'] as String,
+      id: payload['id'] as String,
+      members: members,
+      presentationSourceChatGuidSha256: payload['presentationSourceChatGuidSha256'] as String,
+    );
+    if (!anchor.isValid || payload['revision'] != anchor.revision) {
+      throw const FormatException('RUNTIME_CERTIFICATE_PAYLOAD_INVALID');
+    }
+    return anchor;
+  } on TypeError {
+    throw const FormatException('RUNTIME_CERTIFICATE_PAYLOAD_INVALID');
+  }
+}
+
+LogicalConversationBankedCertificateTrustAnchor _trustAnchorFromEnvelope(Map<String, dynamic> envelope) {
+  if (envelope['schema'] != logicalConversationRuntimeCertificateSchema || envelope['certificate'] is! Map) {
+    throw const FormatException('RUNTIME_CERTIFICATE_ENVELOPE_INVALID');
+  }
+  return _trustAnchorFromPayload((envelope['certificate'] as Map).cast<String, dynamic>());
+}
+
+bool _isTrustedCertificateExtension(
+  LogicalConversationBankedCertificateTrustAnchor trusted,
+  LogicalConversationBankedCertificateTrustAnchor certificate,
+) {
+  if (!trusted.isValid ||
+      !certificate.isValid ||
+      certificate.id != trusted.id ||
+      certificate.schema != trusted.schema ||
+      certificate.presentationSourceChatGuidSha256 != trusted.presentationSourceChatGuidSha256 ||
+      !certificate.sourceChatGuidSha256.containsAll(trusted.sourceChatGuidSha256)) {
+    return false;
+  }
+  for (final root in trusted.members) {
+    final restored = certificate.proofForGuidSha256(root.sourceChatGuidSha256);
+    if (restored == null ||
+        restored.sourceChatGuidHmacSha256 != root.sourceChatGuidHmacSha256 ||
+        restored.admissionReceiptCommit != root.admissionReceiptCommit ||
+        restored.admissionEvidenceSha256 != root.admissionEvidenceSha256 ||
+        !restored.evidence.containsAll(root.evidence) ||
+        !restored.pairwiseComparedSourceGuidSha256.containsAll(root.pairwiseComparedSourceGuidSha256) ||
+        restored.directRelationshipPeerGuidSha256.length != root.directRelationshipPeerGuidSha256.length ||
+        !restored.directRelationshipPeerGuidSha256.containsAll(root.directRelationshipPeerGuidSha256) ||
+        restored.minimumStructuredRelationshipCount != root.minimumStructuredRelationshipCount) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/// An independently admitted privacy-safe root plus its current monotonic
+/// certificate. Persisting a current certificate never creates a new root.
+class LogicalConversationCertificateAuthority {
+  LogicalConversationCertificateAuthority({required this.trustedAnchor, required this.certificate}) {
+    if (!_isTrustedCertificateExtension(trustedAnchor, certificate)) {
+      throw const FormatException('LOGICAL_CERTIFICATE_AUTHORITY_INVALID');
+    }
+  }
+
+  factory LogicalConversationCertificateAuthority.fromBoundCertificate(
+    LogicalConversationReadCertificate certificate, {
+    LogicalConversationReadCertificate? trustedCertificate,
+  }) {
+    return LogicalConversationCertificateAuthority(
+      trustedAnchor: LogicalConversationBankedCertificateTrustAnchor.fromBoundCertificate(
+        trustedCertificate ?? certificate,
+      ),
+      certificate: LogicalConversationBankedCertificateTrustAnchor.fromBoundCertificate(certificate),
+    );
+  }
+
+  final LogicalConversationBankedCertificateTrustAnchor trustedAnchor;
+  final LogicalConversationBankedCertificateTrustAnchor certificate;
+
+  LogicalConversationId get logicalId => LogicalConversationId.certified(certificate.id);
+
+  LogicalConversationCertificateLedgerRecord toLedgerRecord() => LogicalConversationCertificateLedgerRecord(
+    logicalId: logicalId,
+    trustedAnchorEnvelope: _runtimeEnvelopeForAnchor(trustedAnchor),
+    certificateEnvelope: _runtimeEnvelopeForAnchor(certificate),
+  );
+}
+
 /// Fail-closed deterministic projection helpers for explicitly certified
 /// physical identities. Raw chats/messages remain the persisted authority.
 class LogicalConversationViewPolicy {
   LogicalConversationViewPolicy._();
 
   static const _receipt = '3432adfd6c7daa67d8d7521207a8d433b3339763';
+  static const _logicalId = 'LGC_V2_377f996e2dfd452ac69370dadda3aaf185c6714a0bda48af92faf8f55282424a';
+  static const _firstGuidSha256 = 'c64a1de60583c705c9e636305f3cb07ba6d5d5feaded54cfdbe007c83f5048db';
+  static const _secondGuidSha256 = 'c83499c53dfee807beb1252874d4228b3519b3f437ee1a991febd6837f3c0082';
+  static const _presentationGuidSha256 = '78d0349ad6e86d9ec1aac4d244356ccc0326bc8a1e9371517a1d6ce6882ad83d';
 
-  static const comcastNodeUpdates = LogicalConversationReadCertificate(
+  static const bankedReadTrustAnchor = LogicalConversationBankedCertificateTrustAnchor(
     schema: logicalConversationReadCertificateSchema,
-    id: 'LGC_V2_377f996e2dfd452ac69370dadda3aaf185c6714a0bda48af92faf8f55282424a',
-    presentationSourceChatRowId: 2156,
+    id: _logicalId,
+    presentationSourceChatGuidSha256: _presentationGuidSha256,
     members: [
-      LogicalConversationMemberProof(
-        sourceChatRowId: 2027,
+      LogicalConversationMemberTrustAnchor(
         sourceChatGuidHmacSha256: 'c792167d4f9f6012663b1db0d56169beba631d5c5bf37799bf5e9c2419e86800',
-        sourceChatGuidSha256: 'c64a1de60583c705c9e636305f3cb07ba6d5d5feaded54cfdbe007c83f5048db',
+        sourceChatGuidSha256: _firstGuidSha256,
         admissionReceiptCommit: _receipt,
         evidence: {
           LogicalConversationMemberEvidenceKind.appleBlueBubblesGuidParity,
@@ -415,17 +799,16 @@ class LogicalConversationViewPolicy {
           LogicalConversationMemberEvidenceKind.sharedGroupMetadataEvent,
           LogicalConversationMemberEvidenceKind.passiveNaturalProduction,
         },
-        pairwiseComparedSourceRowIds: {2155, 2156},
-        directRelationshipPeerRowIds: {2156},
+        pairwiseComparedSourceGuidSha256: {_secondGuidSha256, _presentationGuidSha256},
+        directRelationshipPeerGuidSha256: {_presentationGuidSha256},
         minimumStructuredRelationshipCount: 2,
         explanation:
-            'GUID parity, exact external membership, complete pairwise differentials, two direct 2156 reactions, '
+            'GUID parity, exact external membership, complete pairwise differentials, direct structured reactions, '
             'shared group identity, and a shared current group-photo event prove independent read membership.',
       ),
-      LogicalConversationMemberProof(
-        sourceChatRowId: 2155,
+      LogicalConversationMemberTrustAnchor(
         sourceChatGuidHmacSha256: 'f9142189fe14c1e4f15a1da5077bbfc794936e5c60bad31e90eae23d59d3ef10',
-        sourceChatGuidSha256: 'c83499c53dfee807beb1252874d4228b3519b3f437ee1a991febd6837f3c0082',
+        sourceChatGuidSha256: _secondGuidSha256,
         admissionReceiptCommit: _receipt,
         evidence: {
           LogicalConversationMemberEvidenceKind.appleBlueBubblesGuidParity,
@@ -435,17 +818,16 @@ class LogicalConversationViewPolicy {
           LogicalConversationMemberEvidenceKind.selfAliasDifferential,
           LogicalConversationMemberEvidenceKind.passiveNaturalProduction,
         },
-        pairwiseComparedSourceRowIds: {2027, 2156},
-        directRelationshipPeerRowIds: {2156},
+        pairwiseComparedSourceGuidSha256: {_firstGuidSha256, _presentationGuidSha256},
+        directRelationshipPeerGuidSha256: {_presentationGuidSha256},
         minimumStructuredRelationshipCount: 18,
         explanation:
             'GUID parity, exact external membership with only the active self alias added, complete pairwise '
-            'differentials, and 18 direct 2156 reaction relationships prove independent read membership.',
+            'differentials, and direct structured relationships prove independent read membership.',
       ),
-      LogicalConversationMemberProof(
-        sourceChatRowId: 2156,
+      LogicalConversationMemberTrustAnchor(
         sourceChatGuidHmacSha256: '4b2902861414cb6b0408d92be5d8d977a89f8547e88a1521529d4bffb96b486b',
-        sourceChatGuidSha256: '78d0349ad6e86d9ec1aac4d244356ccc0326bc8a1e9371517a1d6ce6882ad83d',
+        sourceChatGuidSha256: _presentationGuidSha256,
         admissionReceiptCommit: _receipt,
         evidence: {
           LogicalConversationMemberEvidenceKind.appleBlueBubblesGuidParity,
@@ -457,166 +839,485 @@ class LogicalConversationViewPolicy {
           LogicalConversationMemberEvidenceKind.sharedGroupMetadataEvent,
           LogicalConversationMemberEvidenceKind.passiveNaturalProduction,
         },
-        pairwiseComparedSourceRowIds: {2027, 2155},
-        directRelationshipPeerRowIds: {2027, 2155},
+        pairwiseComparedSourceGuidSha256: {_firstGuidSha256, _secondGuidSha256},
+        directRelationshipPeerGuidSha256: {_firstGuidSha256, _secondGuidSha256},
         minimumStructuredRelationshipCount: 20,
         explanation:
-            'GUID parity, exact external membership, complete pairwise differentials, direct reactions to both '
-            'other members (20 relationships total), and shared group metadata prove independent read membership.',
+            'GUID parity, exact external membership, complete pairwise differentials, direct structured reactions '
+            'to both other members, and shared group metadata prove independent read membership.',
       ),
     ],
   );
 
-  static const fourthCandidate = LogicalConversationExcludedCandidateProof(
-    sourceChatRowId: 1674,
-    sourceChatGuidHmacSha256: 'e0c906040606a28f6bd9c95abc257d31917977ff4962a451e04169cbe47859f4',
-    classification: LogicalConversationCandidateClassification.historicalRelatedButNotSameParticipantSet,
-    admissionReceiptCommit: _receipt,
-    evidence: {
-      'TWO_CURRENT_AND_TWO_HISTORICAL_EXTERNAL_PARTICIPANT_DIFFERENCES',
-      'PARTICIPANT_REMOVAL_EVENTS_PRECEDE_CURRENT_SET',
-      'NO_ACTIVITY_AFTER_2026_04_30',
-      'NO_STRUCTURED_RELATIONSHIP_TO_CURRENT_CERTIFIED_SET',
-      'DISPLAY_NAME_NOT_ADMISSION_EVIDENCE',
-    },
-    explanation:
-        'The older prior-participant-set lineage ended April 30 and has no structured edge to the current set; '
-        'it remains historical/inert and is not enrolled.',
+  static const _unboundCertificate = LogicalConversationReadCertificate(
+    schema: logicalConversationReadCertificateSchema,
+    id: _logicalId,
+    members: <LogicalConversationMemberProof>[],
+    presentationSourceChatRowId: 0,
   );
 
-  static LogicalConversationReadCertificate _activeCertificate = comcastNodeUpdates;
-  static bool _runtimeCertificateAvailable = true;
+  static LogicalConversationReadCertificate _activeCertificate = _unboundCertificate;
+  static bool _runtimeCertificateAvailable = false;
+  static List<LogicalConversationPhysicalChatBinding> _physicalBindings = const [];
+  static LogicalConversationCertificateLedger? _certificateLedger;
+  static Map<LogicalConversationId, LogicalConversationReadCertificate> _boundCertificates =
+      const <LogicalConversationId, LogicalConversationReadCertificate>{};
+  static Map<LogicalConversationId, LogicalConversationCertificateAuthority> _certificateAuthorities =
+      const <LogicalConversationId, LogicalConversationCertificateAuthority>{};
+  static Map<int, LogicalConversationId> _resolvedSourceLogicalIds = const <int, LogicalConversationId>{};
+  static Map<int, String> _resolvedSourceProviderFingerprints = const <int, String>{};
+  static bool _certificateLedgerValid = false;
+  static bool _certificateLedgerCorrupt = false;
+  static bool _certificateLedgerMigrationPending = false;
 
-  /// Reconstructible runtime certificate. A process restart returns to the
-  /// banked root and re-proves any later members from provider truth.
   static LogicalConversationReadCertificate get activeCertificate => _activeCertificate;
-
   static bool get runtimeCertificateAvailable => _runtimeCertificateAvailable;
+  static bool get certificateLedgerValid => _certificateLedgerValid;
+  static bool get certificateLedgerCorrupt => _certificateLedgerCorrupt;
+  static bool get certificateLedgerMigrationPending => _certificateLedgerMigrationPending;
+  static bool get allRuntimeCertificatesAvailable =>
+      _certificateLedgerValid && _certificateLedger!.records.length == _boundCertificates.length;
+  static Iterable<LogicalConversationReadCertificate> get activeCertificates {
+    final entries = _boundCertificates.entries.toList(growable: false)
+      ..sort((left, right) => left.key.compareTo(right.key));
+    return entries.map((entry) => entry.value);
+  }
+
+  static Iterable<LogicalConversationCertificateAuthority> get activeAuthorities {
+    final entries = _certificateAuthorities.entries.toList(growable: false)
+      ..sort((left, right) => left.key.compareTo(right.key));
+    return entries.map((entry) => entry.value);
+  }
+
+  static Set<LogicalConversationId> get certificateLedgerLogicalIds =>
+      _certificateLedger?.records.map((record) => record.logicalId).toSet() ?? const <LogicalConversationId>{};
+  static Set<LogicalConversationId> get unavailableCertificateLogicalIds =>
+      certificateLedgerLogicalIds.difference(_boundCertificates.keys.toSet());
+  static Set<int> get approvedSourceRowIds => _resolvedSourceLogicalIds.keys.toSet();
+  static String get bankedLogicalConversationId => bankedReadTrustAnchor.id;
+  static LogicalConversationId get bankedApplicationLogicalId => LogicalConversationId.certified(_logicalId);
+
+  static LogicalConversationReadCertificate? certificateForLogicalId(LogicalConversationId logicalId) =>
+      _boundCertificates[logicalId];
+
+  static LogicalConversationCertificateAuthority? authorityForLogicalId(LogicalConversationId logicalId) =>
+      _certificateAuthorities[logicalId];
+
+  /// Returns the certified ledger owner only when the current physical row and
+  /// provider GUID still match the unique read-only binding admitted at DB
+  /// initialization. A partial certificate can retain identity/protection but
+  /// cannot obtain a full read certificate or writer authority.
+  static LogicalConversationId? trustedLogicalIdForSourceBinding({
+    required int? sourceChatRowId,
+    required String sourceChatGuid,
+  }) {
+    if (sourceChatRowId == null || sourceChatGuid.isEmpty) return null;
+    final expected = _resolvedSourceProviderFingerprints[sourceChatRowId];
+    if (expected == null) return null;
+    final observed = LogicalConversationPhysicalChatBinding.fromProviderGuid(
+      sourceChatRowId: sourceChatRowId,
+      sourceChatGuid: sourceChatGuid,
+    );
+    return observed.sourceChatGuidSha256 == expected ? _resolvedSourceLogicalIds[sourceChatRowId] : null;
+  }
+
+  static Map<LogicalConversationId, LogicalConversationCertificateAuthority> _authoritiesForLedger(
+    LogicalConversationCertificateLedger ledger,
+  ) {
+    final authorities = <LogicalConversationId, LogicalConversationCertificateAuthority>{};
+    final providerOwners = <String, LogicalConversationId>{};
+    for (final record in ledger.records) {
+      final authority = LogicalConversationCertificateAuthority(
+        trustedAnchor: _trustAnchorFromEnvelope(record.trustedAnchorEnvelope),
+        certificate: _trustAnchorFromEnvelope(record.certificateEnvelope),
+      );
+      if (authority.logicalId != record.logicalId) {
+        throw const FormatException('LOGICAL_CERTIFICATE_LEDGER_IDENTITY_MISMATCH');
+      }
+      for (final fingerprint in authority.certificate.sourceChatGuidSha256) {
+        final owner = providerOwners[fingerprint];
+        if (owner != null && owner != record.logicalId) {
+          throw const FormatException('LOGICAL_CERTIFICATE_LEDGER_CROSS_ENTRY_PROVIDER_COLLISION');
+        }
+        providerOwners[fingerprint] = record.logicalId;
+      }
+      authorities[record.logicalId] = authority;
+    }
+    final banked = authorities[bankedApplicationLogicalId];
+    if (banked == null ||
+        jsonEncode(_trustAnchorPayload(banked.trustedAnchor)) !=
+            jsonEncode(_trustAnchorPayload(bankedReadTrustAnchor))) {
+      throw const FormatException('LOGICAL_CERTIFICATE_LEDGER_BANKED_ROOT_INVALID');
+    }
+    return authorities;
+  }
+
+  static bool _applyCertificateLedger(LogicalConversationCertificateLedger ledger) {
+    final authorities = _authoritiesForLedger(ledger);
+    for (final binding in _physicalBindings) {
+      if (!binding.isValid) throw const FormatException('LOGICAL_CERTIFICATE_RUNTIME_BINDING_INVALID');
+    }
+
+    final resolvedRowOwners = <int, LogicalConversationId>{};
+    final resolvedRowFingerprints = <int, String>{};
+    for (final entry in authorities.entries) {
+      for (final fingerprint in entry.value.certificate.sourceChatGuidSha256) {
+        final matches = _physicalBindings
+            .where((binding) => binding.sourceChatGuidSha256 == fingerprint)
+            .toList(growable: false);
+        if (matches.length > 1) {
+          throw const FormatException('LOGICAL_CERTIFICATE_LEDGER_RUNTIME_FINGERPRINT_AMBIGUOUS');
+        }
+        if (matches.isEmpty) continue;
+        final match = matches.single;
+        if (resolvedRowOwners.containsKey(match.sourceChatRowId)) {
+          throw const FormatException('LOGICAL_CERTIFICATE_LEDGER_RUNTIME_ROW_COLLISION');
+        }
+        resolvedRowOwners[match.sourceChatRowId] = entry.key;
+        resolvedRowFingerprints[match.sourceChatRowId] = fingerprint;
+      }
+    }
+
+    final bound = <LogicalConversationId, LogicalConversationReadCertificate>{};
+    final boundRowOwners = <int, LogicalConversationId>{};
+    for (final entry in authorities.entries) {
+      final certificate = entry.value.certificate.bind(_physicalBindings);
+      if (certificate == null) continue;
+      for (final rowId in certificate.sourceChatRowIds) {
+        final owner = boundRowOwners[rowId];
+        if (owner != null && owner != entry.key) {
+          throw const FormatException('LOGICAL_CERTIFICATE_LEDGER_CROSS_ENTRY_ROW_COLLISION');
+        }
+        boundRowOwners[rowId] = entry.key;
+      }
+      bound[entry.key] = certificate;
+    }
+
+    _certificateLedger = ledger;
+    _boundCertificates = Map<LogicalConversationId, LogicalConversationReadCertificate>.unmodifiable(bound);
+    _certificateLedgerValid = true;
+    _certificateLedgerCorrupt = false;
+    _activeCertificate = bound[bankedApplicationLogicalId] ?? _unboundCertificate;
+    _runtimeCertificateAvailable = bound.containsKey(bankedApplicationLogicalId);
+    _certificateAuthorities = Map<LogicalConversationId, LogicalConversationCertificateAuthority>.unmodifiable(
+      authorities,
+    );
+    _resolvedSourceLogicalIds = Map<int, LogicalConversationId>.unmodifiable(resolvedRowOwners);
+    _resolvedSourceProviderFingerprints = Map<int, String>.unmodifiable(resolvedRowFingerprints);
+    return _runtimeCertificateAvailable;
+  }
+
+  static void _clearCertificateLedgerRuntime({
+    bool clearPhysicalBindings = false,
+    bool certificateLedgerCorrupt = false,
+  }) {
+    _certificateLedger = null;
+    _boundCertificates = const <LogicalConversationId, LogicalConversationReadCertificate>{};
+    _certificateLedgerValid = false;
+    _certificateLedgerCorrupt = certificateLedgerCorrupt;
+    _certificateLedgerMigrationPending = false;
+    _activeCertificate = _unboundCertificate;
+    _certificateAuthorities = const <LogicalConversationId, LogicalConversationCertificateAuthority>{};
+    _resolvedSourceLogicalIds = const <int, LogicalConversationId>{};
+    _resolvedSourceProviderFingerprints = const <int, String>{};
+    _runtimeCertificateAvailable = false;
+    if (clearPhysicalBindings) _physicalBindings = const <LogicalConversationPhysicalChatBinding>[];
+  }
 
   static String encodeRuntimeCertificate(LogicalConversationReadCertificate certificate) {
-    final members = certificate.members.toList()
-      ..sort((left, right) => left.sourceChatRowId.compareTo(right.sourceChatRowId));
-    return jsonEncode(<String, dynamic>{
-      'schema': logicalConversationRuntimeCertificateSchema,
-      'certificate': <String, dynamic>{
-        'schema': certificate.schema,
-        'id': certificate.id,
-        'revision': certificate.revision,
-        'presentationSourceChatRowId': certificate.presentationSourceChatRowId,
-        'members': [
-          for (final member in members)
-            <String, dynamic>{
-              'sourceChatRowId': member.sourceChatRowId,
-              'sourceChatGuidHmacSha256': member.sourceChatGuidHmacSha256,
-              'sourceChatGuidSha256': member.sourceChatGuidSha256,
-              'admissionReceiptCommit': member.admissionReceiptCommit,
-              'admissionEvidenceSha256': member.admissionEvidenceSha256,
-              'evidence': member.evidence.map((value) => value.name).toList()..sort(),
-              'pairwiseComparedSourceRowIds': member.pairwiseComparedSourceRowIds.toList()..sort(),
-              'directRelationshipPeerRowIds': member.directRelationshipPeerRowIds.toList()..sort(),
-              'minimumStructuredRelationshipCount': member.minimumStructuredRelationshipCount,
-              'explanation': member.explanation,
-            },
-        ],
-      },
-    });
+    final anchor = LogicalConversationBankedCertificateTrustAnchor.fromBoundCertificate(certificate);
+    if (!_isTrustedExtensionOfBankedRoot(anchor)) {
+      throw const FormatException('RUNTIME_CERTIFICATE_TRUST_INVALID');
+    }
+    return jsonEncode(_runtimeEnvelopeForAnchor(anchor));
   }
 
-  static bool hydrateRuntimeCertificate(String? raw) {
-    if (raw == null) {
-      _activeCertificate = comcastNodeUpdates;
-      _runtimeCertificateAvailable = true;
-      return true;
+  /// Encodes a monotonic advancement for any already trusted ledger entry.
+  /// This is deliberately distinct from [encodeRuntimeCertificate], whose
+  /// legacy contract accepts only the banked Build 99 root.
+  static String encodeReconciledRuntimeCertificate(LogicalConversationReadCertificate certificate) {
+    if (!_certificateLedgerValid || !certificate.isValid) {
+      throw const FormatException('RECONCILED_RUNTIME_CERTIFICATE_UNAVAILABLE');
     }
+    final logicalId = LogicalConversationId.certified(certificate.id);
+    final authority = _certificateAuthorities[logicalId];
+    if (authority == null) {
+      throw const FormatException('RECONCILED_RUNTIME_CERTIFICATE_TARGET_UNTRUSTED');
+    }
+    final anchor = LogicalConversationBankedCertificateTrustAnchor.fromBoundCertificate(certificate);
+    if (!_isTrustedCertificateExtension(authority.trustedAnchor, anchor) ||
+        !_isTrustedCertificateExtension(authority.certificate, anchor)) {
+      throw const FormatException('RECONCILED_RUNTIME_CERTIFICATE_NOT_MONOTONIC');
+    }
+    return jsonEncode(_runtimeEnvelopeForAnchor(anchor));
+  }
+
+  static String encodeCertificateLedger(Iterable<LogicalConversationCertificateAuthority> authorities) {
+    final ledger = LogicalConversationCertificateLedger(authorities.map((authority) => authority.toLedgerRecord()));
+    _authoritiesForLedger(ledger);
+    return ledger.encode();
+  }
+
+  static String encodeActiveCertificateLedger() {
+    final ledger = _certificateLedger;
+    if (!_certificateLedgerValid || ledger == null) {
+      throw StateError('LOGICAL_CERTIFICATE_LEDGER_UNAVAILABLE');
+    }
+    return ledger.encode();
+  }
+
+  static LogicalConversationId logicalIdForRuntimeCertificate(String runtimeCertificateJson) =>
+      LogicalConversationId.certified(_decodeRuntimeTrustAnchor(runtimeCertificateJson).id);
+
+  static String persistedRevisionForBoundCertificate(LogicalConversationReadCertificate certificate) =>
+      LogicalConversationBankedCertificateTrustAnchor.fromBoundCertificate(certificate).revision;
+
+  /// Reads the exact durable target revision without mutating runtime state.
+  /// V2 is authoritative whenever present; legacy V1 is considered only for
+  /// the banked authority during migration.
+  static String? certificateRevisionForPersistedAuthority({
+    required String? persistedLedgerJson,
+    required String? legacyCertificateJson,
+    required LogicalConversationId logicalId,
+  }) {
+    if (persistedLedgerJson != null) {
+      final ledger = LogicalConversationCertificateLedger.decode(persistedLedgerJson);
+      return _authoritiesForLedger(ledger)[logicalId]?.certificate.revision;
+    }
+    if (logicalId != bankedApplicationLogicalId) return null;
+    final certificate = legacyCertificateJson == null
+        ? bankedReadTrustAnchor
+        : _decodeRuntimeTrustAnchor(legacyCertificateJson);
+    if (!_isTrustedExtensionOfBankedRoot(certificate)) {
+      throw const FormatException('RUNTIME_CERTIFICATE_TRUST_INVALID');
+    }
+    return certificate.revision;
+  }
+
+  static String mergeRuntimeCertificateIntoLedger({
+    required String? persistedLedgerJson,
+    required String runtimeCertificateJson,
+  }) {
+    final candidate = _decodeRuntimeTrustAnchor(runtimeCertificateJson);
+    final candidateLogicalId = LogicalConversationId.certified(candidate.id);
+    final ledger = persistedLedgerJson == null
+        ? LogicalConversationCertificateLedger(<LogicalConversationCertificateLedgerRecord>[
+            LogicalConversationCertificateAuthority(
+              trustedAnchor: bankedReadTrustAnchor,
+              certificate: candidate,
+            ).toLedgerRecord(),
+          ])
+        : LogicalConversationCertificateLedger.decode(persistedLedgerJson);
+    final authorities = _authoritiesForLedger(ledger);
+    final existing = authorities[candidateLogicalId];
+    if (existing == null ||
+        !_isTrustedCertificateExtension(existing.trustedAnchor, candidate) ||
+        !_isTrustedCertificateExtension(existing.certificate, candidate)) {
+      throw StateError('LOGICAL_CERTIFICATE_LEDGER_CERTIFICATE_ADVANCEMENT_INVALID');
+    }
+    final updated = ledger.replaceCertificateEnvelope(_runtimeEnvelopeForAnchor(candidate));
+    _authoritiesForLedger(updated);
+    return updated.encode();
+  }
+
+  static bool bindRuntimeCertificate({
+    required Iterable<LogicalConversationPhysicalChatBinding> physicalChats,
+    required String? persistedCertificateJson,
+  }) => bindRuntimeCertificateLedger(
+    physicalChats: physicalChats,
+    persistedLedgerJson: null,
+    legacyCertificateJson: persistedCertificateJson,
+  );
+
+  static bool bindRuntimeCertificateLedger({
+    required Iterable<LogicalConversationPhysicalChatBinding> physicalChats,
+    required String? persistedLedgerJson,
+    required String? legacyCertificateJson,
+  }) {
+    _physicalBindings = List<LogicalConversationPhysicalChatBinding>.unmodifiable(physicalChats);
+    return _hydrateRuntimeCertificateLedger(
+      persistedLedgerJson: persistedLedgerJson,
+      legacyCertificateJson: legacyCertificateJson,
+    );
+  }
+
+  static bool hydrateRuntimeCertificate(String? raw) =>
+      _hydrateRuntimeCertificateLedger(persistedLedgerJson: null, legacyCertificateJson: raw);
+
+  static bool hydrateRuntimeCertificateLedger(String raw) =>
+      _hydrateRuntimeCertificateLedger(persistedLedgerJson: raw, legacyCertificateJson: null);
+
+  static bool _hydrateRuntimeCertificateLedger({
+    required String? persistedLedgerJson,
+    required String? legacyCertificateJson,
+  }) {
     try {
-      final decoded = jsonDecode(raw);
-      if (decoded is! Map || decoded['schema'] != logicalConversationRuntimeCertificateSchema) {
-        throw const FormatException('RUNTIME_CERTIFICATE_ENVELOPE_INVALID');
-      }
-      final payload = decoded['certificate'];
-      if (payload is! Map || payload['members'] is! List) {
-        throw const FormatException('RUNTIME_CERTIFICATE_PAYLOAD_INVALID');
-      }
-      final members = <LogicalConversationMemberProof>[];
-      for (final rawMember in (payload['members'] as List)) {
-        if (rawMember is! Map ||
-            rawMember['evidence'] is! List ||
-            rawMember['pairwiseComparedSourceRowIds'] is! List ||
-            rawMember['directRelationshipPeerRowIds'] is! List) {
-          throw const FormatException('RUNTIME_CERTIFICATE_MEMBER_INVALID');
+      late final LogicalConversationCertificateLedger ledger;
+      final migrationPending = persistedLedgerJson == null;
+      if (persistedLedgerJson != null) {
+        ledger = LogicalConversationCertificateLedger.decode(persistedLedgerJson);
+      } else {
+        final anchor = legacyCertificateJson == null
+            ? bankedReadTrustAnchor
+            : _decodeRuntimeTrustAnchor(legacyCertificateJson);
+        if (!_isTrustedExtensionOfBankedRoot(anchor)) {
+          throw const FormatException('RUNTIME_CERTIFICATE_TRUST_INVALID');
         }
-        final evidenceNames = (rawMember['evidence'] as List).whereType<String>().toList(growable: false);
-        if (evidenceNames.length != (rawMember['evidence'] as List).length) {
-          throw const FormatException('RUNTIME_CERTIFICATE_EVIDENCE_INVALID');
-        }
-        final evidence = <LogicalConversationMemberEvidenceKind>{};
-        for (final name in evidenceNames) {
-          evidence.add(LogicalConversationMemberEvidenceKind.values.byName(name));
-        }
-        Set<int> integerSet(dynamic value) {
-          final list = value as List;
-          if (list.any((item) => item is! int)) {
-            throw const FormatException('RUNTIME_CERTIFICATE_ROW_SET_INVALID');
-          }
-          return list.cast<int>().toSet();
-        }
-
-        members.add(
-          LogicalConversationMemberProof(
-            sourceChatRowId: rawMember['sourceChatRowId'] as int,
-            sourceChatGuidHmacSha256: rawMember['sourceChatGuidHmacSha256'] as String,
-            sourceChatGuidSha256: rawMember['sourceChatGuidSha256'] as String,
-            admissionReceiptCommit: rawMember['admissionReceiptCommit'] as String,
-            admissionEvidenceSha256: rawMember['admissionEvidenceSha256'] as String,
-            evidence: evidence,
-            pairwiseComparedSourceRowIds: integerSet(rawMember['pairwiseComparedSourceRowIds']),
-            directRelationshipPeerRowIds: integerSet(rawMember['directRelationshipPeerRowIds']),
-            minimumStructuredRelationshipCount: rawMember['minimumStructuredRelationshipCount'] as int,
-            explanation: rawMember['explanation'] as String,
-          ),
-        );
+        ledger = LogicalConversationCertificateLedger(<LogicalConversationCertificateLedgerRecord>[
+          LogicalConversationCertificateAuthority(
+            trustedAnchor: bankedReadTrustAnchor,
+            certificate: anchor,
+          ).toLedgerRecord(),
+        ]);
       }
-      final certificate = LogicalConversationReadCertificate(
-        schema: payload['schema'] as String,
-        id: payload['id'] as String,
-        members: members,
-        presentationSourceChatRowId: payload['presentationSourceChatRowId'] as int,
-      );
-      if (payload['revision'] != certificate.revision ||
-          !certificate.isValid ||
-          !_isTrustedExtensionOfBankedRoot(certificate)) {
-        throw const FormatException('RUNTIME_CERTIFICATE_TRUST_INVALID');
-      }
-      _activeCertificate = certificate;
-      _runtimeCertificateAvailable = true;
-      return true;
+      final bankedBound = _applyCertificateLedger(ledger);
+      _certificateLedgerMigrationPending = migrationPending;
+      return bankedBound;
     } catch (_) {
-      _activeCertificate = comcastNodeUpdates;
-      _runtimeCertificateAvailable = false;
+      _clearCertificateLedgerRuntime(certificateLedgerCorrupt: persistedLedgerJson != null);
       return false;
     }
   }
 
-  static bool _isTrustedExtensionOfBankedRoot(LogicalConversationReadCertificate certificate) {
-    if (certificate.id != comcastNodeUpdates.id ||
-        certificate.schema != comcastNodeUpdates.schema ||
-        certificate.presentationSourceChatRowId != comcastNodeUpdates.presentationSourceChatRowId ||
-        !certificate.sourceChatRowIds.containsAll(comcastNodeUpdates.sourceChatRowIds)) {
+  static void markCertificateLedgerMigrationPersisted() {
+    if (!_certificateLedgerValid) {
+      throw StateError('LOGICAL_CERTIFICATE_LEDGER_UNAVAILABLE');
+    }
+    _certificateLedgerMigrationPending = false;
+  }
+
+  static LogicalConversationBankedCertificateTrustAnchor _decodeRuntimeTrustAnchor(String raw) {
+    final decoded = jsonDecode(raw);
+    if (decoded is! Map || decoded['certificate'] is! Map) {
+      throw const FormatException('RUNTIME_CERTIFICATE_ENVELOPE_INVALID');
+    }
+    final schema = decoded['schema'];
+    final payload = (decoded['certificate'] as Map).cast<String, dynamic>();
+    if (schema == logicalConversationLegacyRuntimeCertificateSchema) {
+      return _decodeLegacyRuntimeTrustAnchor(payload);
+    }
+    if (schema != logicalConversationRuntimeCertificateSchema) {
+      throw const FormatException('RUNTIME_CERTIFICATE_ENVELOPE_INVALID');
+    }
+    final anchor = _decodeStableRuntimeTrustAnchor(payload);
+    if (payload['revision'] != anchor.revision) {
+      throw const FormatException('RUNTIME_CERTIFICATE_REVISION_INVALID');
+    }
+    return anchor;
+  }
+
+  static Set<LogicalConversationMemberEvidenceKind> _decodeEvidence(dynamic raw) {
+    if (raw is! List || raw.any((value) => value is! String)) {
+      throw const FormatException('RUNTIME_CERTIFICATE_EVIDENCE_INVALID');
+    }
+    return raw.cast<String>().map(LogicalConversationMemberEvidenceKind.values.byName).toSet();
+  }
+
+  static Set<String> _decodeFingerprintSet(dynamic raw) {
+    if (raw is! List || raw.any((value) => value is! String)) {
+      throw const FormatException('RUNTIME_CERTIFICATE_FINGERPRINT_SET_INVALID');
+    }
+    final values = raw.cast<String>().toSet();
+    if (values.length != raw.length || values.any((value) => !RegExp(r'^[0-9a-f]{64}$').hasMatch(value))) {
+      throw const FormatException('RUNTIME_CERTIFICATE_FINGERPRINT_SET_INVALID');
+    }
+    return values;
+  }
+
+  static LogicalConversationBankedCertificateTrustAnchor _decodeStableRuntimeTrustAnchor(Map<String, dynamic> payload) {
+    final rawMembers = payload['members'];
+    if (rawMembers is! List) throw const FormatException('RUNTIME_CERTIFICATE_PAYLOAD_INVALID');
+    final members = <LogicalConversationMemberTrustAnchor>[];
+    for (final rawMember in rawMembers) {
+      if (rawMember is! Map) throw const FormatException('RUNTIME_CERTIFICATE_MEMBER_INVALID');
+      final member = rawMember.cast<String, dynamic>();
+      members.add(
+        LogicalConversationMemberTrustAnchor(
+          sourceChatGuidHmacSha256: member['sourceChatGuidHmacSha256'] as String,
+          sourceChatGuidSha256: member['sourceChatGuidSha256'] as String,
+          admissionReceiptCommit: member['admissionReceiptCommit'] as String,
+          admissionEvidenceSha256: member['admissionEvidenceSha256'] as String,
+          evidence: _decodeEvidence(member['evidence']),
+          pairwiseComparedSourceGuidSha256: _decodeFingerprintSet(member['pairwiseComparedSourceGuidSha256']),
+          directRelationshipPeerGuidSha256: _decodeFingerprintSet(member['directRelationshipPeerGuidSha256']),
+          minimumStructuredRelationshipCount: member['minimumStructuredRelationshipCount'] as int,
+          explanation: member['explanation'] as String,
+        ),
+      );
+    }
+    final anchor = LogicalConversationBankedCertificateTrustAnchor(
+      schema: payload['schema'] as String,
+      id: payload['id'] as String,
+      members: members,
+      presentationSourceChatGuidSha256: payload['presentationSourceChatGuidSha256'] as String,
+    );
+    if (!anchor.isValid) throw const FormatException('RUNTIME_CERTIFICATE_PAYLOAD_INVALID');
+    return anchor;
+  }
+
+  static LogicalConversationBankedCertificateTrustAnchor _decodeLegacyRuntimeTrustAnchor(Map<String, dynamic> payload) {
+    final rawMembers = payload['members'];
+    if (rawMembers is! List) throw const FormatException('LEGACY_RUNTIME_CERTIFICATE_PAYLOAD_INVALID');
+    Set<int> integerSet(dynamic value) {
+      if (value is! List || value.any((item) => item is! int)) {
+        throw const FormatException('LEGACY_RUNTIME_CERTIFICATE_ROW_SET_INVALID');
+      }
+      final result = value.cast<int>().toSet();
+      if (result.length != value.length) throw const FormatException('LEGACY_RUNTIME_CERTIFICATE_ROW_SET_INVALID');
+      return result;
+    }
+
+    final members = <LogicalConversationMemberProof>[];
+    for (final rawMember in rawMembers) {
+      if (rawMember is! Map) throw const FormatException('LEGACY_RUNTIME_CERTIFICATE_MEMBER_INVALID');
+      final member = rawMember.cast<String, dynamic>();
+      members.add(
+        LogicalConversationMemberProof(
+          sourceChatRowId: member['sourceChatRowId'] as int,
+          sourceChatGuidHmacSha256: member['sourceChatGuidHmacSha256'] as String,
+          sourceChatGuidSha256: member['sourceChatGuidSha256'] as String,
+          admissionReceiptCommit: member['admissionReceiptCommit'] as String,
+          admissionEvidenceSha256: member['admissionEvidenceSha256'] as String,
+          evidence: _decodeEvidence(member['evidence']),
+          pairwiseComparedSourceRowIds: integerSet(member['pairwiseComparedSourceRowIds']),
+          directRelationshipPeerRowIds: integerSet(member['directRelationshipPeerRowIds']),
+          minimumStructuredRelationshipCount: member['minimumStructuredRelationshipCount'] as int,
+          explanation: member['explanation'] as String,
+        ),
+      );
+    }
+    final certificate = LogicalConversationReadCertificate(
+      schema: payload['schema'] as String,
+      id: payload['id'] as String,
+      members: members,
+      presentationSourceChatRowId: payload['presentationSourceChatRowId'] as int,
+    );
+    if (!certificate.isValid || payload['revision'] != certificate.revision) {
+      throw const FormatException('LEGACY_RUNTIME_CERTIFICATE_TRUST_INVALID');
+    }
+    return LogicalConversationBankedCertificateTrustAnchor.fromBoundCertificate(certificate);
+  }
+
+  static bool _isTrustedExtensionOfBankedRoot(LogicalConversationBankedCertificateTrustAnchor certificate) {
+    const banked = bankedReadTrustAnchor;
+    if (!certificate.isValid ||
+        certificate.id != banked.id ||
+        certificate.schema != banked.schema ||
+        certificate.presentationSourceChatGuidSha256 != banked.presentationSourceChatGuidSha256 ||
+        !certificate.sourceChatGuidSha256.containsAll(banked.sourceChatGuidSha256)) {
       return false;
     }
-    for (final banked in comcastNodeUpdates.members) {
-      final restored = certificate.proofFor(banked.sourceChatRowId);
+    for (final root in banked.members) {
+      final restored = certificate.proofForGuidSha256(root.sourceChatGuidSha256);
       if (restored == null ||
-          restored.sourceChatGuidHmacSha256 != banked.sourceChatGuidHmacSha256 ||
-          restored.sourceChatGuidSha256 != banked.sourceChatGuidSha256 ||
-          restored.admissionReceiptCommit != banked.admissionReceiptCommit ||
-          restored.admissionEvidenceSha256 != banked.admissionEvidenceSha256 ||
-          !restored.evidence.containsAll(banked.evidence) ||
-          !restored.pairwiseComparedSourceRowIds.containsAll(banked.pairwiseComparedSourceRowIds) ||
-          restored.directRelationshipPeerRowIds.length != banked.directRelationshipPeerRowIds.length ||
-          !restored.directRelationshipPeerRowIds.containsAll(banked.directRelationshipPeerRowIds) ||
-          restored.minimumStructuredRelationshipCount != banked.minimumStructuredRelationshipCount ||
-          restored.explanation != banked.explanation) {
+          restored.sourceChatGuidHmacSha256 != root.sourceChatGuidHmacSha256 ||
+          restored.admissionReceiptCommit != root.admissionReceiptCommit ||
+          restored.admissionEvidenceSha256 != root.admissionEvidenceSha256 ||
+          !restored.evidence.containsAll(root.evidence) ||
+          !restored.pairwiseComparedSourceGuidSha256.containsAll(root.pairwiseComparedSourceGuidSha256) ||
+          restored.directRelationshipPeerGuidSha256.length != root.directRelationshipPeerGuidSha256.length ||
+          !restored.directRelationshipPeerGuidSha256.containsAll(root.directRelationshipPeerGuidSha256) ||
+          restored.minimumStructuredRelationshipCount != root.minimumStructuredRelationshipCount) {
         return false;
       }
     }
@@ -625,8 +1326,7 @@ class LogicalConversationViewPolicy {
 
   static bool sourceGuidMatchesActiveProof(int rowId, String guid) {
     final proof = _activeCertificate.proofFor(rowId);
-    if (proof == null) return false;
-    if (proof.sourceChatGuidSha256.isEmpty) return true;
+    if (proof == null || proof.sourceChatGuidSha256.isEmpty) return false;
     return proof.sourceChatGuidSha256 == sha256.convert(utf8.encode('logical-provider-guid-v1\u0000$guid')).toString();
   }
 
@@ -647,21 +1347,55 @@ class LogicalConversationViewPolicy {
     LogicalConversationCertificateReconciliation reconciliation, {
     required String expectedRevision,
   }) {
+    final ledger = _certificateLedger;
     final advanced = reconciliation.certificate;
-    if (_activeCertificate.revision != expectedRevision ||
-        !advanced.isValid ||
-        advanced.id != _activeCertificate.id ||
-        !advanced.sourceChatRowIds.containsAll(_activeCertificate.sourceChatRowIds)) {
+    if (!_certificateLedgerValid || ledger == null || !advanced.isValid) return false;
+    final logicalId = LogicalConversationId.certified(advanced.id);
+    final current = _boundCertificates[logicalId];
+    final record = ledger.recordFor(logicalId);
+    if (current == null || record == null) return false;
+
+    try {
+      final authority = LogicalConversationCertificateAuthority(
+        trustedAnchor: _trustAnchorFromEnvelope(record.trustedAnchorEnvelope),
+        certificate: _trustAnchorFromEnvelope(record.certificateEnvelope),
+      );
+      final anchor = LogicalConversationBankedCertificateTrustAnchor.fromBoundCertificate(advanced);
+      if (current.revision != expectedRevision ||
+          !_isTrustedCertificateExtension(authority.trustedAnchor, anchor) ||
+          !_isTrustedCertificateExtension(authority.certificate, anchor) ||
+          advanced.id != current.id ||
+          !advanced.sourceChatRowIds.containsAll(current.sourceChatRowIds)) {
+        return false;
+      }
+
+      final otherRows = <int>{
+        for (final entry in _boundCertificates.entries)
+          if (entry.key != logicalId) ...entry.value.sourceChatRowIds,
+      };
+      if (advanced.sourceChatRowIds.intersection(otherRows).isNotEmpty) return false;
+
+      final updatedLedger = ledger.replaceCertificateEnvelope(_runtimeEnvelopeForAnchor(anchor));
+      _authoritiesForLedger(updatedLedger);
+      final replacedFingerprints = advanced.members.map((member) => member.sourceChatGuidSha256).toSet();
+      _physicalBindings =
+          List<LogicalConversationPhysicalChatBinding>.unmodifiable(<LogicalConversationPhysicalChatBinding>[
+            for (final binding in _physicalBindings)
+              if (!replacedFingerprints.contains(binding.sourceChatGuidSha256)) binding,
+            for (final member in advanced.members)
+              LogicalConversationPhysicalChatBinding.fromGuidSha256(
+                sourceChatRowId: member.sourceChatRowId,
+                sourceChatGuidSha256: member.sourceChatGuidSha256,
+              ),
+          ]);
+      return _applyCertificateLedger(updatedLedger);
+    } catch (_) {
       return false;
     }
-    _activeCertificate = advanced;
-    _runtimeCertificateAvailable = true;
-    return true;
   }
 
   static void resetRuntimeCertificateForTesting() {
-    _activeCertificate = comcastNodeUpdates;
-    _runtimeCertificateAvailable = true;
+    _clearCertificateLedgerRuntime(clearPhysicalBindings: true);
   }
 
   /// Reconciles a complete nominated universe without trusting input order or
@@ -804,12 +1538,18 @@ class LogicalConversationViewPolicy {
     return LogicalConversationCertificateReconciliation(certificate: certificate, decisions: decisions);
   }
 
-  static bool isApprovedSourceRowId(int? rowId) => _activeCertificate.containsSourceRowId(rowId);
+  static bool isApprovedSourceRowId(int? rowId) => rowId != null && approvedSourceRowIds.contains(rowId);
 
-  static LogicalConversationMemberProof? membershipProofFor(int? rowId) => _activeCertificate.proofFor(rowId);
+  static LogicalConversationMemberProof? membershipProofFor(int? rowId) {
+    if (rowId == null) return null;
+    final matches = activeCertificates
+        .map((certificate) => certificate.proofFor(rowId))
+        .whereType<LogicalConversationMemberProof>()
+        .toList(growable: false);
+    return matches.length == 1 ? matches.single : null;
+  }
 
-  static LogicalConversationExcludedCandidateProof? excludedCandidateProofFor(int? rowId) =>
-      rowId == fourthCandidate.sourceChatRowId ? fourthCandidate : null;
+  static LogicalConversationExcludedCandidateProof? excludedCandidateProofFor(int? _) => null;
 
   /// Returns the approved certificate only when every certified source ROWID
   /// is present exactly once. Extra ordinary chats never gain membership.
@@ -833,7 +1573,36 @@ class LogicalConversationViewPolicy {
   static bool logicalUnread(Iterable<bool> sourceUnreadStates) => sourceUnreadStates.any((value) => value);
 
   static List<T> projectConversationList<T>(Iterable<T> items, int? Function(T item) sourceRowIdOf) {
-    return projectConversationListForCertificate(_activeCertificate, items, sourceRowIdOf);
+    var projected = List<T>.from(items);
+    for (final authority in activeAuthorities) {
+      final rowsByFingerprint = <String, int>{
+        for (final entry in _resolvedSourceLogicalIds.entries)
+          if (entry.value == authority.logicalId) _resolvedSourceProviderFingerprints[entry.key]!: entry.key,
+      };
+      if (rowsByFingerprint.isEmpty) continue;
+      final knownRows = rowsByFingerprint.values.toSet();
+      final counts = <int, int>{};
+      for (final item in projected) {
+        final rowId = sourceRowIdOf(item);
+        if (rowId != null && knownRows.contains(rowId)) {
+          counts.update(rowId, (value) => value + 1, ifAbsent: () => 1);
+        }
+      }
+      if (counts.isEmpty || counts.values.any((count) => count != 1)) continue;
+      final presentRows = counts.keys.toSet();
+      final presentationRow = rowsByFingerprint[authority.certificate.presentationSourceChatGuidSha256];
+      final orderedFingerprints = authority.certificate.sourceChatGuidSha256.toList(growable: false)..sort();
+      final selectedRow = presentationRow != null && presentRows.contains(presentationRow)
+          ? presentationRow
+          : orderedFingerprints
+                .map((fingerprint) => rowsByFingerprint[fingerprint])
+                .nonNulls
+                .firstWhere(presentRows.contains);
+      projected = projected
+          .where((item) => !knownRows.contains(sourceRowIdOf(item)) || sourceRowIdOf(item) == selectedRow)
+          .toList(growable: false);
+    }
+    return projected;
   }
 
   static List<T> projectConversationListForCertificate<T>(
@@ -842,23 +1611,67 @@ class LogicalConversationViewPolicy {
     int? Function(T item) sourceRowIdOf,
   ) {
     final snapshot = List<T>.from(items);
-    final resolved = resolveCertificate(certificate, snapshot.map(sourceRowIdOf));
-    if (resolved == null) return snapshot;
+    if (!certificate.isValid) return snapshot;
+
+    final counts = <int, int>{};
+    for (final item in snapshot) {
+      final rowId = sourceRowIdOf(item);
+      if (certificate.containsSourceRowId(rowId)) {
+        counts.update(rowId!, (value) => value + 1, ifAbsent: () => 1);
+      }
+    }
+    if (counts.isEmpty || counts.values.any((count) => count != 1)) return snapshot;
+
+    final presentRows = counts.keys.toSet();
+    final selectedRow = presentRows.contains(certificate.presentationSourceChatRowId)
+        ? certificate.presentationSourceChatRowId
+        : (certificate.members.where((member) => presentRows.contains(member.sourceChatRowId)).toList()
+                ..sort((left, right) {
+                  final leftKey = left.sourceChatGuidSha256.isNotEmpty
+                      ? left.sourceChatGuidSha256
+                      : left.sourceChatGuidHmacSha256;
+                  final rightKey = right.sourceChatGuidSha256.isNotEmpty
+                      ? right.sourceChatGuidSha256
+                      : right.sourceChatGuidHmacSha256;
+                  return leftKey.compareTo(rightKey);
+                }))
+              .first
+              .sourceChatRowId;
     return snapshot
-        .where(
-          (item) =>
-              !resolved.containsSourceRowId(sourceRowIdOf(item)) ||
-              sourceRowIdOf(item) == resolved.presentationSourceChatRowId,
-        )
+        .where((item) => !certificate.containsSourceRowId(sourceRowIdOf(item)) || sourceRowIdOf(item) == selectedRow)
         .toList();
   }
 
   static int presentationSourceRowIdFor(int requestedSourceRowId, Iterable<int?> availableSourceRowIds) {
-    final certificate = resolve(availableSourceRowIds);
-    if (certificate == null || !certificate.containsSourceRowId(requestedSourceRowId)) {
-      return requestedSourceRowId;
+    final logicalId = _resolvedSourceLogicalIds[requestedSourceRowId];
+    final authority = logicalId == null ? null : _certificateAuthorities[logicalId];
+    if (logicalId == null || authority == null) return requestedSourceRowId;
+    final counts = <int, int>{};
+    for (final rowId in availableSourceRowIds.whereType<int>()) {
+      if (_resolvedSourceLogicalIds[rowId] == logicalId) {
+        counts.update(rowId, (value) => value + 1, ifAbsent: () => 1);
+      }
     }
-    return certificate.presentationSourceChatRowId;
+    if (counts.isEmpty || counts.values.any((count) => count != 1)) return requestedSourceRowId;
+    final presentRows = counts.keys.toSet();
+    final presentationRow = _resolvedSourceProviderFingerprints.entries
+        .where(
+          (entry) =>
+              entry.value == authority.certificate.presentationSourceChatGuidSha256 &&
+              _resolvedSourceLogicalIds[entry.key] == logicalId,
+        )
+        .map((entry) => entry.key)
+        .firstOrNull;
+    if (presentationRow != null && presentRows.contains(presentationRow)) return presentationRow;
+    final orderedFingerprints = authority.certificate.sourceChatGuidSha256.toList(growable: false)..sort();
+    for (final fingerprint in orderedFingerprints) {
+      final row = _resolvedSourceProviderFingerprints.entries
+          .where((entry) => entry.value == fingerprint && _resolvedSourceLogicalIds[entry.key] == logicalId)
+          .map((entry) => entry.key)
+          .firstOrNull;
+      if (row != null && presentRows.contains(row)) return row;
+    }
+    return requestedSourceRowId;
   }
 
   /// Produces a globally ordered page and suppresses exact-GUID duplicates.

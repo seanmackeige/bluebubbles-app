@@ -112,8 +112,29 @@ class IntentsService {
             );
           }
         } else if (intent.extra?["chatGuid"] != null) {
-          final guid = intent.extra!["chatGuid"]!;
-          await openChat(guid, isInitialIntent: isInitialIntent);
+          final guid = intent.extra!["chatGuid"];
+          final conversationKey = intent.extra?["conversationKey"];
+          final sourceChatGuid = intent.extra?["sourceChatGuid"];
+          final carriesNotificationContract =
+              conversationKey != null || sourceChatGuid != null || intent.extra?["notificationId"] != null;
+          if (carriesNotificationContract && guid != "-1") {
+            final admittedKey = conversationKey is String ? conversationKey : (guid is String ? guid : null);
+            final admittedSource = sourceChatGuid is String ? sourceChatGuid : (guid is String ? guid : null);
+            final route = ChatsSvc.admitNotificationConversation(
+              conversationKey: admittedKey,
+              sourceChatGuid: admittedSource,
+            );
+            if (route == null) {
+              Logger.warn(
+                'Notification conversation identity is stale or unqualified; refusing physical fallback',
+                tag: 'IntentsService',
+              );
+              return;
+            }
+            await openChat(admittedKey, isInitialIntent: isInitialIntent);
+          } else {
+            await openChat(guid is String ? guid : null, isInitialIntent: isInitialIntent);
+          }
         } else if (intent.extra?["callUuid"] != null) {
           await StartupTasks.waitForUI();
           if (intent.extra?["answer"] == true) {
@@ -213,13 +234,13 @@ class IntentsService {
         "Opening existing chat (Attachments: ${attachments.length}; Text: ${text?.shorten(10) ?? 'N/A'})",
         tag: "IntentsService",
       );
-      final sourceChat = Chat.findOne(guid: guid);
+      final sourceChat = ChatsSvc.presentationChatForConversationKey(guid) ?? Chat.findOne(guid: guid);
       if (sourceChat == null) {
         Logger.debug("Chat not found with guid: $guid", tag: "IntentsService");
         return;
       }
       final chat = ChatsSvc.presentationChatFor(sourceChat);
-      final resolvedGuid = chat.guid;
+      final resolvedKey = ChatsSvc.conversationKeyFor(chat);
 
       await StartupTasks.waitForUI();
 
@@ -227,7 +248,7 @@ class IntentsService {
       // comment in init()), so activeChat may be a stale leftover from before the
       // Activity was torn down — always navigate explicitly in that case rather
       // than trusting it to already reflect what's on screen.
-      bool chatIsOpen = !isInitialIntent && ChatsSvc.activeChat?.chat.guid == resolvedGuid;
+      bool chatIsOpen = !isInitialIntent && ChatsSvc.activeChatGuid.value == resolvedKey;
       Logger.debug("Chat is active: $chatIsOpen", tag: "IntentsService");
 
       setPickedAttachments() {
@@ -245,7 +266,7 @@ class IntentsService {
         // which fires while we are suspended at waitForUI / Future.delayed, can
         // see that we are about to switch chats and must not mark the current
         // active chat as read prematurely.
-        pendingOpenChatGuid = resolvedGuid;
+        pendingOpenChatGuid = resolvedKey;
         Logger.debug("Navigating to conversation view...", tag: "IntentsService");
 
         // Rather than waiting for paging to eventually reach this chat,

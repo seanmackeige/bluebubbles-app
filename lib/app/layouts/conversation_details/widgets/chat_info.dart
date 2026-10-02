@@ -15,9 +15,10 @@ import 'package:get/get.dart';
 import 'package:universal_io/io.dart';
 
 class ChatInfo extends StatefulWidget {
-  const ChatInfo({super.key, required this.chat});
+  const ChatInfo({super.key, required this.chat, this.readOnly = false});
 
   final Chat chat;
+  final bool readOnly;
 
   @override
   State<StatefulWidget> createState() => _ChatInfoState();
@@ -37,10 +38,7 @@ class _ChatInfoState extends State<ChatInfo> with ThemeHelpers {
             )
           : null,
       actions: [
-        BBDialogAction(
-          text: "Local",
-          onPressed: () => Navigator.of(context, rootNavigator: true).pop(false),
-        ),
+        BBDialogAction(text: "Local", onPressed: () => Navigator.of(context, rootNavigator: true).pop(false)),
         BBDialogAction(
           text: "Private API",
           isDefault: true,
@@ -51,18 +49,18 @@ class _ChatInfoState extends State<ChatInfo> with ThemeHelpers {
   }
 
   void updatePhoto() async {
+    if (widget.readOnly || ChatsSvc.isPotentialLogicalSource(chat)) return;
     bool? papi = false;
     if (SettingsSvc.settings.enablePrivateAPI.value && chat.isIMessage && chat.isGroup) {
       papi = await showMethodDialog("Group Icon Update Method");
     }
     if (papi == null) return;
     final usePrivateApi = papi;
-    final String? result = await Navigator.of(context).push(
-      ThemeSwitcher.buildPageRoute(
-        builder: (context) => AvatarCrop(chat: chat),
-      ),
-    );
+    final String? result = await Navigator.of(
+      context,
+    ).push(ThemeSwitcher.buildPageRoute(builder: (context) => AvatarCrop(chat: chat)));
     if (result == null) return;
+    if (ChatsSvc.isPotentialLogicalSource(chat)) return;
 
     if (!usePrivateApi) {
       await ChatsSvc.setChatCustomAvatarPath(chat, result);
@@ -74,25 +72,31 @@ class _ChatInfoState extends State<ChatInfo> with ThemeHelpers {
         SettingsSvc.serverDetails.isMinBigSur &&
         SettingsSvc.serverDetails.supportsGroupChatManagement) {
       showDialog(
-          context: context,
-          builder: (BuildContext context) {
-            return AlertDialog(
-              backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-              title: Text(
-                "Updating group photo...",
-                style: context.theme.textTheme.titleLarge,
-              ),
-              content: SizedBox(
-                height: 70,
-                child: Center(
-                  child: CircularProgressIndicator(
-                    backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-                    valueColor: AlwaysStoppedAnimation<Color>(context.theme.colorScheme.primary),
-                  ),
+        context: context,
+        builder: (BuildContext context) {
+          return AlertDialog(
+            backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
+            title: Text("Updating group photo...", style: context.theme.textTheme.titleLarge),
+            content: SizedBox(
+              height: 70,
+              child: Center(
+                child: CircularProgressIndicator(
+                  backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
+                  valueColor: AlwaysStoppedAnimation<Color>(context.theme.colorScheme.primary),
                 ),
               ),
-            );
-          });
+            ),
+          );
+        },
+      );
+      if (ChatsSvc.isPotentialLogicalSource(chat)) {
+        Navigator.of(context, rootNavigator: true).pop();
+        try {
+          await File(result).delete();
+        } catch (_) {}
+        showSnackbar('Action unavailable', 'This conversation is read-only.');
+        return;
+      }
       final response = await HttpSvc.chat.setIcon(chat.guid, result);
       if (response.statusCode == 200) {
         await ChatsSvc.setChatCustomAvatarPath(chat, result);
@@ -114,17 +118,23 @@ class _ChatInfoState extends State<ChatInfo> with ThemeHelpers {
   }
 
   void deletePhoto() async {
+    if (widget.readOnly || ChatsSvc.isPotentialLogicalSource(chat)) return;
     bool? papi = false;
     if (SettingsSvc.settings.enablePrivateAPI.value && chat.isIMessage && chat.isGroup) {
       papi = await showMethodDialog("Group Icon Deletion Method");
     }
     if (papi == null) return;
     final usePrivateApi = papi;
+    if (ChatsSvc.isPotentialLogicalSource(chat)) return;
 
     if (usePrivateApi &&
         SettingsSvc.settings.enablePrivateAPI.value &&
         SettingsSvc.serverDetails.isMinBigSur &&
         SettingsSvc.serverDetails.supportsGroupChatManagement) {
+      if (ChatsSvc.isPotentialLogicalSource(chat)) {
+        showSnackbar('Action unavailable', 'This conversation is read-only.');
+        return;
+      }
       final response = await HttpSvc.chat.removeIcon(chat.guid);
       if (response.statusCode == 200) {
         await ChatsSvc.setChatCustomAvatarPath(chat, null);
@@ -142,7 +152,8 @@ class _ChatInfoState extends State<ChatInfo> with ThemeHelpers {
   Widget build(BuildContext context) {
     final chatState = ChatsSvc.getChatState(chat.guid);
 
-    bool canCall = !kIsWeb &&
+    bool canCall =
+        !kIsWeb &&
         !kIsDesktop &&
         !chat.chatIdentifier!.startsWith("urn:biz") &&
         (chat.handles.isNotEmpty &&
@@ -150,59 +161,62 @@ class _ChatInfoState extends State<ChatInfo> with ThemeHelpers {
                 !chat.handles.first.address.contains("@")));
 
     return DeferredPointerHandler(
-      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const SizedBox(height: 10),
-        if (iOS)
-          Center(
-            child: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                GestureDetector(
-                  onTap: chat.isGroup
-                      ? () async {
-                          updatePhoto();
-                        }
-                      : null,
-                  child: ContactAvatarGroupWidget(
-                    size: 100,
-                    editable: !chat.isGroup,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SizedBox(height: 10),
+          if (iOS)
+            Center(
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  GestureDetector(
+                    onTap: chat.isGroup && !widget.readOnly
+                        ? () async {
+                            updatePhoto();
+                          }
+                        : null,
+                    child: ContactAvatarGroupWidget(size: 100, editable: !widget.readOnly && !chat.isGroup),
                   ),
-                ),
-                Obx(() => chat.customAvatarPath != null
-                    ? Positioned(
-                        right: -5,
-                        top: -5,
-                        child: DeferPointer(
-                          child: InkWell(
-                            onTap: () async {
-                              deletePhoto();
-                            },
-                            child: Container(
-                              width: 30,
-                              height: 30,
-                              decoration: BoxDecoration(
-                                border: Border.all(color: context.theme.colorScheme.surface, width: 1),
-                                shape: BoxShape.circle,
-                                color: context.theme.colorScheme.tertiaryContainer,
-                              ),
-                              child: Icon(
-                                Icons.close,
-                                color: context.theme.colorScheme.onTertiaryContainer,
-                                size: 20,
+                  Obx(
+                    () => !widget.readOnly && chat.customAvatarPath != null
+                        ? Positioned(
+                            right: -5,
+                            top: -5,
+                            child: DeferPointer(
+                              child: InkWell(
+                                onTap: () async {
+                                  deletePhoto();
+                                },
+                                child: Container(
+                                  width: 30,
+                                  height: 30,
+                                  decoration: BoxDecoration(
+                                    border: Border.all(color: context.theme.colorScheme.surface, width: 1),
+                                    shape: BoxShape.circle,
+                                    color: context.theme.colorScheme.tertiaryContainer,
+                                  ),
+                                  child: Icon(
+                                    Icons.close,
+                                    color: context.theme.colorScheme.onTertiaryContainer,
+                                    size: 20,
+                                  ),
+                                ),
                               ),
                             ),
-                          ),
-                        ),
-                      )
-                    : const SizedBox.shrink()),
-              ],
+                          )
+                        : const SizedBox.shrink(),
+                  ),
+                ],
+              ),
             ),
-          ),
-        if (iOS)
-          Padding(
-            padding: const EdgeInsets.only(top: 12.0, left: 20.0, right: 20.0),
-            child: Center(
-              child: Obx(() => RichText(
+          if (iOS)
+            Padding(
+              padding: const EdgeInsets.only(top: 12.0, left: 20.0, right: 20.0),
+              child: Center(
+                child: Obx(
+                  () => RichText(
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     textAlign: TextAlign.center,
@@ -219,42 +233,126 @@ class _ChatInfoState extends State<ChatInfo> with ThemeHelpers {
                         ),
                       ),
                     ),
-                  )),
-            ),
-          ),
-        if (!chat.isGroup && iOS && chatState != null && chatState.participants.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(top: 4.0, left: 20.0, right: 20.0),
-            child: Center(
-              child: Obx(() {
-                final address = chatState.participants.first.formattedAddress.value;
-                if (address == null) return const SizedBox.shrink();
-                return Text(
-                  address,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.center,
-                  style: context.theme.textTheme.bodyMedium!.copyWith(
-                    color: context.theme.colorScheme.outline,
                   ),
-                );
-              }),
+                ),
+              ),
             ),
-          ),
-        if (chat.isGroup && !iOS)
-          Padding(
-            padding: const EdgeInsets.only(left: 15.0, bottom: 5.0),
-            child: Text("GROUP NAME AND PHOTO",
-                style: context.theme.textTheme.bodyMedium!.copyWith(color: context.theme.colorScheme.outline)),
-          ),
-        if (chat.isGroup && !iOS)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 5.0),
-            child: Material(
-              color: Colors.transparent,
-              child: ListTile(
-                mouseCursor: MouseCursor.defer,
-                onTap: () async {
+          if (!chat.isGroup && iOS && chatState != null && chatState.participants.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 4.0, left: 20.0, right: 20.0),
+              child: Center(
+                child: Obx(() {
+                  final address = chatState.participants.first.formattedAddress.value;
+                  if (address == null) return const SizedBox.shrink();
+                  return Text(
+                    address,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: context.theme.textTheme.bodyMedium!.copyWith(color: context.theme.colorScheme.outline),
+                  );
+                }),
+              ),
+            ),
+          if (chat.isGroup && !iOS)
+            Padding(
+              padding: const EdgeInsets.only(left: 15.0, bottom: 5.0),
+              child: Text(
+                "GROUP NAME AND PHOTO",
+                style: context.theme.textTheme.bodyMedium!.copyWith(color: context.theme.colorScheme.outline),
+              ),
+            ),
+          if (chat.isGroup && !iOS)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 5.0),
+              child: Material(
+                color: Colors.transparent,
+                child: ListTile(
+                  mouseCursor: MouseCursor.defer,
+                  onTap: widget.readOnly
+                      ? null
+                      : () async {
+                          bool? papi = false;
+                          if (SettingsSvc.settings.enablePrivateAPI.value && chat.isIMessage) {
+                            papi = await showMethodDialog("Group Name Update Method");
+                          }
+                          if (papi == null) return;
+                          if (!papi) {
+                            showChangeName(chat, "local", context);
+                          } else {
+                            showChangeName(chat, "private-api", context);
+                          }
+                        },
+                  title: Obx(
+                    () => RichText(
+                      text: TextSpan(
+                        style: context.theme.textTheme.bodyLarge,
+                        children: MessageHelper.buildEmojiText(
+                          chatState?.title.value ?? chat.getTitle(),
+                          context.theme.textTheme.bodyLarge!,
+                        ),
+                      ),
+                    ),
+                  ),
+                  trailing: widget.readOnly
+                      ? null
+                      : Icon(Icons.edit_outlined, color: context.theme.colorScheme.onSurface),
+                ),
+              ),
+            ),
+          if (chat.isGroup && !iOS && !widget.readOnly)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 5.0),
+              child: Material(
+                color: Colors.transparent,
+                child: ListTile(
+                  mouseCursor: MouseCursor.defer,
+                  onTap: () async {
+                    updatePhoto();
+                  },
+                  title: Text("Update group photo", style: context.theme.textTheme.bodyLarge!),
+                  trailing: Icon(Icons.edit_outlined, color: context.theme.colorScheme.onSurface),
+                ),
+              ),
+            ),
+          if (chat.isGroup && !iOS && !widget.readOnly)
+            Obx(
+              () => chat.customAvatarPath != null
+                  ? Padding(
+                      padding: const EdgeInsets.only(bottom: 5.0),
+                      child: Material(
+                        color: Colors.transparent,
+                        child: ListTile(
+                          mouseCursor: MouseCursor.defer,
+                          onTap: () async {
+                            deletePhoto();
+                          },
+                          title: Text(
+                            "Remove group photo",
+                            style: context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.error),
+                          ),
+                          trailing: Icon(Icons.close, color: context.theme.colorScheme.error),
+                        ),
+                      ),
+                    )
+                  : const SizedBox.shrink(),
+            ),
+          if (!chat.isGroup && !iOS)
+            ContactTile(
+              key: Key(chat.handles.first.address),
+              handle: chat.handles.first,
+              chat: chat,
+              canBeRemoved: false,
+            ),
+          if (chat.isGroup && iOS && !widget.readOnly)
+            Center(
+              child: TextButton(
+                child: Text(
+                  "${(chat.displayName?.isNotEmpty ?? false) ? "Change" : "Add"} Name",
+                  style: context.theme.textTheme.bodyMedium!.apply(color: context.theme.primaryColor),
+                  textScaler: const TextScaler.linear(1.15),
+                ),
+                onPressed: () async {
                   bool? papi = false;
                   if (SettingsSvc.settings.enablePrivateAPI.value && chat.isIMessage) {
                     papi = await showMethodDialog("Group Name Update Method");
@@ -266,115 +364,40 @@ class _ChatInfoState extends State<ChatInfo> with ThemeHelpers {
                     showChangeName(chat, "private-api", context);
                   }
                 },
-                title: Obx(() => RichText(
-                      text: TextSpan(
-                        style: context.theme.textTheme.bodyLarge,
-                        children: MessageHelper.buildEmojiText(
-                          chatState?.title.value ?? chat.getTitle(),
-                          context.theme.textTheme.bodyLarge!,
-                        ),
-                      ),
-                    )),
-                trailing: Icon(Icons.edit_outlined, color: context.theme.colorScheme.onSurface),
               ),
             ),
-          ),
-        if (chat.isGroup && !iOS)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 5.0),
-            child: Material(
-              color: Colors.transparent,
-              child: ListTile(
-                mouseCursor: MouseCursor.defer,
-                onTap: () async {
-                  updatePhoto();
-                },
-                title: Text("Update group photo", style: context.theme.textTheme.bodyLarge!),
-                trailing: Icon(Icons.edit_outlined, color: context.theme.colorScheme.onSurface),
+          if (!chat.isGroup && iOS)
+            Padding(
+              padding: const EdgeInsets.only(left: 18.0, right: 18, top: 20),
+              child: Row(
+                mainAxisAlignment: kIsWeb || kIsDesktop ? MainAxisAlignment.center : MainAxisAlignment.spaceBetween,
+                children: intersperse(const SizedBox(width: 5), [
+                  if (canCall) CallButton(tileColor: tileColor, chat: chat, iOS: iOS),
+                  VideoCallButton(tileColor: tileColor, chat: chat, iOS: iOS),
+                  if (chat.handles.isNotEmpty &&
+                      ((chat.handles.first.contactsV2.firstOrNull?.emailAddresses.isNotEmpty ?? false) ||
+                          chat.handles.first.address.contains("@")))
+                    MailButton(tileColor: tileColor, chat: chat, iOS: iOS),
+                  if (!kIsWeb && !kIsDesktop) InfoButton(tileColor: tileColor, chat: chat, iOS: iOS),
+                ]).toList(),
               ),
             ),
-          ),
-        if (chat.isGroup && !iOS)
-          Obx(() => chat.customAvatarPath != null
-              ? Padding(
-                  padding: const EdgeInsets.only(bottom: 5.0),
-                  child: Material(
-                    color: Colors.transparent,
-                    child: ListTile(
-                      mouseCursor: MouseCursor.defer,
-                      onTap: () async {
-                        deletePhoto();
-                      },
-                      title: Text("Remove group photo",
-                          style: context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.error)),
-                      trailing: Icon(Icons.close, color: context.theme.colorScheme.error),
-                    ),
-                  ),
-                )
-              : const SizedBox.shrink()),
-        if (!chat.isGroup && !iOS)
-          ContactTile(
-            key: Key(chat.handles.first.address),
-            handle: chat.handles.first,
-            chat: chat,
-            canBeRemoved: false,
-          ),
-        if (chat.isGroup && iOS)
-          Center(
-            child: TextButton(
+          if (chat.isGroup)
+            Padding(
+              padding: const EdgeInsets.only(left: 15.0, top: 20.0, bottom: 5.0),
               child: Text(
-                "${(chat.displayName?.isNotEmpty ?? false) ? "Change" : "Add"} Name",
-                style: context.theme.textTheme.bodyMedium!.apply(color: context.theme.primaryColor),
-                textScaler: const TextScaler.linear(1.15),
+                "${chat.handles.length} ${iOS ? "OTHER MEMBERS" : "OTHER PEOPLE"}",
+                style: context.theme.textTheme.bodyMedium!.copyWith(color: context.theme.colorScheme.outline),
               ),
-              onPressed: () async {
-                bool? papi = false;
-                if (SettingsSvc.settings.enablePrivateAPI.value && chat.isIMessage) {
-                  papi = await showMethodDialog("Group Name Update Method");
-                }
-                if (papi == null) return;
-                if (!papi) {
-                  showChangeName(chat, "local", context);
-                } else {
-                  showChangeName(chat, "private-api", context);
-                }
-              },
             ),
-          ),
-        if (!chat.isGroup && iOS)
-          Padding(
-            padding: const EdgeInsets.only(left: 18.0, right: 18, top: 20),
-            child: Row(
-              mainAxisAlignment: kIsWeb || kIsDesktop ? MainAxisAlignment.center : MainAxisAlignment.spaceBetween,
-              children: intersperse(const SizedBox(width: 5), [
-                if (canCall) CallButton(tileColor: tileColor, chat: chat, iOS: iOS),
-                VideoCallButton(tileColor: tileColor, chat: chat, iOS: iOS),
-                if (chat.handles.isNotEmpty &&
-                    ((chat.handles.first.contactsV2.firstOrNull?.emailAddresses.isNotEmpty ?? false) ||
-                        chat.handles.first.address.contains("@")))
-                  MailButton(tileColor: tileColor, chat: chat, iOS: iOS),
-                if (!kIsWeb && !kIsDesktop) InfoButton(tileColor: tileColor, chat: chat, iOS: iOS),
-              ]).toList(),
-            ),
-          ),
-        if (chat.isGroup)
-          Padding(
-            padding: const EdgeInsets.only(left: 15.0, top: 20.0, bottom: 5.0),
-            child: Text("${chat.handles.length} ${iOS ? "OTHER MEMBERS" : "OTHER PEOPLE"}",
-                style: context.theme.textTheme.bodyMedium!.copyWith(color: context.theme.colorScheme.outline)),
-          ),
-      ]),
+        ],
+      ),
     );
   }
 }
 
 class InfoButton extends StatelessWidget {
-  const InfoButton({
-    super.key,
-    required this.tileColor,
-    required this.chat,
-    required this.iOS,
-  });
+  const InfoButton({super.key, required this.tileColor, required this.chat, required this.iOS});
 
   final Color tileColor;
   final Chat chat;
@@ -391,10 +414,7 @@ class InfoButton extends StatelessWidget {
             final contact = chat.handles.first.contactsV2.firstOrNull;
             final handle = chat.handles.first;
             if (contact == null || !contact.isNative) {
-              await MethodChannelSvc.actions.openContactForm(
-                address: handle.address,
-                isEmail: handle.address.isEmail,
-              );
+              await MethodChannelSvc.actions.openContactForm(address: handle.address, isEmail: handle.address.isEmail);
             } else {
               try {
                 await MethodChannelSvc.actions.viewContactForm(nativeContactId: contact.nativeContactId);
@@ -421,12 +441,13 @@ class InfoButton extends StatelessWidget {
                 ),
                 const SizedBox(height: 7.5),
                 Text(
-                    chat.handles.isNotEmpty &&
-                            chat.handles.first.contactsV2.isNotEmpty &&
-                            chat.handles.first.contactsV2.first.isNative
-                        ? "Info"
-                        : "Add Contact",
-                    style: context.theme.textTheme.bodySmall!.copyWith(color: context.theme.colorScheme.onSurface)),
+                  chat.handles.isNotEmpty &&
+                          chat.handles.first.contactsV2.isNotEmpty &&
+                          chat.handles.first.contactsV2.first.isNative
+                      ? "Info"
+                      : "Add Contact",
+                  style: context.theme.textTheme.bodySmall!.copyWith(color: context.theme.colorScheme.onSurface),
+                ),
               ],
             ),
           ),
@@ -437,12 +458,7 @@ class InfoButton extends StatelessWidget {
 }
 
 class MailButton extends StatelessWidget {
-  const MailButton({
-    super.key,
-    required this.tileColor,
-    required this.chat,
-    required this.iOS,
-  });
+  const MailButton({super.key, required this.tileColor, required this.chat, required this.iOS});
 
   final Color tileColor;
   final Chat chat;
@@ -472,8 +488,10 @@ class MailButton extends StatelessWidget {
               children: [
                 Icon(iOS ? CupertinoIcons.mail : Icons.email, color: context.theme.colorScheme.onSurface, size: 20),
                 const SizedBox(height: 7.5),
-                Text("Mail",
-                    style: context.theme.textTheme.bodySmall!.copyWith(color: context.theme.colorScheme.onSurface)),
+                Text(
+                  "Mail",
+                  style: context.theme.textTheme.bodySmall!.copyWith(color: context.theme.colorScheme.onSurface),
+                ),
               ],
             ),
           ),
@@ -484,12 +502,7 @@ class MailButton extends StatelessWidget {
 }
 
 class VideoCallButton extends StatelessWidget {
-  const VideoCallButton({
-    super.key,
-    required this.tileColor,
-    required this.chat,
-    required this.iOS,
-  });
+  const VideoCallButton({super.key, required this.tileColor, required this.chat, required this.iOS});
 
   final Color tileColor;
   final Chat chat;
@@ -517,11 +530,16 @@ class VideoCallButton extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(iOS ? CupertinoIcons.video_camera : Icons.video_call_outlined,
-                    color: context.theme.colorScheme.onSurface, size: 25),
+                Icon(
+                  iOS ? CupertinoIcons.video_camera : Icons.video_call_outlined,
+                  color: context.theme.colorScheme.onSurface,
+                  size: 25,
+                ),
                 const SizedBox(height: 2.5),
-                Text("Video Call",
-                    style: context.theme.textTheme.bodySmall!.copyWith(color: context.theme.colorScheme.onSurface)),
+                Text(
+                  "Video Call",
+                  style: context.theme.textTheme.bodySmall!.copyWith(color: context.theme.colorScheme.onSurface),
+                ),
               ],
             ),
           ),
@@ -532,12 +550,7 @@ class VideoCallButton extends StatelessWidget {
 }
 
 class CallButton extends StatelessWidget {
-  const CallButton({
-    super.key,
-    required this.tileColor,
-    required this.chat,
-    required this.iOS,
-  });
+  const CallButton({super.key, required this.tileColor, required this.chat, required this.iOS});
 
   final Color tileColor;
   final Chat chat;
@@ -567,8 +580,10 @@ class CallButton extends StatelessWidget {
               children: [
                 Icon(iOS ? CupertinoIcons.phone : Icons.call, color: context.theme.colorScheme.onSurface, size: 20),
                 const SizedBox(height: 7.5),
-                Text("Call",
-                    style: context.theme.textTheme.bodySmall!.copyWith(color: context.theme.colorScheme.onSurface)),
+                Text(
+                  "Call",
+                  style: context.theme.textTheme.bodySmall!.copyWith(color: context.theme.colorScheme.onSurface),
+                ),
               ],
             ),
           ),

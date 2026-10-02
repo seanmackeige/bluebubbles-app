@@ -1,9 +1,29 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
 
 const logicalDraftSchema = 'LOGICAL_DRAFT_V1';
 const logicalSendAdmissionSchema = 'LOGICAL_SEND_ADMISSION_V2_TRANSPORT_READINESS';
+
+/// Serializes the entire route-neutral draft transaction, including attachment
+/// staging. An older slow save therefore cannot publish after a newer human
+/// edit that removed its attachment or changed its text.
+class LogicalDraftSaveTransactionQueue {
+  Future<void> _tail = Future<void>.value();
+
+  Future<T> run<T>(Future<T> Function() operation) {
+    final result = Completer<T>();
+    _tail = _tail.then((_) async {
+      try {
+        result.complete(await operation());
+      } catch (error, trace) {
+        result.completeError(error, trace);
+      }
+    });
+    return result.future;
+  }
+}
 
 /// Content-safe stable identity for non-composer logical actions. Raw text is
 /// hashed and never persisted in the admission key.
@@ -120,6 +140,9 @@ class LogicalReplyIntent {
     );
   }
 }
+
+bool logicalReplyExecutionReady({required LogicalReplyIntent? intent, required bool exactTargetVisible}) =>
+    intent == null || exactTargetVisible;
 
 /// The human workspace for one certified logical conversation.
 ///
@@ -325,6 +348,29 @@ class LogicalDraft {
       compositionAuthorityEpoch: ((json['compositionAuthorityEpoch'] ?? json['observedAuthorityEpoch']) as num?)
           ?.toInt(),
     );
+  }
+}
+
+/// Presentation-only projection for conversation-list draft previews.
+class LogicalDraftPreview {
+  const LogicalDraftPreview._({required this.body, required this.attachmentCount});
+
+  final String body;
+  final int attachmentCount;
+
+  bool get hasAttachments => attachmentCount > 0;
+
+  static LogicalDraftPreview? fromDraft(LogicalDraft? draft) {
+    if (draft == null) return null;
+    return fromValues(text: draft.text, attachmentCount: draft.attachments.length);
+  }
+
+  static LogicalDraftPreview? fromValues({required String text, required int attachmentCount}) {
+    if (attachmentCount < 0) {
+      throw ArgumentError.value(attachmentCount, 'attachmentCount', 'must not be negative');
+    }
+    if (text.isEmpty && attachmentCount == 0) return null;
+    return LogicalDraftPreview._(body: text.isNotEmpty ? text : 'Attachment', attachmentCount: attachmentCount);
   }
 }
 

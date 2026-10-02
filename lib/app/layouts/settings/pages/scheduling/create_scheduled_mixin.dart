@@ -1,5 +1,6 @@
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/database/models.dart';
+import 'package:bluebubbles/services/ui/chat/logical_conversation_view.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:dio/dio.dart';
@@ -26,7 +27,10 @@ mixin CreateScheduledMixin<T extends StatefulWidget> on State<T> {
 
   bool get targetsProtectedLogicalConversation {
     final chat = ChatsSvc.findChatByGuid(selectedChat.value) ?? Chat.findOne(guid: selectedChat.value);
-    return chat != null && (ChatsSvc.isApprovedLogicalSource(chat) || ChatsSvc.isLogicalConversation(chat));
+    if (chat == null) {
+      return LogicalConversationViewPolicy.certificateLedgerCorrupt;
+    }
+    return ChatsSvc.isPotentialLogicalSource(chat);
   }
 
   String? get validationError {
@@ -91,6 +95,14 @@ mixin CreateScheduledMixin<T extends StatefulWidget> on State<T> {
     final scheduleMap = schedule.value == "once"
         ? {"type": "once"}
         : {"type": "recurring", "interval": repeatInterval.value, "intervalType": frequency.value};
+
+    // Repeat the dynamic protection lookup at the last synchronous boundary;
+    // selection/certificate state must not be trusted from initial admission.
+    if (targetsProtectedLogicalConversation) {
+      Navigator.of(context, rootNavigator: true).pop();
+      showSnackbar("Send blocked", "Scheduled logical sends are not certified.");
+      return;
+    }
 
     Response response;
     if (existingMessage != null) {

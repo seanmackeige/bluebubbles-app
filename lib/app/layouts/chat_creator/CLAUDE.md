@@ -39,4 +39,9 @@ When ready to replace the legacy creator, update these two call sites:
 4. If selected handles match an existing chat → `MessagesView` replaces the search list (embedded preview)
 5. User types a message in the text field at the bottom; replies + attachments work for existing chats
 6. On send to existing chat: header collapses (AnimatedSize + AnimatedOpacity), then navigates to `ConversationView` with `fromChatCreator: true` and the same `customService`; message is sent in `ConversationView.onInit`
-7. On send to new contact set: `HttpSvc.createChat(...)` → progress dialog → save → navigate
+7. On send to a single new contact: the new-group safety gate admits only the
+   existing 1:1 create-chat path, then `HttpSvc.createChat(...)` → progress
+   dialog → save → navigate.
+8. Any unresolved recipient set of two or more is blocked before `/chat/new`.
+   The frozen CREATE_CHAT_V2 research path is not production reachable; do not
+   suggest legacy Private API setup as a workaround.

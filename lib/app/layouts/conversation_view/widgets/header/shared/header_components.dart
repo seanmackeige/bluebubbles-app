@@ -12,10 +12,7 @@ import 'package:universal_io/io.dart';
 /// Shared progress indicator for all header types
 /// Displays send progress for the current chat
 class HeaderProgressIndicator extends StatelessWidget {
-  const HeaderProgressIndicator({
-    super.key,
-    required this.chat,
-  });
+  const HeaderProgressIndicator({super.key, required this.chat});
 
   final Chat chat;
 
@@ -27,24 +24,17 @@ class HeaderProgressIndicator extends StatelessWidget {
       right: 0,
       child: Obx(
         () => TweenAnimationBuilder<double>(
-          duration: chat.sendProgress.value == 0
+          duration: OutgoingMsgHandler.sendProgressForChat(chat) == 0
               ? Duration.zero
-              : chat.sendProgress.value == 1
-                  ? const Duration(milliseconds: 250)
-                  : const Duration(seconds: 10),
-          curve: chat.sendProgress.value == 1 ? Curves.easeInOut : Curves.easeOutExpo,
-          tween: Tween<double>(
-            begin: 0,
-            end: chat.sendProgress.value,
-          ),
+              : OutgoingMsgHandler.sendProgressForChat(chat) == 1
+              ? const Duration(milliseconds: 250)
+              : const Duration(seconds: 10),
+          curve: OutgoingMsgHandler.sendProgressForChat(chat) == 1 ? Curves.easeInOut : Curves.easeOutExpo,
+          tween: Tween<double>(begin: 0, end: OutgoingMsgHandler.sendProgressForChat(chat)),
           builder: (context, value, _) => AnimatedOpacity(
             opacity: value == 1 ? 0 : 1,
             duration: const Duration(milliseconds: 250),
-            child: LinearProgressIndicator(
-              value: value,
-              backgroundColor: Colors.transparent,
-              minHeight: 3,
-            ),
+            child: LinearProgressIndicator(value: value, backgroundColor: Colors.transparent, minHeight: 3),
           ),
         ),
       ),
@@ -55,10 +45,7 @@ class HeaderProgressIndicator extends StatelessWidget {
 /// Shared back button icon with unread count badge
 /// Used by Cupertino header
 class BackButtonWithBadge extends StatelessWidget {
-  const BackButtonWithBadge({
-    super.key,
-    required this.controller,
-  });
+  const BackButtonWithBadge({super.key, required this.controller});
 
   final ConversationViewController controller;
 
@@ -164,21 +151,14 @@ class _ChatTitleAndAvatarState extends State<ChatTitleAndAvatar> with ChatTitleM
 
   Widget _buildCupertinoLayout(ChatState? chatState) {
     final children = [
-      const IgnorePointer(
-        ignoring: true,
-        child: ContactAvatarGroupWidget(
-          size: 54,
-        ),
-      ),
+      const IgnorePointer(ignoring: true, child: ContactAvatarGroupWidget(size: 54)),
       const SizedBox(height: 5, width: 5),
       Row(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           ConstrainedBox(
-            constraints: BoxConstraints(
-              maxWidth: widget.maxTitleWidth ?? NavigationSvc.width(context) / 2.5,
-            ),
+            constraints: BoxConstraints(maxWidth: widget.maxTitleWidth ?? NavigationSvc.width(context) / 2.5),
             child: Obx(() {
               String displayTitle = title.value ?? '';
               return RichText(
@@ -187,10 +167,7 @@ class _ChatTitleAndAvatarState extends State<ChatTitleAndAvatar> with ChatTitleM
                 textAlign: TextAlign.center,
                 text: TextSpan(
                   style: context.theme.textTheme.bodyMedium,
-                  children: MessageHelper.buildEmojiText(
-                    displayTitle,
-                    context.theme.textTheme.bodyMedium!,
-                  ),
+                  children: MessageHelper.buildEmojiText(displayTitle, context.theme.textTheme.bodyMedium!),
                 ),
               );
             }),
@@ -206,17 +183,9 @@ class _ChatTitleAndAvatarState extends State<ChatTitleAndAvatar> with ChatTitleM
     ];
 
     if (context.orientation == Orientation.landscape && Platform.isAndroid) {
-      return Row(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: children,
-      );
+      return Row(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.center, children: children);
     } else {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        mainAxisSize: MainAxisSize.min,
-        children: children,
-      );
+      return Column(crossAxisAlignment: CrossAxisAlignment.center, mainAxisSize: MainAxisSize.min, children: children);
     }
   }
 
@@ -226,12 +195,7 @@ class _ChatTitleAndAvatarState extends State<ChatTitleAndAvatar> with ChatTitleM
       children: [
         Padding(
           padding: const EdgeInsets.only(right: 12.5),
-          child: IgnorePointer(
-            ignoring: true,
-            child: ContactAvatarGroupWidget(
-              size: !widget.chat.isGroup ? 35 : 40,
-            ),
-          ),
+          child: IgnorePointer(ignoring: true, child: ContactAvatarGroupWidget(size: !widget.chat.isGroup ? 35 : 40)),
         ),
         Expanded(
           child: Column(
@@ -261,9 +225,7 @@ class _ChatTitleAndAvatarState extends State<ChatTitleAndAvatar> with ChatTitleM
                   (chatState.chatCreatorSubtitle.value?.isNotEmpty ?? false))
                 Text(
                   widget.chat.isGroup ? "${widget.chat.handles.length} recipients" : widget.chat.handles[0].address,
-                  style: context.theme.textTheme.labelLarge!.apply(
-                    color: context.theme.colorScheme.outline,
-                  ),
+                  style: context.theme.textTheme.labelLarge!.apply(color: context.theme.colorScheme.outline),
                   maxLines: 1,
                   overflow: TextOverflow.fade,
                 ),
@@ -275,7 +237,4 @@ class _ChatTitleAndAvatarState extends State<ChatTitleAndAvatar> with ChatTitleM
   }
 }
 
-enum HeaderLayout {
-  cupertino,
-  material,
-}
+enum HeaderLayout { cupertino, material }

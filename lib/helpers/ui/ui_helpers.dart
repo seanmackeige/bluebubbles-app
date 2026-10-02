@@ -57,10 +57,12 @@ class BackButton extends StatelessWidget {
                   }
                 },
           child: IconButton(
-            icon: Obx(() => Icon(
-                  SettingsSvc.settings.skin.value != Skins.Material ? CupertinoIcons.back : Icons.arrow_back,
-                  color: color ?? context.theme.colorScheme.primary,
-                )),
+            icon: Obx(
+              () => Icon(
+                SettingsSvc.settings.skin.value != Skins.Material ? CupertinoIcons.back : Icons.arrow_back,
+                color: color ?? context.theme.colorScheme.primary,
+              ),
+            ),
             iconSize: SettingsSvc.settings.skin.value != Skins.Material ? 30 : 24,
             onPressed: () {
               if (kIsDesktop) return;
@@ -80,8 +82,13 @@ class BackButton extends StatelessWidget {
 }
 
 // todo remove
-Widget buildBackButton(BuildContext context,
-    {EdgeInsets padding = EdgeInsets.zero, double? iconSize, Skins? skin, bool Function()? callback}) {
+Widget buildBackButton(
+  BuildContext context, {
+  EdgeInsets padding = EdgeInsets.zero,
+  double? iconSize,
+  Skins? skin,
+  bool Function()? callback,
+}) {
   return Material(
     color: Colors.transparent,
     child: Container(
@@ -103,11 +110,16 @@ Widget buildBackButton(BuildContext context,
         child: IconButton(
           iconSize: iconSize ?? (SettingsSvc.settings.skin.value != Skins.Material ? 30 : 24),
           icon: skin != null
-              ? Icon(skin != Skins.Material ? CupertinoIcons.back : Icons.arrow_back,
-                  color: context.theme.colorScheme.primary)
-              : Obx(() => Icon(
-                  SettingsSvc.settings.skin.value != Skins.Material ? CupertinoIcons.back : Icons.arrow_back,
-                  color: context.theme.colorScheme.primary)),
+              ? Icon(
+                  skin != Skins.Material ? CupertinoIcons.back : Icons.arrow_back,
+                  color: context.theme.colorScheme.primary,
+                )
+              : Obx(
+                  () => Icon(
+                    SettingsSvc.settings.skin.value != Skins.Material ? CupertinoIcons.back : Icons.arrow_back,
+                    color: context.theme.colorScheme.primary,
+                  ),
+                ),
           onPressed: () {
             if (kIsDesktop) return;
             final result = callback?.call() ?? true;
@@ -138,31 +150,27 @@ Widget buildEmptyChatListState(
   final IconData icon = hasActiveFilter
       ? Icons.filter_list_off_rounded
       : showArchived
-          ? Icons.archive_outlined
-          : showUnknown
-              ? Icons.person_search_rounded
-              : Icons.chat_bubble_outline_rounded;
+      ? Icons.archive_outlined
+      : showUnknown
+      ? Icons.person_search_rounded
+      : Icons.chat_bubble_outline_rounded;
   final String title = hasActiveFilter
       ? "No conversations match your filters"
       : showArchived
-          ? "No archived chats"
-          : showUnknown
-              ? "No messages from unknown senders"
-              : "No conversations yet";
+      ? "No archived chats"
+      : showUnknown
+      ? "No messages from unknown senders"
+      : "No conversations yet";
   final String? subtitle = hasActiveFilter
       ? null
       : showArchived || showUnknown
-          ? null
-          : "Tap the compose button to start a new one";
+      ? null
+      : "Tap the compose button to start a new one";
 
   return Column(
     mainAxisSize: MainAxisSize.min,
     children: [
-      Icon(
-        icon,
-        size: 48,
-        color: context.theme.colorScheme.outline,
-      ),
+      Icon(icon, size: 48, color: context.theme.colorScheme.outline),
       const SizedBox(height: 12),
       Padding(
         padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -181,9 +189,7 @@ Widget buildEmptyChatListState(
           padding: const EdgeInsets.symmetric(horizontal: 24),
           child: Text(
             subtitle,
-            style: context.theme.textTheme.bodyMedium?.copyWith(
-              color: context.theme.colorScheme.outline,
-            ),
+            style: context.theme.textTheme.bodyMedium?.copyWith(color: context.theme.colorScheme.outline),
             textAlign: TextAlign.center,
           ),
         ),
@@ -216,37 +222,43 @@ Widget buildProgressIndicator(BuildContext context, {double size = 20, double st
             height: size,
             child: CircularProgressIndicator(
               strokeWidth: strokeWidth,
-              valueColor: AlwaysStoppedAnimation<Color>(ThemeSvc.isAnyMaterialYouSelected
-                  ? context.theme.colorScheme.primary
-                  : context.theme.colorScheme.onSurfaceVariant),
+              valueColor: AlwaysStoppedAnimation<Color>(
+                ThemeSvc.isAnyMaterialYouSelected
+                    ? context.theme.colorScheme.primary
+                    : context.theme.colorScheme.onSurfaceVariant,
+              ),
             ),
           ),
         );
 }
 
 Future<void> showConversationTileMenu(
-    BuildContext context, ConversationTileController _this, Chat chat, Offset tapPosition, TextTheme textTheme) async {
+  BuildContext context,
+  ConversationTileController _this,
+  Chat chat,
+  Offset tapPosition,
+  TextTheme textTheme,
+) async {
   bool ios = SettingsSvc.settings.skin.value == Skins.iOS;
+  final isPinned = ChatsSvc.isConversationPinned(chat);
+  final isMuted = ChatsSvc.isConversationMuted(chat);
+  final isUnread = ChatsSvc.isConversationUnread(chat);
+  final isArchived = ChatsSvc.isConversationArchived(chat);
+  final localStateMutationAllowed = ChatsSvc.canApplyConversationLocalStateMutation(chat);
   HapticFeedback.mediumImpact();
   await showMenu(
     color: context.theme.colorScheme.surfaceContainerHighest,
     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(ios ? 10 : 0)),
     context: context,
-    position: RelativeRect.fromLTRB(
-      tapPosition.dx,
-      tapPosition.dy,
-      tapPosition.dx,
-      tapPosition.dy,
-    ),
+    position: RelativeRect.fromLTRB(tapPosition.dx, tapPosition.dy, tapPosition.dx, tapPosition.dy),
     items: <PopupMenuEntry>[
-      if (!kIsWeb)
+      if (!kIsWeb && localStateMutationAllowed)
         PopupMenuItem(
           padding: EdgeInsets.zero,
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onTap: () {
-              final chatState = ChatsSvc.getChatState(chat.guid);
-              ChatsSvc.setChatPinned(chatState?.chat ?? chat, !chat.isPinned!);
+            onTap: () async {
+              await ChatsSvc.setChatPinned(chat, !isPinned);
               Navigator.pop(context);
             },
             child: Padding(
@@ -256,14 +268,14 @@ Future<void> showConversationTileMenu(
                   Padding(
                     padding: const EdgeInsets.only(right: 10),
                     child: Icon(
-                      chat.isPinned!
+                      isPinned
                           ? (ios ? CupertinoIcons.pin_slash : Icons.star_outline)
                           : (ios ? CupertinoIcons.pin : Icons.star),
                       color: context.theme.colorScheme.onSurfaceVariant,
                     ),
                   ),
                   Text(
-                    chat.isPinned! ? "Unpin" : "Pin",
+                    isPinned ? "Unpin" : "Pin",
                     style: textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
                   ),
                 ],
@@ -271,13 +283,13 @@ Future<void> showConversationTileMenu(
             ),
           ),
         ),
-      if (!kIsWeb)
+      if (!kIsWeb && localStateMutationAllowed)
         PopupMenuItem(
           padding: EdgeInsets.zero,
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onTap: () {
-              chat.toggleMuteAsync(chat.muteType != "mute");
+            onTap: () async {
+              await ChatsSvc.setChatMuted(chat, !isMuted);
               Navigator.pop(context);
             },
             child: Padding(
@@ -287,59 +299,28 @@ Future<void> showConversationTileMenu(
                   Padding(
                     padding: const EdgeInsets.only(right: 10),
                     child: Icon(
-                      chat.muteType == "mute"
+                      isMuted
                           ? (ios ? CupertinoIcons.bell : Icons.notifications_active)
                           : (ios ? CupertinoIcons.bell_slash : Icons.notifications_off),
                       color: context.theme.colorScheme.onSurfaceVariant,
                     ),
                   ),
-                  Text(chat.muteType == "mute" ? 'Show Alerts' : 'Hide Alerts',
-                      style: textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.onSurfaceVariant)),
+                  Text(
+                    isMuted ? 'Show Alerts' : 'Hide Alerts',
+                    style: textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
+                  ),
                 ],
               ),
             ),
           ),
         ),
-      PopupMenuItem(
-        padding: EdgeInsets.zero,
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: () {
-            final chatState = ChatsSvc.getChatState(chat.guid);
-            if (chatState != null) {
-              ChatsSvc.setChatHasUnread(chatState.chat, !chat.hasUnreadMessage!);
-            } else {
-              chat.toggleHasUnreadAsync(!chat.hasUnreadMessage!);
-            }
-            Navigator.pop(context);
-          },
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 15.0, vertical: 12.0),
-            child: Row(
-              children: <Widget>[
-                Padding(
-                  padding: const EdgeInsets.only(right: 10),
-                  child: Icon(
-                    chat.hasUnreadMessage!
-                        ? (ios ? CupertinoIcons.person_crop_circle_badge_xmark : Icons.mark_chat_unread)
-                        : (ios ? CupertinoIcons.person_crop_circle_badge_checkmark : Icons.mark_chat_read),
-                    color: context.theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                Text(chat.hasUnreadMessage! ? 'Mark Read' : 'Mark Unread',
-                    style: textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.onSurfaceVariant)),
-              ],
-            ),
-          ),
-        ),
-      ),
-      if (!kIsWeb)
+      if (localStateMutationAllowed)
         PopupMenuItem(
           padding: EdgeInsets.zero,
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onTap: () {
-              ChatsSvc.setChatArchived(chat, !chat.isArchived!);
+            onTap: () async {
+              await ChatsSvc.toggleConversationUnreadFromUi(chat);
               Navigator.pop(context);
             },
             child: Padding(
@@ -349,14 +330,45 @@ Future<void> showConversationTileMenu(
                   Padding(
                     padding: const EdgeInsets.only(right: 10),
                     child: Icon(
-                      chat.isArchived!
+                      isUnread
+                          ? (ios ? CupertinoIcons.person_crop_circle_badge_xmark : Icons.mark_chat_unread)
+                          : (ios ? CupertinoIcons.person_crop_circle_badge_checkmark : Icons.mark_chat_read),
+                      color: context.theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  Text(
+                    isUnread ? 'Mark Read' : 'Mark Unread',
+                    style: textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      if (!kIsWeb && localStateMutationAllowed)
+        PopupMenuItem(
+          padding: EdgeInsets.zero,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () async {
+              await ChatsSvc.setChatArchived(chat, !isArchived);
+              Navigator.pop(context);
+            },
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 15.0, vertical: 12.0),
+              child: Row(
+                children: <Widget>[
+                  Padding(
+                    padding: const EdgeInsets.only(right: 10),
+                    child: Icon(
+                      isArchived
                           ? (ios ? CupertinoIcons.tray_arrow_up : Icons.unarchive)
                           : (ios ? CupertinoIcons.tray_arrow_down : Icons.archive),
                       color: context.theme.colorScheme.onSurfaceVariant,
                     ),
                   ),
                   Text(
-                    chat.isArchived! ? 'Unarchive' : 'Archive',
+                    isArchived ? 'Unarchive' : 'Archive',
                     style: textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
                   ),
                 ],
@@ -364,7 +376,7 @@ Future<void> showConversationTileMenu(
             ),
           ),
         ),
-      if (!kIsWeb)
+      if (!kIsWeb && !ChatsSvc.isPotentialLogicalSource(chat))
         PopupMenuItem(
           padding: EdgeInsets.zero,
           child: GestureDetector(
@@ -376,26 +388,27 @@ Future<void> showConversationTileMenu(
                 context: context,
                 builder: (BuildContext context) {
                   return AlertDialog(
-                    title: Text(
-                      "Are you sure?",
-                      style: context.theme.textTheme.titleLarge,
+                    title: Text("Are you sure?", style: context.theme.textTheme.titleLarge),
+                    content: Text(
+                      "This chat will be deleted from this device only",
+                      style: context.theme.textTheme.bodyLarge,
                     ),
-                    content: Text("This chat will be deleted from this device only",
-                        style: context.theme.textTheme.bodyLarge),
                     backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
                     actions: <Widget>[
                       TextButton(
-                        child: Text("No",
-                            style:
-                                context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.primary)),
+                        child: Text(
+                          "No",
+                          style: context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.primary),
+                        ),
                         onPressed: () {
                           Navigator.of(context).pop(); //Remove AlertDialog
                         },
                       ),
                       TextButton(
-                        child: Text("Yes",
-                            style:
-                                context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.primary)),
+                        child: Text(
+                          "Yes",
+                          style: context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.primary),
+                        ),
                         onPressed: () async {
                           ChatsSvc.removeChat(chat);
                           ChatsSvc.softDeleteChat(chat);
@@ -413,10 +426,7 @@ Future<void> showConversationTileMenu(
                 children: <Widget>[
                   Padding(
                     padding: const EdgeInsets.only(right: 10),
-                    child: Icon(
-                      Icons.delete_forever_outlined,
-                      color: context.theme.colorScheme.onSurfaceVariant,
-                    ),
+                    child: Icon(Icons.delete_forever_outlined, color: context.theme.colorScheme.onSurfaceVariant),
                   ),
                   Text(
                     'Delete',
@@ -531,8 +541,14 @@ IconData getAttachmentIcon(String mimeType) {
   return isiOS ? CupertinoIcons.arrow_up_right_square : Icons.open_in_new;
 }
 
-void showSnackbar(String title, String message,
-    {int animationMs = 250, int durationMs = 1500, Function(GetSnackBar)? onTap, TextButton? button}) {
+void showSnackbar(
+  String title,
+  String message, {
+  int animationMs = 250,
+  int durationMs = 1500,
+  Function(GetSnackBar)? onTap,
+  TextButton? button,
+}) {
   Get.snackbar(
     title,
     message,
@@ -545,7 +561,8 @@ void showSnackbar(String title, String message,
     duration: Duration(milliseconds: durationMs),
     animationDuration: Duration(milliseconds: animationMs),
     mainButton: button,
-    onTap: onTap ??
+    onTap:
+        onTap ??
         (GetSnackBar bar) {
           if (Get.isSnackbarOpen) Get.back();
         },
@@ -571,8 +588,11 @@ Future<void> showToast(String message, {bool isError = false}) async {
 }
 
 Widget getSocketStateIndicatorIcon(SocketState socketState, {double size = 24, bool showAlpha = true}) {
-  return Icon(Icons.fiber_manual_record,
-      color: getIndicatorColor(socketState).withAlpha(showAlpha ? 200 : 255), size: size);
+  return Icon(
+    Icons.fiber_manual_record,
+    color: getIndicatorColor(socketState).withAlpha(showAlpha ? 200 : 255),
+    size: size,
+  );
 }
 
 Color getIndicatorColor(SocketState socketState) {
@@ -585,21 +605,18 @@ Color getIndicatorColor(SocketState socketState) {
   }
 }
 
-Future<Uint8List> avatarAsBytes({
-  required Chat chat,
-  List<Handle>? participantsOverride,
-  double quality = 256,
-}) async {
+Future<Uint8List> avatarAsBytes({required Chat chat, List<Handle>? participantsOverride, double quality = 256}) async {
   final participants = participantsOverride ?? chat.handles;
   ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
   Canvas canvas = Canvas(pictureRecorder);
 
   await paintGroupAvatar(
-      chat: chat,
-      participants: participants,
-      canvas: canvas,
-      size: quality,
-      usingParticipantsOverride: participantsOverride != null);
+    chat: chat,
+    participants: participants,
+    canvas: canvas,
+    size: quality,
+    usingParticipantsOverride: participantsOverride != null,
+  );
 
   ui.Picture picture = pictureRecorder.endRecording();
   ui.Image image = await picture.toImage(quality.toInt(), quality.toInt());
@@ -649,12 +666,7 @@ Future<void> paintGroupAvatar({
   int maxAvatars = SettingsSvc.settings.maxAvatarsInGroupWidget.value;
 
   if (participants.length == 1) {
-    await paintAvatar(
-      handle: participants.first,
-      canvas: canvas,
-      offset: const Offset(0, 0),
-      size: size,
-    );
+    await paintAvatar(handle: participants.first, canvas: canvas, offset: const Offset(0, 0), size: size);
     return;
   }
 
@@ -695,17 +707,20 @@ Future<void> paintGroupAvatar({
         ..textDirection = TextDirection.rtl
         ..textAlign = TextAlign.center
         ..text = TextSpan(
-            text: String.fromCharCode(icon.codePoint),
-            style: TextStyle(
-                fontSize: adjustedWidth * 0.3,
-                fontFamily: icon.fontFamily,
-                color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.8)))
+          text: String.fromCharCode(icon.codePoint),
+          style: TextStyle(
+            fontSize: adjustedWidth * 0.3,
+            fontFamily: icon.fontFamily,
+            color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.8),
+          ),
+        )
         ..layout()
         ..paint(canvas, Offset(left + realSize * 0.25, top + realSize * 0.25));
     } else {
       Paint paint = Paint()
-        ..color =
-            SettingsSvc.settings.skin.value == Skins.Samsung ? theme.colorScheme.secondary : theme.colorScheme.surface;
+        ..color = SettingsSvc.settings.skin.value == Skins.Samsung
+            ? theme.colorScheme.secondary
+            : theme.colorScheme.surface;
       canvas.drawCircle(Offset(left + realSize * 0.5, top + realSize * 0.5), realSize * 0.5, paint);
       await paintAvatar(
         handle: participants[index],
@@ -720,14 +735,15 @@ Future<void> paintGroupAvatar({
   }
 }
 
-Future<void> paintAvatar(
-    {required Handle? handle,
-    required Canvas canvas,
-    required Offset offset,
-    required double size,
-    double? fontSize,
-    double? borderWidth,
-    bool inGroup = false}) async {
+Future<void> paintAvatar({
+  required Handle? handle,
+  required Canvas canvas,
+  required Offset offset,
+  required double size,
+  double? fontSize,
+  double? borderWidth,
+  bool inGroup = false,
+}) async {
   fontSize ??= size * 0.5;
   borderWidth ??= size * 0.05;
 
@@ -750,10 +766,7 @@ Future<void> paintAvatar(
   if (handle?.color == null) {
     colors = toColorGradient(handle?.address);
   } else {
-    colors = [
-      HexColor(handle!.color!).lightenAmount(0.02),
-      HexColor(handle.color!),
-    ];
+    colors = [HexColor(handle!.color!).lightenAmount(0.02), HexColor(handle.color!)];
   }
 
   double dx = offset.dx;
@@ -763,17 +776,17 @@ Future<void> paintAvatar(
   paint.isAntiAlias = true;
   paint.shader =
       ui.Gradient.linear(Offset(dx + size * 0.5, dy + size * 0.5), Offset(size.toDouble(), size.toDouble()), [
-    !SettingsSvc.settings.colorfulAvatars.value && SettingsSvc.settings.skin.value == Skins.iOS
-        ? HexColor("928E8E")
-        : colors.isNotEmpty
+        !SettingsSvc.settings.colorfulAvatars.value && SettingsSvc.settings.skin.value == Skins.iOS
+            ? HexColor("928E8E")
+            : colors.isNotEmpty
             ? colors[1]
             : HexColor("928E8E"),
-    !SettingsSvc.settings.colorfulAvatars.value && SettingsSvc.settings.skin.value == Skins.iOS
-        ? HexColor("686868")
-        : colors.isNotEmpty
+        !SettingsSvc.settings.colorfulAvatars.value && SettingsSvc.settings.skin.value == Skins.iOS
+            ? HexColor("686868")
+            : colors.isNotEmpty
             ? colors[0]
             : HexColor("686868"),
-  ]);
+      ]);
 
   Offset _offset = Offset(dx + size * 0.5, dy + size * 0.5);
   double radius = size * 0.5;
@@ -792,7 +805,9 @@ Future<void> paintAvatar(
       ..textDirection = TextDirection.rtl
       ..textAlign = TextAlign.center
       ..text = TextSpan(
-          text: String.fromCharCode(icon.codePoint), style: TextStyle(fontSize: fontSize, fontFamily: icon.fontFamily))
+        text: String.fromCharCode(icon.codePoint),
+        style: TextStyle(fontSize: fontSize, fontFamily: icon.fontFamily),
+      )
       ..layout()
       ..paint(canvas, Offset(dx + size * 0.25, dy + size * 0.25));
   } else {
@@ -852,24 +867,27 @@ Future<ui.Image> loadImage(Uint8List data) async {
 }
 
 @Deprecated('Use showAreYouSure() from dialog_helpers.dart instead')
-Widget areYouSure(BuildContext context,
-    {Widget? content,
-    String? title = "Are you sure?",
-    String? noText = "No",
-    String? yesText = "Yes",
-    Color? noColor,
-    Color? yesColor,
-    required Function onNo,
-    required Function onYes}) {
+Widget areYouSure(
+  BuildContext context, {
+  Widget? content,
+  String? title = "Are you sure?",
+  String? noText = "No",
+  String? yesText = "Yes",
+  Color? noColor,
+  Color? yesColor,
+  required Function onNo,
+  required Function onYes,
+}) {
   return _AreYouSureDialog(
-      content: content,
-      title: title,
-      onNo: onNo,
-      onYes: onYes,
-      noText: noText,
-      yesText: yesText,
-      noColor: noColor,
-      yesColor: yesColor);
+    content: content,
+    title: title,
+    onNo: onNo,
+    onYes: onYes,
+    noText: noText,
+    yesText: yesText,
+    noColor: noColor,
+    yesColor: yesColor,
+  );
 }
 
 class _AreYouSureDialog extends StatefulWidget {
@@ -910,15 +928,21 @@ class _AreYouSureDialogState extends State<_AreYouSureDialog> {
           ? null
           : [
               TextButton(
-                child: Text(widget.noText ?? "No",
-                    style: context.theme.textTheme.bodyLarge!
-                        .copyWith(color: widget.noColor ?? context.theme.colorScheme.primary)),
+                child: Text(
+                  widget.noText ?? "No",
+                  style: context.theme.textTheme.bodyLarge!.copyWith(
+                    color: widget.noColor ?? context.theme.colorScheme.primary,
+                  ),
+                ),
                 onPressed: () => widget.onNo.call(),
               ),
               TextButton(
-                child: Text(widget.yesText ?? "Yes",
-                    style: context.theme.textTheme.bodyLarge!
-                        .copyWith(color: widget.yesColor ?? context.theme.colorScheme.primary)),
+                child: Text(
+                  widget.yesText ?? "Yes",
+                  style: context.theme.textTheme.bodyLarge!.copyWith(
+                    color: widget.yesColor ?? context.theme.colorScheme.primary,
+                  ),
+                ),
                 onPressed: () async {
                   final result = widget.onYes.call();
                   if (result is Future) {

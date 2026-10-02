@@ -21,7 +21,7 @@ class MaterialHeader extends StatelessWidget implements PreferredSizeWidget {
 
   @override
   Widget build(BuildContext context) {
-    final readOnlyLogical = ChatsSvc.isLogicalConversation(controller.chat);
+    final readOnlyLogical = ChatsSvc.isPotentialLogicalSource(controller.chat);
     final Rx<Color> _backgroundColor = context.theme.colorScheme.surfaceContainerHighest
         .withValues(alpha: (kIsDesktop && SettingsSvc.settings.windowEffect.value != WindowEffect.disabled) ? 0.4 : 1)
         .obs;
@@ -64,9 +64,7 @@ class MaterialHeader extends StatelessWidget implements PreferredSizeWidget {
               padding: EdgeInsets.only(top: kIsDesktop ? 20 : 0),
               child: InkWell(
                 borderRadius: BorderRadius.circular(10),
-                onTap: readOnlyLogical
-                    ? null
-                    : controller.chat.isGroup
+                onTap: readOnlyLogical || controller.chat.isGroup
                     ? () {
                         Navigator.of(context).push(
                           ThemeSwitcher.buildPageRoute(
@@ -169,16 +167,13 @@ class MaterialHeader extends StatelessWidget implements PreferredSizeWidget {
                   },
                   itemBuilder: (context) {
                     return <PopupMenuItem<int>>[
-                      if (!readOnlyLogical)
-                        PopupMenuItem(
-                          value: 0,
-                          child: Text(
-                            'Details',
-                            style: context.textTheme.bodyLarge!.apply(
-                              color: context.theme.colorScheme.onSurfaceVariant,
-                            ),
-                          ),
+                      PopupMenuItem(
+                        value: 0,
+                        child: Text(
+                          'Details',
+                          style: context.textTheme.bodyLarge!.apply(color: context.theme.colorScheme.onSurfaceVariant),
                         ),
+                      ),
                       if (!readOnlyLogical && !LifecycleSvc.isBubble)
                         PopupMenuItem(
                           value: 1,

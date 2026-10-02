@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/backend/interfaces/send_message_interface.dart';
+import 'package:bluebubbles/services/backend/java_dart_interop/notification_reply_operation.dart';
 import 'package:bluebubbles/services/isolates/global_isolate.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/file_utils.dart';
@@ -17,6 +18,7 @@ import 'package:flutter/foundation.dart';
 import 'package:get/get.dart' hide Response;
 import 'package:get_it/get_it.dart';
 import 'package:universal_io/io.dart';
+import 'package:bluebubbles/services/ui/chat/logical_conversation_certificate_binding.dart';
 import 'package:bluebubbles/services/ui/chat/logical_conversation_view.dart';
 import 'package:bluebubbles/services/ui/chat/logical_conversation_route.dart';
 
@@ -125,9 +127,7 @@ class OutgoingMessageHandler {
     }
 
     final presentationGuid = ChatsSvc.presentationGuidFor(chatGuid);
-    if (Get.isRegistered<MessagesService>(tag: presentationGuid)) {
-      MessagesSvc(presentationGuid).notifyAttachmentUploadProgress(messageGuid, messageGuid, progress);
-    }
+    maybeFindMessagesSvc(presentationGuid)?.notifyAttachmentUploadProgress(messageGuid, messageGuid, progress);
   }
 
   // ── Send-progress trackers ───────────────────────────────────────────────
@@ -180,10 +180,10 @@ class OutgoingMessageHandler {
 
     final chat = tracker.chat;
     final completer = tracker.completer;
-    if (chat.sendProgress.value != 0) {
-      chat.sendProgress.value = 1;
+    if (sendProgressForChat(chat) != 0) {
+      _setSendProgress(chat, 1);
       Timer(const Duration(milliseconds: 500), () {
-        chat.sendProgress.value = 0;
+        _setSendProgress(chat, 0);
       });
     }
     if (!completer.isCompleted) {
@@ -209,6 +209,25 @@ class OutgoingMessageHandler {
   /// hide UI controls (e.g. a "Cancel Outgoing Messages" action) only when
   /// there is actually something pending for a given chat.
   final pendingChatGuids = <String>{}.obs;
+  final RxMap<String, double> conversationSendProgress = <String, double>{}.obs;
+
+  String _conversationKey(Chat chat) => ChatsSvc.conversationKeyFor(chat);
+
+  String _conversationKeyForInput(String conversationOrChatKey) =>
+      ChatsSvc.conversationKeyForGuid(conversationOrChatKey);
+
+  double sendProgressForChat(Chat chat) {
+    if (!ChatsSvc.isApprovedLogicalSource(chat)) return chat.sendProgress.value;
+    return conversationSendProgress[_conversationKey(chat)] ?? 0;
+  }
+
+  void _setSendProgress(Chat chat, double value) {
+    if (ChatsSvc.isApprovedLogicalSource(chat)) {
+      conversationSendProgress[_conversationKey(chat)] = value;
+    } else {
+      chat.sendProgress.value = value;
+    }
+  }
 
   /// Enqueues one item. Logical UI sends use [queueBatch] so every attachment
   /// and text part is admitted from one provider snapshot.
@@ -223,8 +242,10 @@ class OutgoingMessageHandler {
   /// stages carry that receipt and may not select another chat.
   Future<void> queueBatch(List<OutgoingQueueItem> items) async {
     if (items.isEmpty) return;
-    final runtimeCertificateAvailable = LogicalConversationViewPolicy.hydrateRuntimeCertificate(
-      await PrefsSvc.messaging.loadLogicalReadCertificateJsonFresh(),
+    final authority = await PrefsSvc.messaging.loadLogicalReadAuthorityFresh();
+    final runtimeCertificateAvailable = LogicalConversationDatabaseCertificateBinding.bindPersistedCertificates(
+      persistedLedgerJson: authority.ledgerJson,
+      legacyCertificateJson: authority.legacyFallbackJson,
     );
     for (final item in items) {
       _ensureTempGuid(item);
@@ -288,7 +309,7 @@ class OutgoingMessageHandler {
     }
 
     _queue.addAll(prepared);
-    pendingChatGuids.addAll(prepared.map((entry) => entry.item.chat.guid));
+    pendingChatGuids.addAll(prepared.map((entry) => _conversationKey(entry.item.chat)));
     unawaited(_processNext());
     if (logical) {
       await Future.wait(
@@ -422,7 +443,7 @@ class OutgoingMessageHandler {
       _failLogicalAdmission(items, 'SEND_BLOCKED_ADMISSION_LEDGER_UNAVAILABLE');
     }
     for (var index = 0; index < items.length; index++) {
-      final logicalId = draft?.logicalId ?? LogicalConversationViewPolicy.comcastNodeUpdates.id;
+      final logicalId = draft?.logicalId ?? LogicalConversationViewPolicy.bankedLogicalConversationId;
       final intentFingerprint = draft?.contentFingerprint ?? _logicalPayloadFingerprint(items[index]);
       if (!ledger.permitsExplicitNewOperation(
         logicalId: logicalId,
@@ -460,7 +481,7 @@ class OutgoingMessageHandler {
         LogicalSendAdmissionReceipt(
           admissionId: sha256.convert(material).toString(),
           actionId: actionIds[index],
-          logicalId: draft?.logicalId ?? LogicalConversationViewPolicy.comcastNodeUpdates.id,
+          logicalId: draft?.logicalId ?? LogicalConversationViewPolicy.bankedLogicalConversationId,
           draftContentRevision: draft?.contentRevision ?? 0,
           certificateRevision: revision.certificateRevision,
           authorityRevision: revision.authorityRevision,
@@ -674,14 +695,8 @@ class OutgoingMessageHandler {
   }
 
   Never _failLogicalAdmission(List<OutgoingQueueItem> items, String reason, {LogicalDraft? rearmedDraft}) {
-    final revision = ChatsSvc.currentLogicalAuthorityRevision;
-    ChatsSvc.logicalRouteRuntimeStatus.value = LogicalRouteRuntimeStatus(
-      stage: LogicalRouteRuntimeStage.routeNotProven,
-      reason: reason,
-      certificateRevision: revision?.certificateRevision,
-      authorityRevision: revision?.authorityRevision,
-      authorityEpoch: revision?.epoch,
-    );
+    final routeChat = items.firstOrNull?.chat;
+    if (routeChat != null) ChatsSvc.publishBuild99WriterBlocked(routeChat, reason);
     final error = LogicalSendAdmissionException(
       logicalSendAdmissionStateForReason(reason),
       reason,
@@ -693,7 +708,7 @@ class OutgoingMessageHandler {
       }
     }
     Logger.warn('Blocked logical mutation: $reason', tag: _tag);
-    ChatsSvc.requestLogicalAuthorityRecheck();
+    if (routeChat != null) ChatsSvc.requestLogicalAuthorityRecheck(routeChat);
     throw error;
   }
 
@@ -739,6 +754,7 @@ class OutgoingMessageHandler {
         item.reaction,
         isRetry: item.isRetry,
         isLogicalAdmission: item.logicalAdmissionReceipt != null,
+        requiresSingleProviderDispatch: item.beforeProviderDispatch != null,
       );
       if (built.isEmpty) return (ok: true, result: <Message>[]);
     }
@@ -813,6 +829,7 @@ class OutgoingMessageHandler {
         logicalDdScan: item.logicalDdScan,
         logicalAttachmentContentFingerprint: item.logicalAttachmentContentFingerprint,
         logicalDispatchReservationCompleter: item.logicalDispatchReservationCompleter,
+        beforeProviderDispatch: item.beforeProviderDispatch,
         isRetry: item.isRetry,
         clearNotificationsIfFromMe: item.clearNotificationsIfFromMe,
         completer: item.completer,
@@ -830,6 +847,7 @@ class OutgoingMessageHandler {
         logicalDdScan: item.logicalDdScan,
         logicalAttachmentContentFingerprint: item.logicalAttachmentContentFingerprint,
         logicalDispatchReservationCompleter: item.logicalDispatchReservationCompleter,
+        beforeProviderDispatch: item.beforeProviderDispatch,
         isRetry: item.isRetry,
         clearNotificationsIfFromMe: item.clearNotificationsIfFromMe,
         completer: item.completer,
@@ -847,6 +865,7 @@ class OutgoingMessageHandler {
         logicalDdScan: item.logicalDdScan,
         logicalAttachmentContentFingerprint: item.logicalAttachmentContentFingerprint,
         logicalDispatchReservationCompleter: item.logicalDispatchReservationCompleter,
+        beforeProviderDispatch: item.beforeProviderDispatch,
         isRetry: item.isRetry,
         clearNotificationsIfFromMe: item.clearNotificationsIfFromMe,
         completer: item.completer,
@@ -865,6 +884,7 @@ class OutgoingMessageHandler {
         logicalDdScan: item.logicalDdScan,
         logicalAttachmentContentFingerprint: item.logicalAttachmentContentFingerprint,
         logicalDispatchReservationCompleter: item.logicalDispatchReservationCompleter,
+        beforeProviderDispatch: item.beforeProviderDispatch,
         logicalRouteTargetMessageGuid: item.logicalRouteTargetMessageGuid,
         logicalPersistedExecutionSourceChatRowId: item.logicalPersistedExecutionSourceChatRowId,
         logicalPersistedExecutionSourceChatGuid: item.logicalPersistedExecutionSourceChatGuid,
@@ -874,6 +894,46 @@ class OutgoingMessageHandler {
       );
     }
     throw StateError('Unsupported outgoing item type: ${item.runtimeType}');
+  }
+
+
+  Future<void> _rollbackPreparedBeforeProviderDispatch(
+    OutgoingQueueItem item,
+  ) async {
+    final guid = item.message.guid;
+    if (guid == null || guid.isEmpty) return;
+
+    final persisted = Message.findOne(guid: guid) ?? item.message;
+    final messageService = maybeFindMessagesSvc(_presentationGuid(item.chat));
+    final rollback = await NotificationReplyPreparedMessageRollback.run(
+      deletePersistedMessage: () async {
+        if (Message.findOne(guid: guid) != null) {
+          await Message.delete(guid);
+        }
+      },
+      removePresentationMessage: () async {
+        messageService?.removeMessage(persisted);
+      },
+      restoreLatestMessage: () async {
+        final state = ChatsSvc.getChatState(item.chat.guid);
+        if (state?.latestMessage.value?.guid != guid) return;
+        final latest = Chat.getMessages(item.chat, limit: 1);
+        if (latest.isEmpty) {
+          throw StateError('NOTIFICATION_REPLY_PREPARED_LATEST_RESTORE_EMPTY');
+        }
+        ChatsSvc.updateChatLatestMessage(
+          item.chat.guid,
+          latest.first,
+          allowOlder: true,
+        );
+      },
+    );
+    if (!rollback.isComplete) {
+      final description =
+          StringBuffer('Notification reply pre-dispatch cleanup was partial: ')
+            ..write(rollback.failedSteps.map((step) => step.name).join(','));
+      Logger.warn(description.toString(), tag: _tag);
+    }
   }
 
   Future<void> _processNext() async {
@@ -886,17 +946,30 @@ class OutgoingMessageHandler {
       var dispatchReserved = false;
 
       try {
-        await _validateCommittedLogicalBinding(item);
-        await _transitionLogicalOperation(
-          item,
-          from: LogicalOperationState.admitted,
-          to: LogicalOperationState.dispatchReserved,
-        );
-        // The preferences write above yields. Revalidate after local durable
-        // reservation, then perform one final synchronous check immediately
-        // before the isolate request is enqueued.
-        await _validateCommittedLogicalBinding(item);
-        _validateCommittedLogicalBindingSynchronous(item);
+        Future<void> admitBeforeProviderDispatch() async {
+          await _validateCommittedLogicalBinding(item);
+          await _transitionLogicalOperation(
+            item,
+            from: LogicalOperationState.admitted,
+            to: LogicalOperationState.dispatchReserved,
+          );
+          // The preferences write above yields. Revalidate after local durable
+          // reservation, then perform one final synchronous check immediately
+          // before the isolate request is enqueued.
+          await _validateCommittedLogicalBinding(item);
+          _validateCommittedLogicalBindingSynchronous(item);
+          await item.beforeProviderDispatch?.call();
+        }
+
+        if (item.beforeProviderDispatch != null) {
+          await NotificationReplyPreparedDispatchAdmission.run(
+            admit: admitBeforeProviderDispatch,
+            rollbackPreparedMessage: () =>
+                _rollbackPreparedBeforeProviderDispatch(item),
+          );
+        } else {
+          await admitBeforeProviderDispatch();
+        }
         dispatchReserved = true;
         final reservation = item.logicalDispatchReservationCompleter;
         if (reservation != null && !reservation.isCompleted) reservation.complete();
@@ -932,6 +1005,11 @@ class OutgoingMessageHandler {
           if (item.completer != null && !item.completer!.isCompleted) {
             item.completer!.completeError(error, dispatchStack);
           }
+        } else if (dispatchError != null && item.beforeProviderDispatch != null) {
+          final completer = item.completer;
+          if (completer != null && !completer.isCompleted) {
+            completer.completeError(dispatchError!, dispatchStack ?? StackTrace.current);
+          }
         } else if (item.completer != null && !item.completer!.isCompleted) {
           item.completer!.complete();
         }
@@ -965,7 +1043,7 @@ class OutgoingMessageHandler {
       }
 
       // Recompute the reactive pending set after each item is fully processed.
-      pendingChatGuids.assignAll(_queue.map((e) => e.item.chat.guid).toSet());
+      pendingChatGuids.assignAll(_queue.map((e) => _conversationKey(e.item.chat)).toSet());
     }
 
     _isProcessing = false;
@@ -991,7 +1069,7 @@ class OutgoingMessageHandler {
       await _finalizeOutgoingFailure(pending.chat, m, m.guid!);
     }
     if (toCancel.isNotEmpty) {
-      pendingChatGuids.assignAll(_queue.map((e) => e.item.chat.guid).toSet());
+      pendingChatGuids.assignAll(_queue.map((e) => _conversationKey(e.item.chat)).toSet());
     }
   }
 
@@ -1004,8 +1082,10 @@ class OutgoingMessageHandler {
   ///
   /// The currently-dispatching item (if any) is left to complete on its own —
   /// only items still waiting in the queue are affected.
-  Future<void> cancelPendingForChat(String chatGuid) =>
-      _cancelEntries(_queue.where((e) => e.item.chat.guid == chatGuid));
+  Future<void> cancelPendingForChat(String conversationOrChatKey) {
+    final key = _conversationKeyForInput(conversationOrChatKey);
+    return _cancelEntries(_queue.where((entry) => _conversationKey(entry.item.chat) == key));
+  }
 
   /// Wraps a send [process] with the send-progress animation:
   ///
@@ -1016,15 +1096,15 @@ class OutgoingMessageHandler {
   ///   did so via [completeSendProgressIfExists]).
   Future<T> _handleSend<T>(Future<T> Function() process, Chat chat) {
     final timer = Timer(const Duration(seconds: 5), () {
-      chat.sendProgress.value = .9;
+      _setSendProgress(chat, .9);
     });
     final t = process();
     void _finalize(dynamic _) {
       timer.cancel();
-      if (chat.sendProgress.value != 0 && chat.sendProgress.value != 1) {
-        chat.sendProgress.value = 1;
+      if (sendProgressForChat(chat) != 0 && sendProgressForChat(chat) != 1) {
+        _setSendProgress(chat, 1);
         Timer(const Duration(milliseconds: 500), () {
-          chat.sendProgress.value = 0;
+          _setSendProgress(chat, 0);
         });
       }
     }
@@ -1252,13 +1332,16 @@ class OutgoingMessageHandler {
     String? r, {
     required bool isRetry,
     required bool isLogicalAdmission,
+    required bool requiresSingleProviderDispatch,
   }) {
     // If it's a retry, the message should already be in the correct format
     // and already carries the GUID of the DB row the caller re-persists.
     if (isRetry) return [m];
     if ((m.text?.isEmpty ?? true) && (m.subject?.isEmpty ?? true) && r == null) return [];
 
-    if (!isLogicalAdmission && !SettingsSvc.serverDetails.isMinBigSur && r == null) {
+    if (!requiresSingleProviderDispatch &&
+        !isLogicalAdmission &&
+        !SettingsSvc.serverDetails.isMinBigSur && r == null) {
       // Split URL messages on OS X to prevent message matching glitches.
       String mainText = m.text!;
       String? secondaryText;
@@ -1319,14 +1402,14 @@ class OutgoingMessageHandler {
       saved.add(hydrated);
 
       final presentationGuid = _presentationGuid(c);
-      final msgSvcRegistered = Get.isRegistered<MessagesService>(tag: presentationGuid);
-      if (r != null && message.associatedMessageGuid != null && msgSvcRegistered) {
+      final messageService = maybeFindMessagesSvc(presentationGuid);
+      if (r != null && message.associatedMessageGuid != null && messageService != null) {
         // Add temp reaction to UI immediately during prep so it appears without
         // waiting for the serial queue (fixes back-to-back text+reaction send delay).
-        final parentState = MessagesSvc(presentationGuid).getMessageStateIfExists(message.associatedMessageGuid!);
+        final parentState = messageService.getMessageStateIfExists(message.associatedMessageGuid!);
         parentState?.addAssociatedMessageInternal(hydrated);
-      } else if (message.associatedMessageGuid == null && msgSvcRegistered) {
-        await MessagesSvc(presentationGuid).addNewMessage(hydrated);
+      } else if (message.associatedMessageGuid == null && messageService != null) {
+        await messageService.addNewMessage(hydrated);
       }
     }
     // Update ChatState immediately so the tile reflects the outgoing message(s)
@@ -1421,11 +1504,12 @@ class OutgoingMessageHandler {
     // subscription won't fire for it.  Explicitly push the message into the view
     // using the Store-hydrated object so _handleNewMessage can load dbAttachments.
     final presentationGuid = _presentationGuid(c);
-    if (Get.isRegistered<MessagesService>(tag: presentationGuid)) {
-      await MessagesSvc(presentationGuid).addNewMessage(savedMessage);
+    final messageService = maybeFindMessagesSvc(presentationGuid);
+    if (messageService != null) {
+      await messageService.addNewMessage(savedMessage);
       // Register upload-in-progress state.  Must come after addNewMessage so the
       // MessageState already exists.
-      MessagesSvc(presentationGuid).notifyAttachmentUploadStarted(savedMessage, attachment);
+      messageService.notifyAttachmentUploadStarted(savedMessage, attachment);
     }
     // Update ChatState immediately so the tile reflects the outgoing attachment
     // before the queue dispatches the HTTP call.
@@ -1701,9 +1785,10 @@ class OutgoingMessageHandler {
             // so the Obx can still find it; _syncAttachmentStates promotes it
             // to the real key when updateMessage delivers the updated struct.
             final presentationGuid = _presentationGuid(c);
-            if (Get.isRegistered<MessagesService>(tag: presentationGuid)) {
-              MessagesSvc(presentationGuid).notifyAttachmentSendComplete(tempGuid, newMessage.guid!, tempGuid, a);
-              MessagesSvc(presentationGuid).updateMessage(newMessage);
+            final messageService = maybeFindMessagesSvc(presentationGuid);
+            if (messageService != null) {
+              messageService.notifyAttachmentSendComplete(tempGuid, newMessage.guid!, tempGuid, a);
+              messageService.updateMessage(newMessage);
             }
           } catch (e, st) {
             Logger.warn('Failed to replace attachment ${a.guid}', error: e, trace: st, tag: _tag);
@@ -1724,8 +1809,9 @@ class OutgoingMessageHandler {
           // re-keyed MessageState to errorMsg.guid, so notifyAttachmentTransferError
           // can use that key directly.
           final presentationGuid = _presentationGuid(c);
-          if (Get.isRegistered<MessagesService>(tag: presentationGuid)) {
-            MessagesSvc(presentationGuid).notifyAttachmentTransferError(errorMsg.guid!, attachment.guid!);
+          final messageService = maybeFindMessagesSvc(presentationGuid);
+          if (messageService != null) {
+            messageService.notifyAttachmentTransferError(errorMsg.guid!, attachment.guid!);
           }
           attachmentProgress.removeWhere((e) => e.guid == tempGuid);
         },
@@ -1792,9 +1878,7 @@ class OutgoingMessageHandler {
       // Replace may fail, meaning it's already been replaced (likely by a socket event)
       final errorMsg = await Message.replaceMessage(tempGuid, m);
       final presentationGuid = _presentationGuid(c);
-      if (Get.isRegistered<MessagesService>(tag: presentationGuid)) {
-        MessagesSvc(presentationGuid).updateMessage(errorMsg, oldGuid: tempGuid);
-      }
+      maybeFindMessagesSvc(presentationGuid)?.updateMessage(errorMsg, oldGuid: tempGuid);
 
       // Only update latest message if the failed message is the current latest message.
       if (ChatsSvc.getChatState(c.guid)?.latestMessage.value?.guid == tempGuid) {
@@ -1825,6 +1909,7 @@ class OutgoingMessageHandler {
   Future<void> _matchMessageWithExisting(Chat chat, String existingGuid, Message replacement) async {
     final alreadyPresent = Message.findOne(guid: replacement.guid);
     final presentationGuid = _presentationGuid(chat);
+    final messageService = maybeFindMessagesSvc(presentationGuid);
 
     // Track the DB-hydrated confirmed message so we can update ChatState after the swap.
     late Message _confirmedMessage;
@@ -1852,8 +1937,8 @@ class OutgoingMessageHandler {
         final stale = Message.findOne(guid: existingGuid);
         if (stale != null) {
           Message.delete(stale.guid!);
-          if (Get.isRegistered<MessagesService>(tag: presentationGuid)) {
-            MessagesSvc(presentationGuid).updateMessage(replacement, oldGuid: existingGuid);
+          if (messageService != null) {
+            messageService.updateMessage(replacement, oldGuid: existingGuid);
           }
         }
       } else {}
@@ -1863,8 +1948,8 @@ class OutgoingMessageHandler {
         // Capture the return value — it is fetched from the DB and has a valid id.
         final saved = await Message.replaceMessage(existingGuid, replacement);
         _confirmedMessage = saved;
-        if (Get.isRegistered<MessagesService>(tag: presentationGuid)) {
-          MessagesSvc(presentationGuid).updateMessage(saved, oldGuid: existingGuid);
+        if (messageService != null) {
+          messageService.updateMessage(saved, oldGuid: existingGuid);
         }
       } catch (ex, st) {
         // If the temp message isn't found in the isolate store, it was never saved.
@@ -1881,9 +1966,9 @@ class OutgoingMessageHandler {
         // This handles the case where the temp message was never saved to the main thread's store.
         replacement.save(); // sets replacement.id via Database.messages.put()
         _confirmedMessage = replacement;
-        if (Get.isRegistered<MessagesService>(tag: presentationGuid)) {
+        if (messageService != null) {
           // Update the UI, treating this as transitioning from temp to real GUID
-          MessagesSvc(presentationGuid).updateMessage(replacement, oldGuid: existingGuid);
+          messageService.updateMessage(replacement, oldGuid: existingGuid);
         }
       }
     }

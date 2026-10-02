@@ -20,6 +20,11 @@ Each resource has an interface and a concrete action file → `interfaces/CLAUDE
 - `incoming_message_handler.dart` — `IncomingMessageHandler` / `IncomingMsgHandler` GetIt getter
 - Owns the inbound message pipeline: FIFO queue, configurable concurrency, per-GUID serialization, deduplication, chat hydration, DB write, notification dispatch, and UI reactivity
 
+## Typing Indicators
+- Incoming physical source GUIDs resolve through the canonical application conversation key before controller lookup.
+- Certified sibling sources share one presentation controller; exact source GUIDs remain event provenance.
+- Outbound typing is a provider mutation and stays disabled for certified logical conversations.
+
 ## Other Key Files
 - `settings/` — `SettingsService` + `SharedPreferencesService` → `settings/CLAUDE.md`
 - `notifications/notifications_service.dart` — local notification dispatch

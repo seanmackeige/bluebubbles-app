@@ -1,4 +1,5 @@
 import 'package:bluebubbles/database/models.dart' hide Entity;
+import 'package:bluebubbles/services/ui/chat/logical_message_chronology.dart';
 import 'package:flutter/foundation.dart';
 
 class ReactionTypes {
@@ -16,14 +17,7 @@ class ReactionTypes {
   static const String QUESTION = "question";
 
   static List<String> toList() {
-    return [
-      LOVE,
-      LIKE,
-      DISLIKE,
-      LAUGH,
-      EMPHASIZE,
-      QUESTION,
-    ];
+    return [LOVE, LIKE, DISLIKE, LAUGH, EMPHASIZE, QUESTION];
   }
 
   static final Map<String, String> reactionToVerb = {
@@ -60,15 +54,25 @@ class ReactionTypes {
   };
 }
 
-List<Message> getUniqueReactionMessages(List<Message> messages) {
+List<Message> getUniqueReactionMessages(List<Message> messages, {bool logical = false}) {
   List<int> handleCache = [];
   List<Message> output = [];
-  // Sort the messages, putting the latest at the top
-  final ids = messages.map((e) => e.guid).toSet();
-  messages.retainWhere((element) => ids.remove(element.guid));
-  messages.sort(Message.sort);
+  // Exact GUID duplicates are one provider event. Content is never a dedupe
+  // key. Then put the latest event first using the conversation's chronology.
+  final byGuid = <String, Message>{};
+  final unkeyed = <Message>[];
+  for (final message in messages) {
+    final guid = message.guid;
+    if (guid == null || guid.isEmpty) {
+      unkeyed.add(message);
+    } else {
+      byGuid.putIfAbsent(guid, () => message);
+    }
+  }
+  final ordered = <Message>[...byGuid.values, ...unkeyed]
+    ..sort((left, right) => compareApplicationMessagesDescending(left, right, logical: logical));
   // Iterate over the messages and insert the latest reaction for each user
-  for (Message msg in messages) {
+  for (Message msg in ordered) {
     int cache = msg.isFromMe! ? 0 : msg.handleId ?? 0;
     if (!handleCache.contains(cache) && !kIsWeb) {
       handleCache.add(cache);

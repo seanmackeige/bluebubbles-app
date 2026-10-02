@@ -56,8 +56,12 @@ class ConversationListController extends StatefulController {
     final copy = List.from(selectedChats);
     for (Chat c in copy) {
       selectedChats.removeWhere((element) => element.guid == c.guid);
-      Get.find<ConversationTileController>(tag: c.guid).updateWidgets<MaterialConversationTile>(null);
-      Get.find<ConversationTileController>(tag: c.guid).updateWidgets<SamsungConversationTile>(null);
+      Get.find<ConversationTileController>(
+        tag: ChatsSvc.conversationKeyFor(c),
+      ).updateWidgets<MaterialConversationTile>(null);
+      Get.find<ConversationTileController>(
+        tag: ChatsSvc.conversationKeyFor(c),
+      ).updateWidgets<SamsungConversationTile>(null);
     }
     updateSelectedChats();
   }
@@ -79,14 +83,17 @@ class ConversationListController extends StatefulController {
     final XFile? file = await ImagePicker().pickImage(source: ImageSource.camera);
     if (file == null) return;
 
-    openNewChatCreator(context, existing: [
-      PlatformFile(
-        name: basename(file.path),
-        path: file.path,
-        bytes: await file.readAsBytes(),
-        size: await file.length(),
-      )
-    ]);
+    openNewChatCreator(
+      context,
+      existing: [
+        PlatformFile(
+          name: basename(file.path),
+          path: file.path,
+          bytes: await file.readAsBytes(),
+          size: await file.length(),
+        ),
+      ],
+    );
   }
 
   void openNewChatCreator(BuildContext context, {List<PlatformFile>? existing}) async {
@@ -100,17 +107,16 @@ class ConversationListController extends StatefulController {
 
 class ConversationList extends CustomStateful<ConversationListController> {
   ConversationList({super.key, required bool showArchivedChats, required bool showUnknownSenders})
-      : super(
-            parentController: Get.put(
-                ConversationListController(
-                  showArchivedChats: showArchivedChats,
-                  showUnknownSenders: showUnknownSenders,
-                ),
-                tag: showArchivedChats
-                    ? "Archived"
-                    : showUnknownSenders
-                        ? "Unknown"
-                        : "Messages"));
+    : super(
+        parentController: Get.put(
+          ConversationListController(showArchivedChats: showArchivedChats, showUnknownSenders: showUnknownSenders),
+          tag: showArchivedChats
+              ? "Archived"
+              : showUnknownSenders
+              ? "Unknown"
+              : "Messages",
+        ),
+      );
 
   @override
   State<StatefulWidget> createState() => _ConversationListState();
@@ -126,8 +132,8 @@ class _ConversationListState extends CustomState<ConversationList, void, Convers
     tag = controller.showArchivedChats
         ? "Archived"
         : controller.showUnknownSenders
-            ? "Unknown"
-            : "Messages";
+        ? "Unknown"
+        : "Messages";
 
     if (!kIsWeb && !controller.showArchivedChats && !controller.showUnknownSenders) {
       WidgetsBinding.instance.addObserver(this);
@@ -158,18 +164,16 @@ class _ConversationListState extends CustomState<ConversationList, void, Convers
       final lastOpenedChat = PrefsSvc.messaging.getLastOpenedChat();
       if (lastOpenedChat != null &&
           showAltLayoutContextless &&
-          ChatsSvc.activeChat?.chat.guid != lastOpenedChat &&
+          (ChatsSvc.activeChat == null || ChatsSvc.conversationKeyFor(ChatsSvc.activeChat!.chat) != lastOpenedChat) &&
           !LifecycleSvc.isBubble) {
         WidgetsBinding.instance.addPostFrameCallback((_) async {
-          if (kIsWeb) {
-            await ChatsSvc.loadedAllChats.future;
+          await ChatsSvc.loadedAllChats.future;
+          final chat = ChatsSvc.presentationChatForConversationKey(lastOpenedChat);
+          if (chat == null) {
+            await PrefsSvc.messaging.clearLastOpenedChat();
+            return;
           }
-          NavigationSvc.pushAndRemoveUntil(
-            context,
-            ConversationView(
-                chat: kIsWeb ? (await Chat.findOneWeb(guid: lastOpenedChat))! : Chat.findOne(guid: lastOpenedChat)!),
-            (route) => route.isFirst,
-          );
+          NavigationSvc.pushAndRemoveUntil(context, ConversationView(chat: chat), (route) => route.isFirst);
         });
       }
     }
@@ -201,10 +205,7 @@ class _ConversationListState extends CustomState<ConversationList, void, Convers
       for (final hs in state.participants) {
         final path = hs.avatarPath.value;
         if (path == null) continue;
-        unawaited(precacheImage(
-          ResizeImage(FileImage(File(path)), width: decodeSize, height: decodeSize),
-          context,
-        ));
+        unawaited(precacheImage(ResizeImage(FileImage(File(path)), width: decodeSize, height: decodeSize), context));
       }
     }
   }
@@ -237,51 +238,48 @@ class _ConversationListState extends CustomState<ConversationList, void, Convers
         allowResize: true,
         left: !showAltLayout
             ? child
-            : LayoutBuilder(builder: (context, constraints) {
-                NavigationSvc.maxWidthLeft = constraints.maxWidth;
-                return PopScope(
-                  canPop: false,
-                  onPopInvokedWithResult: <T>(bool _, T? __) async {
-                    Get.until((route) {
-                      bool id2result = false;
-                      // check if we should pop the left side first
+            : LayoutBuilder(
+                builder: (context, constraints) {
+                  NavigationSvc.maxWidthLeft = constraints.maxWidth;
+                  return PopScope(
+                    canPop: false,
+                    onPopInvokedWithResult: <T>(bool _, T? __) async {
                       Get.until((route) {
-                        if (route.settings.name != "initial") {
-                          Get.back(id: 2);
-                          id2result = true;
-                        }
-                        if (!(Get.global(2).currentState?.canPop() ?? true)) {
-                          if (ChatsSvc.activeChat != null) {
-                            cvc(ChatsSvc.activeChat!.chat).close();
+                        bool id2result = false;
+                        // check if we should pop the left side first
+                        Get.until((route) {
+                          if (route.settings.name != "initial") {
+                            Get.back(id: 2);
+                            id2result = true;
+                          }
+                          if (!(Get.global(2).currentState?.canPop() ?? true)) {
+                            if (ChatsSvc.activeChat != null) {
+                              cvc(ChatsSvc.activeChat!.chat).close();
+                            }
+                          }
+                          return true;
+                        }, id: 2);
+                        if (!id2result) {
+                          if (route.settings.name == "initial") {
+                            SystemNavigator.pop();
+                          } else {
+                            Get.back(id: 1);
                           }
                         }
                         return true;
-                      }, id: 2);
-                      if (!id2result) {
-                        if (route.settings.name == "initial") {
-                          SystemNavigator.pop();
-                        } else {
-                          Get.back(id: 1);
-                        }
-                      }
-                      return true;
-                    }, id: 1);
-                  },
-                  child: Navigator(
-                    key: Get.nestedKey(1),
-                    requestFocus: false,
-                    onPopPage: (route, _) {
-                      return false;
+                      }, id: 1);
                     },
-                    pages: [
-                      CupertinoPage(
-                        name: "initial",
-                        child: child,
-                      )
-                    ],
-                  ),
-                );
-              }),
+                    child: Navigator(
+                      key: Get.nestedKey(1),
+                      requestFocus: false,
+                      onPopPage: (route, _) {
+                        return false;
+                      },
+                      pages: [CupertinoPage(name: "initial", child: child)],
+                    ),
+                  );
+                },
+              ),
         right: LayoutBuilder(
           builder: (context, constraints) {
             NavigationSvc.maxWidthRight = constraints.maxWidth;
@@ -295,12 +293,7 @@ class _ConversationListState extends CustomState<ConversationList, void, Convers
                 onPopPage: (route, _) {
                   return false;
                 },
-                pages: [
-                  const CupertinoPage(
-                    name: "initial",
-                    child: InitialWidgetRight(),
-                  ),
-                ],
+                pages: [const CupertinoPage(name: "initial", child: InitialWidgetRight())],
               ),
             );
           },

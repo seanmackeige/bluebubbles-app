@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:bluebubbles/app/layouts/conversation_details/attachment_section_type.dart';
@@ -10,11 +11,48 @@ import 'package:bluebubbles/database/database.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
+import 'package:bluebubbles/services/ui/chat/logical_membership_refresh.dart';
+import 'package:bluebubbles/services/ui/chat/logical_message_chronology.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import 'package:get/get.dart';
 import 'package:url_launcher/url_launcher.dart';
+
+String? _linkMessageIdentity(Message message) {
+  if (message.guid != null) return 'guid:${message.guid}';
+  if (message.originalROWID != null) return 'row:${message.originalROWID}';
+  if (message.id != null) return 'local:${message.id}';
+  return null;
+}
+
+String? _linkSourceChatIdentity(Message message) {
+  final chat = message.chat.target;
+  if (chat?.guid != null) return 'guid:${chat!.guid}';
+  if (chat?.id != null) return 'local:${chat!.id}';
+  return null;
+}
+
+@visibleForTesting
+List<Message> dedupeLinkMessagesByExactIdentity(Iterable<Message> messages) {
+  final deduplicated = <Message>[];
+  final seen = <String>{};
+  for (final message in messages) {
+    final identity = _linkMessageIdentity(message);
+    final sourceChatIdentity = _linkSourceChatIdentity(message);
+    if (identity == null || sourceChatIdentity == null || seen.add('$sourceChatIdentity\u0000$identity')) {
+      deduplicated.add(message);
+    }
+  }
+  return deduplicated;
+}
+
+@visibleForTesting
+int compareLogicalLinkMessagesDescending(Message left, Message right) {
+  final byMessage = compareLogicalMessagesDescending(left, right);
+  if (byMessage != 0) return byMessage;
+  return (_linkSourceChatIdentity(left) ?? '').compareTo(_linkSourceChatIdentity(right) ?? '');
+}
 
 /// Widget that handles links section display with loading state
 class LinksSection extends StatefulWidget {
@@ -42,14 +80,12 @@ class _LinksSectionState extends State<LinksSection> with ThemeHelpers {
   bool _isLoading = true;
   bool _loadingMore = false;
   String _searchQuery = '';
+  StreamSubscription? _membershipSubscription;
+  int _loadEpoch = 0;
 
   List<Message> get _filteredLinks {
     if (!widget.fullPage) return links;
-    return applyMessageFilters(
-      links,
-      senderFilter: widget.senderFilter,
-      sinceDate: widget.sinceDate,
-    );
+    return applyMessageFilters(links, senderFilter: widget.senderFilter, sinceDate: widget.sinceDate);
   }
 
   List<Message> get _displayedLinks {
@@ -70,8 +106,18 @@ class _LinksSectionState extends State<LinksSection> with ThemeHelpers {
   @override
   void initState() {
     super.initState();
+    _membershipSubscription = EventDispatcherSvc.stream.listen((event) {
+      if (event.type != logicalMembershipAdvancedEvent ||
+          !shouldRefreshLogicalMembershipProjection(
+            eventData: event.data,
+            currentLogicalId: ChatsSvc.logicalConversationIdFor(widget.chat),
+          )) {
+        return;
+      }
+      unawaited(_fetchLinks());
+    });
     if (!kIsWeb) {
-      _fetchLinks();
+      unawaited(_fetchLinks());
     } else {
       _isLoading = false;
     }
@@ -80,37 +126,59 @@ class _LinksSectionState extends State<LinksSection> with ThemeHelpers {
   @override
   void didUpdateWidget(LinksSection oldWidget) {
     super.didUpdateWidget(oldWidget);
+    final conversationChanged = ChatsSvc.conversationKeyFor(oldWidget.chat) != ChatsSvc.conversationKeyFor(widget.chat);
     if (oldWidget.fullPage != widget.fullPage ||
         oldWidget.senderFilter != widget.senderFilter ||
         oldWidget.sinceDate != widget.sinceDate) {
       _displayCount = widget.fullPage ? _chunkSize : kAttachmentPreviewLimit;
     }
+    if (!kIsWeb && conversationChanged) {
+      unawaited(_fetchLinks());
+    }
+  }
+
+  @override
+  void dispose() {
+    _membershipSubscription?.cancel();
+    super.dispose();
   }
 
   Future<void> _fetchLinks() async {
-    if (kIsWeb || widget.chat.id == null) {
+    final loadEpoch = ++_loadEpoch;
+    if (kIsWeb) {
+      setState(() => _isLoading = false);
+      return;
+    }
+    if (mounted) setState(() => _isLoading = true);
+
+    final sourceChats = ChatsSvc.logicalSourceChatsFor(widget.chat);
+    final sourceChatIds = sourceChats.map((chat) => chat.id).whereType<int>().toList(growable: false);
+    if (sourceChatIds.isEmpty || sourceChatIds.length != sourceChats.length) {
       setState(() => _isLoading = false);
       return;
     }
 
     try {
-      final query = (Database.messages.query(Message_.dateDeleted.isNull() &
-              Message_.dbPayloadData.notNull() &
-              Message_.balloonBundleId.contains("URLBalloonProvider"))
-            ..link(Message_.chat, Chat_.id.equals(widget.chat.id!))
-            ..order(Message_.dateCreated, flags: Order.descending))
-          .build();
+      final query =
+          (Database.messages.query(
+                  Message_.dateDeleted.isNull() &
+                      Message_.dbPayloadData.notNull() &
+                      Message_.balloonBundleId.contains("URLBalloonProvider"),
+                )
+                ..link(Message_.chat, Chat_.id.oneOf(sourceChatIds))
+                ..order(Message_.dateCreated, flags: Order.descending))
+              .build();
       final fetchedLinks = await query.findAsync();
       query.close();
 
-      if (mounted) {
+      if (mounted && loadEpoch == _loadEpoch) {
         setState(() {
-          links = fetchedLinks;
+          links = dedupeLinkMessagesByExactIdentity(fetchedLinks)..sort(compareLogicalLinkMessagesDescending);
           _isLoading = false;
         });
       }
     } catch (e) {
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted && loadEpoch == _loadEpoch) setState(() => _isLoading = false);
     }
   }
 
@@ -139,16 +207,9 @@ class _LinksSectionState extends State<LinksSection> with ThemeHelpers {
         onTap: () async {
           final data = _displayedLinks[index].payloadData!.urlData!.first;
           if ((data.url ?? data.originalUrl) == null) return;
-          await launchUrl(
-            Uri.parse((data.url ?? data.originalUrl)!),
-            mode: LaunchMode.externalApplication,
-          );
+          await launchUrl(Uri.parse((data.url ?? data.originalUrl)!), mode: LaunchMode.externalApplication);
         },
-        child: Center(
-          child: UrlPreview(
-            data: _displayedLinks[index].payloadData!.urlData!.first,
-          ),
-        ),
+        child: Center(child: UrlPreview(data: _displayedLinks[index].payloadData!.urlData!.first)),
       ),
     );
   }
@@ -165,11 +226,8 @@ class _LinksSectionState extends State<LinksSection> with ThemeHelpers {
           SliverToBoxAdapter(
             child: AttachmentSectionHeader(
               title: AttachmentSectionType.links.sectionLabel,
-              onShowMore: () => ConversationAttachments.open(
-                context,
-                chat: widget.chat,
-                section: AttachmentSectionType.links,
-              ),
+              onShowMore: () =>
+                  ConversationAttachments.open(context, chat: widget.chat, section: AttachmentSectionType.links),
             ),
           ),
         if (widget.fullPage)
@@ -196,32 +254,32 @@ class _LinksSectionState extends State<LinksSection> with ThemeHelpers {
               child: Center(
                 child: Text(
                   links.isEmpty ? "No links" : "No matching links",
-                  style: context.theme.textTheme.bodyMedium!.copyWith(
-                    color: context.theme.colorScheme.outline,
-                  ),
+                  style: context.theme.textTheme.bodyMedium!.copyWith(color: context.theme.colorScheme.outline),
                 ),
               ),
             ),
           )
         else ...[
-          Obx(() => SliverPadding(
-                padding: attachmentSectionListPadding(
-                  fullPage: widget.fullPage,
-                  iOS: SettingsSvc.settings.skin.value == Skins.iOS,
-                  top: widget.fullPage ? 10 : 0,
+          Obx(
+            () => SliverPadding(
+              padding: attachmentSectionListPadding(
+                fullPage: widget.fullPage,
+                iOS: SettingsSvc.settings.skin.value == Skins.iOS,
+                top: widget.fullPage ? 10 : 0,
+              ),
+              sliver: SliverToBoxAdapter(
+                child: MasonryGridView.count(
+                  crossAxisCount: max(2, NavigationSvc.width(context) ~/ 200),
+                  mainAxisSpacing: 10,
+                  crossAxisSpacing: 10,
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemBuilder: (context, index) => _buildLinkTile(context, index),
+                  itemCount: _visibleCount,
                 ),
-                sliver: SliverToBoxAdapter(
-                  child: MasonryGridView.count(
-                    crossAxisCount: max(2, NavigationSvc.width(context) ~/ 200),
-                    mainAxisSpacing: 10,
-                    crossAxisSpacing: 10,
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemBuilder: (context, index) => _buildLinkTile(context, index),
-                    itemCount: _visibleCount,
-                  ),
-                ),
-              )),
+              ),
+            ),
+          ),
           if (widget.fullPage && _displayCount < _displayedLinks.length)
             SliverToBoxAdapter(
               child: Builder(

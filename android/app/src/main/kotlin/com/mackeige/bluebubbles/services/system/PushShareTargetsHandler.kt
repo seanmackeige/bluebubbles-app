@@ -24,20 +24,50 @@ class PushShareTargetsHandler: MethodCallHandlerImpl() {
         result: MethodChannel.Result,
         context: Context
     ) {
-        val name: String = call.argument("title")!!
-        val guid: String = call.argument("guid")!!
+        val cleanupIds: List<String> = call.argument<List<String>>("remove_shortcut_ids") ?: emptyList()
+        val protectedIds: List<String> = call.argument<List<String>>("protected_shortcut_ids") ?: emptyList()
+        removeShareTargets(context, cleanupIds, protectedIds)
+        val name: String? = call.argument("title")
+        val guid: String? = call.argument("guid")
+        if (name == null || guid == null) {
+            result.success(null)
+            return
+        }
         val icon: ByteArray? = call.argument("icon")
-        pushShareTarget(context, name, guid, icon)
+        val conversationKey: String = call.argument<String>("conversation_key") ?: guid
+        val legacyPhysicalGuids: List<String> = call.argument<List<String>>("legacy_physical_guids") ?: emptyList()
+        pushShareTarget(context, name, guid, icon, conversationKey, legacyPhysicalGuids)
         result.success(null)
     }
 
-    fun pushShareTarget(context: Context, name: String, guid: String, icon: ByteArray?) {
+    fun removeShareTargets(
+        context: Context,
+        candidateIds: List<String>,
+        protectedIds: List<String> = emptyList()
+    ) {
+        val staleShortcutIds = ShareTargetCleanupPolicy.staleShortcutIds(candidateIds, protectedIds)
+        if (staleShortcutIds.isEmpty()) return
+        ShortcutManagerCompat.removeDynamicShortcuts(context, staleShortcutIds)
+        ShortcutManagerCompat.removeLongLivedShortcuts(context, staleShortcutIds)
+    }
+
+
+    fun pushShareTarget(
+        context: Context,
+        name: String,
+        guid: String,
+        icon: ByteArray?,
+        shortcutId: String = guid,
+        legacyPhysicalGuids: List<String> = emptyList()
+    ) {
         val adaptiveIcon = if ((icon?.size ?: 0) == 0) null else Utils.getAdaptiveIconFromByteArray(icon!!)
 
         PersistentLog.d(context, Constants.logTag, "Creating intent for shortcut with name $name")
         val contactCategories = setOf(Constants.categoryTextShareTarget)
         val launcherIntent = Intent(context, MainActivity::class.java)
             .putExtra("chatGuid", guid)
+            .putExtra("conversationKey", shortcutId)
+            .putExtra("sourceChatGuid", guid)
             .putExtra("bubble", false)
             .setAction(Intent.ACTION_DEFAULT)
         val person = Person.Builder().setName(name)
@@ -45,8 +75,10 @@ class PushShareTargetsHandler: MethodCallHandlerImpl() {
             person.setIcon(adaptiveIcon)
         }
 
+        removeShareTargets(context, legacyPhysicalGuids, listOf(shortcutId))
+
         PersistentLog.d(context, Constants.logTag, "Creating and pushing shortcut for $name")
-        val shortcut = ShortcutInfoCompat.Builder(context, guid)
+        val shortcut = ShortcutInfoCompat.Builder(context, shortcutId)
             .setShortLabel(name)
             .setIntent(launcherIntent)
             .setCategories(contactCategories)

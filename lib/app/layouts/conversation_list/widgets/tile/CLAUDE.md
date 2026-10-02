@@ -50,3 +50,8 @@ Pinned chats are rendered in a horizontal `GridView` at the top of the list. `Pi
 ## Data Source
 
 Chat data flows from `ChatsSvc` → `ChatState`. The tile observes `ChatState` fields via `Obx()` for the last message preview, unread count, and highlight state.
+
+Certified logical rows project their durable logical draft through
+`ChatsSvc.logicalDraftPreviewFor`; the per-logical revision signal makes save,
+re-arm, clear, and service reinitialization reactive. Ordinary rows continue to
+use only `ChatState.textFieldText` and `ChatState.textFieldAttachments`.

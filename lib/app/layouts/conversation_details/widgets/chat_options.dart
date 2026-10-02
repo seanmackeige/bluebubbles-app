@@ -32,6 +32,9 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
 
   @override
   Widget build(BuildContext context) {
+    if (ChatsSvc.isPotentialLogicalSource(chat)) {
+      return const SliverToBoxAdapter(child: SizedBox.shrink());
+    }
     return SliverToBoxAdapter(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -39,8 +42,10 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
         children: [
           Padding(
             padding: const EdgeInsets.only(left: 15.0, bottom: 5.0),
-            child: Text("OPTIONS & ACTIONS",
-                style: context.theme.textTheme.bodyMedium!.copyWith(color: context.theme.colorScheme.outline)),
+            child: Text(
+              "OPTIONS & ACTIONS",
+              style: context.theme.textTheme.bodyMedium!.copyWith(color: context.theme.colorScheme.outline),
+            ),
           ),
           SettingsSection(
             backgroundColor: tileColor,
@@ -51,9 +56,7 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
                   subtitle: "Customize notification sounds, importance, and more for this specific chat",
                   trailing: Padding(
                     padding: const EdgeInsets.only(right: 15.0),
-                    child: Icon(
-                      iOS ? CupertinoIcons.bell : Icons.notifications_on,
-                    ),
+                    child: Icon(iOS ? CupertinoIcons.bell : Icons.notifications_on),
                   ),
                   isThreeLine: true,
                   onTap: () async {
@@ -120,9 +123,7 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
                   subtitle: "Set a custom background for this chat, or reset it back to the default",
                   trailing: Padding(
                     padding: const EdgeInsets.only(right: 15.0),
-                    child: Icon(
-                      iOS ? CupertinoIcons.photo : Icons.wallpaper,
-                    ),
+                    child: Icon(iOS ? CupertinoIcons.photo : Icons.wallpaper),
                   ),
                   onTap: () {
                     final backgroundPath = FilesystemSvc.getExistingChatBackgroundPath(chat.guid);
@@ -200,36 +201,38 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
               const SettingsDivider(),
               if (iOS)
                 SettingsTile(
-                    title: "View Bookmarks",
-                    subtitle: "See your bookmarked messages",
-                    backgroundColor: tileColor,
-                    trailing: Padding(
-                      padding: const EdgeInsets.only(right: 15.0),
-                      child: Icon(iOS ? CupertinoIcons.bookmark : Icons.bookmark),
-                    ),
-                    onTap: () async {
-                      showBookmarksThread(cvc(widget.chat), context);
-                    }),
-              const SettingsDivider(),
-              SettingsTile(
-                  title: "Fetch Chat Details",
-                  subtitle: "Get the latest chat title and participants from the server",
+                  title: "View Bookmarks",
+                  subtitle: "See your bookmarked messages",
                   backgroundColor: tileColor,
                   trailing: Padding(
                     padding: const EdgeInsets.only(right: 15.0),
-                    child: Icon(iOS ? CupertinoIcons.chat_bubble : Icons.sms),
+                    child: Icon(iOS ? CupertinoIcons.bookmark : Icons.bookmark),
                   ),
                   onTap: () async {
-                    final updatedChat = await ChatsSvc.fetchChat(chat.guid);
-                    if (updatedChat != null) {
-                      if (chat.isGroup) {
-                        await Chat.getIcon(updatedChat, force: true);
-                      }
-
-                      ChatsSvc.updateChat(updatedChat, override: true);
+                    showBookmarksThread(cvc(widget.chat), context);
+                  },
+                ),
+              const SettingsDivider(),
+              SettingsTile(
+                title: "Fetch Chat Details",
+                subtitle: "Get the latest chat title and participants from the server",
+                backgroundColor: tileColor,
+                trailing: Padding(
+                  padding: const EdgeInsets.only(right: 15.0),
+                  child: Icon(iOS ? CupertinoIcons.chat_bubble : Icons.sms),
+                ),
+                onTap: () async {
+                  final updatedChat = await ChatsSvc.fetchChat(chat.guid);
+                  if (updatedChat != null) {
+                    if (chat.isGroup) {
+                      await Chat.getIcon(updatedChat, force: true);
                     }
-                    showSnackbar("Notice", "Fetched details!");
-                  }),
+
+                    ChatsSvc.updateChat(updatedChat, override: true);
+                  }
+                  showSnackbar("Notice", "Fetched details!");
+                },
+              ),
               const SettingsDivider(),
               SettingsTile(
                 title: "Sync Messages",
@@ -260,13 +263,14 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
                   return SettingsSwitch(
                     title: "Send Typing Indicators",
                     subtitle: "Send typing indicators for this chat, overriding the global setting",
-                    initialVal: chatState?.autoSendTypingIndicators.value ??
+                    initialVal:
+                        chatState?.autoSendTypingIndicators.value ??
                         SettingsSvc.settings.privateSendTypingIndicators.value,
                     onChanged: (value) {
                       if (chatState != null) {
                         ChatsSvc.setChatAutoSendTypingIndicators(chatState.chat, value);
                       } else {
-                        chat.toggleAutoTypeAsync(value);
+                        ChatsSvc.setChatAutoSendTypingIndicators(chat, value);
                       }
                     },
                     backgroundColor: tileColor,
@@ -288,7 +292,10 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
                           value ? null : SettingsSvc.settings.privateSendTypingIndicators.value,
                         );
                       } else {
-                        chat.toggleAutoTypeAsync(value ? null : SettingsSvc.settings.privateSendTypingIndicators.value);
+                        ChatsSvc.setChatAutoSendTypingIndicators(
+                          chat,
+                          value ? null : SettingsSvc.settings.privateSendTypingIndicators.value,
+                        );
                       }
                     },
                   );
@@ -307,7 +314,7 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
                       if (chatState != null) {
                         ChatsSvc.setChatAutoSendReadReceipts(chatState.chat, value);
                       } else {
-                        chat.toggleAutoReadAsync(value);
+                        ChatsSvc.setChatAutoSendReadReceipts(chat, value);
                       }
                     },
                     backgroundColor: tileColor,
@@ -329,7 +336,10 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
                           value ? null : SettingsSvc.settings.privateMarkChatAsRead.value,
                         );
                       } else {
-                        chat.toggleAutoReadAsync(value ? null : SettingsSvc.settings.privateMarkChatAsRead.value);
+                        ChatsSvc.setChatAutoSendReadReceipts(
+                          chat,
+                          value ? null : SettingsSvc.settings.privateMarkChatAsRead.value,
+                        );
                       }
                     },
                   );
@@ -347,8 +357,7 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
                       if (chatState != null) {
                         ChatsSvc.setChatLockName(chatState.chat, value);
                       } else {
-                        chat.lockChatName = value;
-                        chat.saveAsync(updateLockChatName: true);
+                        ChatsSvc.setChatLockName(chat, value);
                       }
                     },
                   );
@@ -365,8 +374,7 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
                       if (chatState != null) {
                         ChatsSvc.setChatLockIcon(chatState.chat, value);
                       } else {
-                        chat.lockChatIcon = value;
-                        chat.saveAsync(updateLockChatIcon: true);
+                        ChatsSvc.setChatLockIcon(chat, value);
                       }
                     },
                   );
@@ -397,7 +405,7 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
                       if (chatState != null) {
                         ChatsSvc.setChatMuted(chatState.chat, value);
                       } else {
-                        chat.toggleMuteAsync(value);
+                        ChatsSvc.setChatMuted(chat, value);
                       }
                     },
                     backgroundColor: tileColor,
@@ -442,8 +450,7 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
                           isDefault: true,
                           onPressed: () async {
                             Navigator.of(context, rootNavigator: true).pop();
-                            chat.clearTranscript();
-                            EventDispatcherSvc.emit("refresh-messagebloc", {"chatGuid": chat.guid});
+                            ChatsSvc.clearChatTranscript(chat);
                           },
                         ),
                       ],
@@ -463,8 +470,11 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
                     child: Icon(iOS ? CupertinoIcons.doc_text : Icons.note_outlined),
                   ),
                   onTap: () async {
-                    final date =
-                        await showTimeframePicker("Select Timeframe", context, additionalTimeframes: {"6 Hours": 6});
+                    final date = await showTimeframePicker(
+                      "Select Timeframe",
+                      context,
+                      additionalTimeframes: {"6 Hours": 6},
+                    );
                     if (date == null) return;
                     showDialog(
                       context: context,
@@ -473,20 +483,17 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
                         content: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           mainAxisSize: MainAxisSize.min,
-                          children: <Widget>[
-                            const SizedBox(
-                              height: 15.0,
-                            ),
-                            buildProgressIndicator(context),
-                          ],
+                          children: <Widget>[const SizedBox(height: 15.0), buildProgressIndicator(context)],
                         ),
                         backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
                       ),
                       barrierDismissible: false,
                     );
-                    final messages = (await Chat.getMessagesAsync(chat, limit: 0, includeDeleted: true))
-                        .reversed
-                        .where((e) => e.dateCreated!.isAfter(date));
+                    final messages = (await Chat.getMessagesAsync(
+                      chat,
+                      limit: 0,
+                      includeDeleted: true,
+                    )).reversed.where((e) => e.dateCreated!.isAfter(date));
                     if (messages.isEmpty) {
                       Navigator.of(context, rootNavigator: true).pop();
                       showSnackbar("Error", "No messages found!");
@@ -495,16 +502,19 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
                     final List<String> lines = [];
                     for (Message m in messages) {
                       final readStr = m.dateRead != null ? "Read: ${buildFullDate(m.dateRead!)}, " : "";
-                      final deliveredStr =
-                          m.dateDelivered != null ? "Delivered: ${buildFullDate(m.dateDelivered!)}, " : "";
+                      final deliveredStr = m.dateDelivered != null
+                          ? "Delivered: ${buildFullDate(m.dateDelivered!)}, "
+                          : "";
                       final sentStr = "Sent: ${buildFullDate(m.dateCreated!)}";
                       final text = m.getNotificationText(withSender: true);
                       final line = "($readStr$deliveredStr$sentStr) $text";
                       lines.add(line);
                     }
                     final now = DateTime.now().toLocal();
-                    final filePath = p.join(await FilesystemSvc.downloadsDirectory,
-                        "${chat.getTitle().replaceAll(RegExp(r'[<>:"/\\|?*]'), "")}-transcript-${now.year}${now.month}${now.day}_${now.hour}${now.minute}${now.second}.txt");
+                    final filePath = p.join(
+                      await FilesystemSvc.downloadsDirectory,
+                      "${chat.getTitle().replaceAll(RegExp(r'[<>:"/\\|?*]'), "")}-transcript-${now.year}${now.month}${now.day}_${now.hour}${now.minute}${now.second}.txt",
+                    );
                     File file = File(filePath);
                     await file.create(recursive: true);
                     await file.writeAsString(lines.join('\n'));
@@ -512,29 +522,30 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
                     showSnackbar("Success", "Saved transcript to the downloads folder");
                   },
                   onLongPress: () async {
-                    final date =
-                        await showTimeframePicker("Select Timeframe", context, additionalTimeframes: {"6 Hours": 6});
+                    final date = await showTimeframePicker(
+                      "Select Timeframe",
+                      context,
+                      additionalTimeframes: {"6 Hours": 6},
+                    );
                     if (date == null) return;
                     showDialog(
                       context: context,
                       builder: (context) => AlertDialog(
                         title: Text("Generating PDF...", style: context.theme.textTheme.titleLarge),
                         content: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            mainAxisSize: MainAxisSize.min,
-                            children: <Widget>[
-                              const SizedBox(
-                                height: 15.0,
-                              ),
-                              buildProgressIndicator(context),
-                            ]),
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          mainAxisSize: MainAxisSize.min,
+                          children: <Widget>[const SizedBox(height: 15.0), buildProgressIndicator(context)],
+                        ),
                         backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
                       ),
                       barrierDismissible: false,
                     );
-                    final messages = (await Chat.getMessagesAsync(chat, limit: 0, includeDeleted: true))
-                        .reversed
-                        .where((e) => e.dateCreated!.isAfter(date));
+                    final messages = (await Chat.getMessagesAsync(
+                      chat,
+                      limit: 0,
+                      includeDeleted: true,
+                    )).reversed.where((e) => e.dateCreated!.isAfter(date));
                     if (messages.isEmpty) {
                       Navigator.of(context, rootNavigator: true).pop();
                       showSnackbar("Error", "No messages found!");
@@ -546,12 +557,14 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
                     final List<Size?> dimensions = [];
                     for (Message m in messages) {
                       final readStr = m.dateRead != null ? "Read: ${buildFullDate(m.dateRead!)}, " : "";
-                      final deliveredStr =
-                          m.dateDelivered != null ? "Delivered: ${buildFullDate(m.dateDelivered!)}, " : "";
+                      final deliveredStr = m.dateDelivered != null
+                          ? "Delivered: ${buildFullDate(m.dateDelivered!)}, "
+                          : "";
                       final sentStr = "Sent: ${buildFullDate(m.dateCreated!)}";
                       if (m.hasAttachments) {
                         final attachments = m.dbAttachments.where(
-                            (e) => e.guid != null && ["image/png", "image/jpg", "image/jpeg"].contains(e.mimeType));
+                          (e) => e.guid != null && ["image/png", "image/jpg", "image/jpeg"].contains(e.mimeType),
+                        );
                         final files = attachments
                             .map((e) => AttachmentsSvc.getContent(e, autoDownload: false))
                             .whereType<PlatformFile>();
@@ -574,44 +587,62 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
                       }
                     }
                     final font = await PdfGoogleFonts.openSansRegular();
-                    doc.addPage(pw.MultiPage(
+                    doc.addPage(
+                      pw.MultiPage(
                         maxPages: 1000,
                         header: (pw.Context context) => pw.Padding(
-                            padding: const pw.EdgeInsets.only(bottom: 10),
-                            child: pw.Text(chat.getTitle(),
-                                textScaleFactor: 2,
-                                style: pw.Theme.of(context)
-                                    .defaultTextStyle
-                                    .copyWith(fontWeight: pw.FontWeight.bold, font: font))),
+                          padding: const pw.EdgeInsets.only(bottom: 10),
+                          child: pw.Text(
+                            chat.getTitle(),
+                            textScaleFactor: 2,
+                            style: pw.Theme.of(
+                              context,
+                            ).defaultTextStyle.copyWith(fontWeight: pw.FontWeight.bold, font: font),
+                          ),
+                        ),
                         build: (pw.Context context) => [
-                              pw.Partitions(children: [
-                                pw.Partition(
-                                    child: pw.Table(
-                                        children: List.generate(
-                                            timestamps.length,
-                                            (index) => pw.TableRow(children: [
-                                                  pw.Padding(
-                                                    padding: const pw.EdgeInsets.symmetric(horizontal: 3, vertical: 10),
-                                                    child: pw.Text(timestamps[index],
-                                                        style:
-                                                            pw.Theme.of(context).defaultTextStyle.copyWith(font: font)),
-                                                  ),
-                                                  pw.Container(
-                                                      child: pw.Padding(
-                                                          padding: const pw.EdgeInsets.symmetric(
-                                                              horizontal: 3, vertical: 10),
-                                                          child: content[index] is pw.MemoryImage
-                                                              ? pw.Image(content[index],
-                                                                  width: dimensions[index]!.width,
-                                                                  height: dimensions[index]!.height)
-                                                              : pw.Text(content[index].toString(),
-                                                                  style: pw.TextStyle(font: font))))
-                                                ])))),
-                              ]),
-                            ]));
+                          pw.Partitions(
+                            children: [
+                              pw.Partition(
+                                child: pw.Table(
+                                  children: List.generate(
+                                    timestamps.length,
+                                    (index) => pw.TableRow(
+                                      children: [
+                                        pw.Padding(
+                                          padding: const pw.EdgeInsets.symmetric(horizontal: 3, vertical: 10),
+                                          child: pw.Text(
+                                            timestamps[index],
+                                            style: pw.Theme.of(context).defaultTextStyle.copyWith(font: font),
+                                          ),
+                                        ),
+                                        pw.Container(
+                                          child: pw.Padding(
+                                            padding: const pw.EdgeInsets.symmetric(horizontal: 3, vertical: 10),
+                                            child: content[index] is pw.MemoryImage
+                                                ? pw.Image(
+                                                    content[index],
+                                                    width: dimensions[index]!.width,
+                                                    height: dimensions[index]!.height,
+                                                  )
+                                                : pw.Text(content[index].toString(), style: pw.TextStyle(font: font)),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    );
                     final now = DateTime.now().toLocal();
-                    final filePath = p.join(await FilesystemSvc.downloadsDirectory,
-                        "${chat.getTitle().replaceAll(RegExp(r'[<>:"/\\|?*]'), "")}-transcript-${now.year}${now.month}${now.day}_${now.hour}${now.minute}${now.second}.pdf");
+                    final filePath = p.join(
+                      await FilesystemSvc.downloadsDirectory,
+                      "${chat.getTitle().replaceAll(RegExp(r'[<>:"/\\|?*]'), "")}-transcript-${now.year}${now.month}${now.day}_${now.hour}${now.minute}${now.second}.pdf",
+                    );
                     File file = File(filePath);
                     await file.create(recursive: true);
                     await file.writeAsBytes(await doc.save());
@@ -647,10 +678,7 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
       title: "Cancel Outgoing Messages?",
       body: 'This will cancel all messages currently waiting to be sent in this chat. They will be marked as failed.',
       actions: [
-        BBDialogAction(
-          text: "Keep Sending",
-          onPressed: () => Navigator.of(context, rootNavigator: true).pop(),
-        ),
+        BBDialogAction(text: "Keep Sending", onPressed: () => Navigator.of(context, rootNavigator: true).pop()),
         BBDialogAction(
           text: "Cancel Messages",
           isDestructive: true,

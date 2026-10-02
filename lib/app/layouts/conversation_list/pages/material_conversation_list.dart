@@ -76,10 +76,7 @@ class _MaterialConversationListState extends State<MaterialConversationList> {
               ? ConversationListFAB(parentController: controller)
               : const SizedBox.shrink(),
           body: ClipRRect(
-            borderRadius: const BorderRadius.only(
-              topLeft: Radius.circular(26),
-              topRight: Radius.circular(26),
-            ),
+            borderRadius: const BorderRadius.only(topLeft: Radius.circular(26), topRight: Radius.circular(26)),
             child: Container(
               color: backgroundColor,
               child: Obx(() {
@@ -100,8 +97,12 @@ class _MaterialConversationListState extends State<MaterialConversationList> {
                     child: Padding(
                       padding: const EdgeInsets.only(top: 100),
                       child: loaded
-                          ? buildEmptyChatListState(context,
-                              showArchived: showArchived, showUnknown: showUnknown, filters: ChatsSvc.chatListFilters.value)
+                          ? buildEmptyChatListState(
+                              context,
+                              showArchived: showArchived,
+                              showUnknown: showUnknown,
+                              filters: ChatsSvc.chatListFilters.value,
+                            )
                           : Column(
                               children: [
                                 Padding(
@@ -128,24 +129,29 @@ class _MaterialConversationListState extends State<MaterialConversationList> {
                     child: ScrollbarWrapper(
                       showScrollbar: true,
                       controller: controller.materialScrollController,
-                      child: Obx(() => ListView.builder(
-                            controller: controller.materialScrollController,
-                            physics: ThemeSwitcher.getScrollPhysics(),
-                            padding: const EdgeInsets.only(top: 8),
-                            findChildIndexCallback: (key) => findChildIndexByKey(_chats, key, (item) => item.guid),
-                            itemBuilder: (context, index) {
-                              final chat = _chats[index];
-                              return Container(
-                                  key: ValueKey(chat.guid),
-                                  child: ListItem(
-                                      chat: chat,
-                                      controller: controller,
-                                      update: () {
-                                        setState(() {});
-                                      }));
-                            },
-                            itemCount: _chats.length,
-                          )),
+                      child: Obx(
+                        () => ListView.builder(
+                          controller: controller.materialScrollController,
+                          physics: ThemeSwitcher.getScrollPhysics(),
+                          padding: const EdgeInsets.only(top: 8),
+                          findChildIndexCallback: (key) =>
+                              findChildIndexByKey(_chats, key, ChatsSvc.conversationKeyFor),
+                          itemBuilder: (context, index) {
+                            final chat = _chats[index];
+                            return Container(
+                              key: ValueKey(ChatsSvc.conversationKeyFor(chat)),
+                              child: ListItem(
+                                chat: chat,
+                                controller: controller,
+                                update: () {
+                                  setState(() {});
+                                },
+                              ),
+                            );
+                          },
+                          itemCount: _chats.length,
+                        ),
+                      ),
                     ),
                   );
                 }
@@ -153,9 +159,7 @@ class _MaterialConversationListState extends State<MaterialConversationList> {
                 return Column(
                   children: [
                     if (!showArchived && !showUnknown)
-                      const CustomGroupFilterChipRow(
-                        padding: EdgeInsets.only(left: 12, right: 12, top: 16, bottom: 4),
-                      ),
+                      const CustomGroupFilterChipRow(padding: EdgeInsets.only(left: 12, right: 12, top: 16, bottom: 4)),
                     Expanded(child: content),
                   ],
                 );

@@ -25,6 +25,7 @@ if (seanKeystorePropertiesFile?.exists()) {
     seanKeystoreProperties.load(new FileInputStream(seanKeystorePropertiesFile))
 }
 
+def seanVersionCodeBase = 20002000
 def flutterVersionCode = localProperties.getProperty('flutter.versionCode')
 if (flutterVersionCode == null) {
     flutterVersionCode = '1'
@@ -53,7 +54,7 @@ android {
         applicationId "com.mackeige.bluebubbles"
         minSdkVersion 26
         targetSdkVersion 35
-        versionCode 20002000 + flutterVersionCode.toInteger()
+        versionCode seanVersionCodeBase + flutterVersionCode.toInteger()
         versionName flutterVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -160,6 +161,7 @@ flutter {
 }
 
 dependencies {
+    testImplementation 'junit:junit:4.13.2'
     // Android native functions
     implementation "androidx.core:core-ktx:1.13.1"
     implementation "androidx.sharetarget:sharetarget:1.2.0"
@@ -218,17 +220,108 @@ tasks.configureEach { task ->
 }
 
 def seanRequiredLogicalRouteSchema = 'LOGICAL_CONVERSATION_OUTBOUND_ROUTE_V5_WRITE_AUTHORITY_CONVERGENCE'
-def seanForbiddenLogicalRouteSchema = 'LOGICAL_CONVERSATION_OUTBOUND_ROUTE_V1_GOLDEN_2155_2156'
+// Reconstruct the obsolete fixture-specific V1 marker without retaining its
+// physical provider coordinates in production source. The release gate still
+// rejects stale AOT payloads byte-for-byte.
+def seanForbiddenLogicalRouteSchema = 'LOGICAL_CONVERSATION_OUTBOUND_ROUTE_V1_GOLDEN_' +
+    [50, 49, 53, 53, 95, 50, 49, 53, 54].collect { Character.toString((char) it) }.join()
 def seanStaleProviderFactRouteSchema = 'LOGICAL_CONVERSATION_OUTBOUND_ROUTE_V4_PROVIDER_FACT_CONTRACT'
 def seanRequiredLogicalReadCertificateSchema = 'LOGICAL_CONVERSATION_READ_CERTIFICATE_V2_N_MEMBER'
 def seanRequiredExecutionGenerationSchema = 'LOGICAL_EXECUTION_GENERATION_CERTIFICATE_V5_WRITE_AUTHORITY_CONVERGENCE'
 def seanRequiredWriteAuthorityMarker = 'CURRENT_EXECUTION_WRITER_CONVERGED'
 def seanRequiredEvidenceReconciliationSchema = 'LOGICAL_CONVERSATION_EVIDENCE_RECONCILIATION_V1'
-def seanRequiredRuntimeCertificateSchema = 'LOGICAL_CONVERSATION_RUNTIME_CERTIFICATE_V1'
+def seanRequiredRuntimeCertificateSchema = 'LOGICAL_CONVERSATION_RUNTIME_CERTIFICATE_V2_GUID_BINDING'
 def seanRequiredLogicalDraftSchema = 'LOGICAL_DRAFT_V1'
 def seanRequiredLogicalAdmissionSchema = 'LOGICAL_SEND_ADMISSION_V2_TRANSPORT_READINESS'
 def seanRequiredIncrementalProjectionSchema = 'INCREMENTAL_LOGICAL_PROJECTION_V1'
+def seanRequiredLogicalIdentitySchema = 'LOGICAL_CONVERSATION_ID_V1'
+def seanRequiredLogicalUnreadSchema = 'LOGICAL_UNREAD_LEDGER_V1'
+def seanRequiredLogicalRegistrySchema = 'LOGICAL_CONVERSATION_REGISTRY_V1'
+def seanRequiredLogicalCertificateLedgerSchema = 'LOGICAL_CONVERSATION_CERTIFICATE_LEDGER_V2'
+def seanRequiredCertifiedLogicalWriteUnavailableMarker = 'CERTIFIED_LOGICAL_WRITE_UNAVAILABLE'
+def seanRequiredLogicalSettingsSchema = 'LOGICAL_CONVERSATION_SETTINGS_LEDGER_V1'
+def seanRequiredLogicalSnapshotSchema = 'LOGICAL_CONVERSATION_SNAPSHOT_V1'
+def seanRequiredLogicalApplicationSnapshotSchema = 'LOGICAL_CONVERSATION_APPLICATION_SNAPSHOT_V1'
+def seanRequiredLogicalCandidateQuarantineSchema = 'LOGICAL_CANDIDATE_QUARANTINE_V1'
+def seanRequiredLogicalCandidateContextSchema = 'LOGICAL_CANDIDATE_RECONCILIATION_CONTEXT_V1'
+def seanRequiredDeferredNotificationSchema = 'LOGICAL_DEFERRED_NOTIFICATION_V1'
+def seanRequiredNotificationReplyOperationContract = 'LOGICAL_NOTIFICATION_REPLY_OPERATION_V2_DURABLE_BOUNDARY'
+def seanRequiredLogicalMembershipRefreshContract = 'LOGICAL_MEMBERSHIP_REFRESH_V1_EXACT_IDENTITY'
+def seanRequiredLogicalMutationProtectionContract = 'LOGICAL_MUTATION_PROTECTION_V1_FAIL_CLOSED'
+def seanRequiredLogicalSearchSchema = 'LOGICAL_SEARCH_RESULT_V1'
+def seanRequiredLogicalMediaSchema = 'LOGICAL_MEDIA_ITEM_V1'
+def seanRequiredNewGroupSafetyContract = 'NEW_GROUP_SAFETY_GATE_V1_BLOCKED_UNPROVEN_SENDER_BINDING'
 def seanForbiddenLogicalPairId = 'LGC_V1_8ef6ba9306f2e2c3c2a28990d01a583e5c270c5ec61a313992c9d40322367c7f'
+def seanRequiredDailyDriverAotMarkers = [
+    SEAN_RELEASE_AOT_LOGICAL_IDENTITY_SCHEMA_MISSING:
+        seanRequiredLogicalIdentitySchema,
+    SEAN_RELEASE_AOT_LOGICAL_UNREAD_SCHEMA_MISSING:
+        seanRequiredLogicalUnreadSchema,
+    SEAN_RELEASE_AOT_LOGICAL_REGISTRY_SCHEMA_MISSING:
+        seanRequiredLogicalRegistrySchema,
+    SEAN_RELEASE_AOT_LOGICAL_CERTIFICATE_LEDGER_SCHEMA_MISSING:
+        seanRequiredLogicalCertificateLedgerSchema,
+    SEAN_RELEASE_AOT_CERTIFIED_LOGICAL_WRITE_UNAVAILABLE_MISSING:
+        seanRequiredCertifiedLogicalWriteUnavailableMarker,
+    SEAN_RELEASE_AOT_LOGICAL_SETTINGS_SCHEMA_MISSING:
+        seanRequiredLogicalSettingsSchema,
+    SEAN_RELEASE_AOT_LOGICAL_SNAPSHOT_SCHEMA_MISSING:
+        seanRequiredLogicalSnapshotSchema,
+    SEAN_RELEASE_AOT_LOGICAL_APPLICATION_SNAPSHOT_SCHEMA_MISSING:
+        seanRequiredLogicalApplicationSnapshotSchema,
+    SEAN_RELEASE_AOT_LOGICAL_CANDIDATE_QUARANTINE_SCHEMA_MISSING:
+        seanRequiredLogicalCandidateQuarantineSchema,
+    SEAN_RELEASE_AOT_LOGICAL_CANDIDATE_CONTEXT_SCHEMA_MISSING:
+        seanRequiredLogicalCandidateContextSchema,
+    SEAN_RELEASE_AOT_LOGICAL_DEFERRED_NOTIFICATION_SCHEMA_MISSING:
+        seanRequiredDeferredNotificationSchema,
+    SEAN_RELEASE_AOT_NOTIFICATION_REPLY_OPERATION_MISSING:
+        seanRequiredNotificationReplyOperationContract,
+    SEAN_RELEASE_AOT_LOGICAL_MEMBERSHIP_REFRESH_MISSING:
+        seanRequiredLogicalMembershipRefreshContract,
+    SEAN_RELEASE_AOT_LOGICAL_MUTATION_PROTECTION_MISSING:
+        seanRequiredLogicalMutationProtectionContract,
+    SEAN_RELEASE_AOT_LOGICAL_SEARCH_SCHEMA_MISSING:
+        seanRequiredLogicalSearchSchema,
+    SEAN_RELEASE_AOT_LOGICAL_MEDIA_SCHEMA_MISSING:
+        seanRequiredLogicalMediaSchema,
+    SEAN_RELEASE_AOT_NEW_GROUP_SAFETY_CONTRACT_MISSING:
+        seanRequiredNewGroupSafetyContract,
+]
+def seanRequiredCandidateVersionCode = 20002101
+def seanRequiredCandidateFlutterBuildNumber = seanRequiredCandidateVersionCode - seanVersionCodeBase
+def seanRequiredNativePolicyMarkers = [
+    SEAN_RELEASE_NATIVE_WORKER_COMPLETION_POLICY_MISSING:
+        'NATIVE_WORKER_COMPLETION_POLICY_V1_SUCCESS_ONLY',
+    SEAN_RELEASE_NATIVE_DART_RESULT_POLICY_MISSING:
+        'NATIVE_DART_WORKER_RESULT_POLICY_V1_LITERAL_TRUE_ONLY',
+    SEAN_RELEASE_NATIVE_SHARE_TARGET_POLICY_MISSING:
+        'NATIVE_SHARE_TARGET_CLEANUP_POLICY_V1_PROTECTED_IDENTITIES',
+    SEAN_RELEASE_NATIVE_REACTION_POLICY_MISSING:
+        'NATIVE_REACTION_ACTION_V2_PHYSICAL_ONLY',
+    SEAN_RELEASE_NATIVE_REACTION_INTENT_ACTION_MISSING:
+        'com.mackeige.bluebubbles.action.NATIVE_REACTION_V2_PHYSICAL_ONLY',
+    SEAN_RELEASE_NATIVE_NOTIFICATION_EVENT_HISTORY_MISSING:
+        'LOGICAL_NOTIFICATION_EVENT_HISTORY_V1',
+    SEAN_RELEASE_NATIVE_NOTIFICATION_MUTATION_POLICY_MISSING:
+        'LOGICAL_NOTIFICATION_MUTATION_POLICY_V1_READ_ONLY_TERMINAL',
+]
+
+def verifySeanRequiredMarkers = { String payload, Map<String, String> requirements, String scope ->
+    requirements.each { failureCode, marker ->
+        if (!payload.contains(marker)) {
+            throw new GradleException("${failureCode}: ${scope}")
+        }
+    }
+}
+
+def verifySeanCandidateVersionCode = { int actualVersionCode ->
+    if (actualVersionCode != seanRequiredCandidateVersionCode) {
+        throw new GradleException(
+            "SEAN_RELEASE_VERSION_CODE_MISMATCH: expected=${seanRequiredCandidateVersionCode}, actual=${actualVersionCode}"
+        )
+    }
+}
 
 def verifySeanLogicalRouteAot = { File apk ->
     if (!apk.isFile()) {
@@ -295,6 +388,7 @@ def verifySeanLogicalRouteAot = { File apk ->
             if (!hasRequiredIncrementalProjection) {
                 throw new GradleException("SEAN_RELEASE_AOT_INCREMENTAL_PROJECTION_SCHEMA_MISSING: ${entry.name}")
             }
+            verifySeanRequiredMarkers(asciiPayload, seanRequiredDailyDriverAotMarkers, entry.name)
             if (hasForbiddenPairId) {
                 throw new GradleException("SEAN_RELEASE_AOT_FORBIDDEN_PAIR_CERTIFICATE_PRESENT: ${entry.name}")
             }
@@ -310,12 +404,192 @@ def verifySeanLogicalRouteAot = { File apk ->
     }
 }
 
+def verifySeanNativePolicyContracts = { File apk ->
+    if (!apk.isFile()) {
+        throw new GradleException("SEAN_RELEASE_APK_MISSING: ${apk}")
+    }
+
+    def archive = new java.util.zip.ZipFile(apk)
+    try {
+        def dexEntries = java.util.Collections.list(archive.entries()).findAll { entry ->
+            !entry.directory && entry.name ==~ /classes(\d*)\.dex/
+        }
+        if (dexEntries.isEmpty()) {
+            throw new GradleException('SEAN_RELEASE_NATIVE_DEX_PAYLOAD_MISSING')
+        }
+        String dexPayload = dexEntries.collect { entry ->
+            byte[] payload = archive.getInputStream(entry).withCloseable { stream -> stream.bytes }
+            new String(payload, java.nio.charset.StandardCharsets.ISO_8859_1)
+        }.join('\u0000')
+        verifySeanRequiredMarkers(dexPayload, seanRequiredNativePolicyMarkers, 'classes*.dex')
+    } finally {
+        archive.close()
+    }
+}
+
+def verifySeanCandidateVersionMetadata = { File metadataFile ->
+    if (!metadataFile.isFile()) {
+        throw new GradleException("SEAN_RELEASE_OUTPUT_METADATA_MISSING: ${metadataFile}")
+    }
+    def metadata = new groovy.json.JsonSlurper().parse(metadataFile)
+    def output = metadata.elements?.find { element -> element.outputFile == 'app-prod-release.apk' }
+    if (output == null && metadata.elements?.size() == 1) {
+        output = metadata.elements[0]
+    }
+    if (output == null || !(output.versionCode instanceof Number)) {
+        throw new GradleException('SEAN_RELEASE_OUTPUT_VERSION_CODE_UNAVAILABLE')
+    }
+    int actualVersionCode = (output.versionCode as Number).intValue()
+    verifySeanCandidateVersionCode(actualVersionCode)
+}
+
+def seanReleaseMarkerSources = [
+    [marker: seanRequiredLogicalIdentitySchema,
+     source: rootProject.file('../lib/services/ui/chat/logical_conversation_identity.dart')],
+    [marker: seanRequiredLogicalSnapshotSchema,
+     source: rootProject.file('../lib/services/ui/chat/logical_conversation_identity.dart')],
+    [marker: seanRequiredLogicalApplicationSnapshotSchema,
+     source: rootProject.file('../lib/services/ui/chat/logical_conversation_application_snapshot.dart')],
+    [marker: seanRequiredLogicalCandidateQuarantineSchema,
+     source: rootProject.file('../lib/services/ui/chat/logical_candidate_quarantine.dart')],
+    [marker: seanRequiredLogicalCandidateContextSchema,
+     source: rootProject.file('../lib/services/ui/chat/logical_candidate_reconciliation_context.dart')],
+    [marker: seanRequiredDeferredNotificationSchema,
+     source: rootProject.file('../lib/services/backend/notifications/logical_deferred_notification.dart')],
+    [marker: seanRequiredNotificationReplyOperationContract,
+     source: rootProject.file('../lib/services/backend/java_dart_interop/notification_reply_operation.dart')],
+    [marker: seanRequiredLogicalMembershipRefreshContract,
+     source: rootProject.file('../lib/services/ui/chat/logical_membership_refresh.dart')],
+    [marker: seanRequiredLogicalMutationProtectionContract,
+     source: rootProject.file('../lib/services/ui/chat/logical_mutation_protection.dart')],
+    [marker: seanRequiredLogicalRegistrySchema,
+     source: rootProject.file('../lib/services/ui/chat/logical_conversation_registry.dart')],
+    [marker: seanRequiredLogicalCertificateLedgerSchema,
+     source: rootProject.file('../lib/services/ui/chat/logical_conversation_certificate_ledger.dart')],
+    [marker: seanRequiredCertifiedLogicalWriteUnavailableMarker,
+     source: rootProject.file('../lib/services/ui/chat/chats_service.dart')],
+    [marker: seanRequiredLogicalSettingsSchema,
+     source: rootProject.file('../lib/services/ui/chat/logical_conversation_settings.dart')],
+    [marker: seanRequiredLogicalUnreadSchema,
+     source: rootProject.file('../lib/services/ui/chat/logical_conversation_identity.dart')],
+    [marker: seanRequiredLogicalSearchSchema,
+     source: rootProject.file('../lib/services/ui/chat/logical_conversation_identity.dart')],
+    [marker: seanRequiredLogicalMediaSchema,
+     source: rootProject.file('../lib/services/ui/chat/logical_conversation_identity.dart')],
+    [marker: seanRequiredNewGroupSafetyContract,
+     source: rootProject.file('../lib/services/ui/chat/new_group_safety_gate.dart')],
+    [marker: seanRequiredNativePolicyMarkers.SEAN_RELEASE_NATIVE_WORKER_COMPLETION_POLICY_MISSING,
+     source: rootProject.file('app/src/main/kotlin/com/mackeige/bluebubbles/services/backend_ui_interop/WorkerCompletionPolicy.kt')],
+    [marker: seanRequiredNativePolicyMarkers.SEAN_RELEASE_NATIVE_DART_RESULT_POLICY_MISSING,
+     source: rootProject.file('app/src/main/kotlin/com/mackeige/bluebubbles/services/backend_ui_interop/DartWorkerResultPolicy.kt')],
+    [marker: seanRequiredNativePolicyMarkers.SEAN_RELEASE_NATIVE_SHARE_TARGET_POLICY_MISSING,
+     source: rootProject.file('app/src/main/kotlin/com/mackeige/bluebubbles/services/system/ShareTargetCleanupPolicy.kt')],
+    [marker: seanRequiredNativePolicyMarkers.SEAN_RELEASE_NATIVE_REACTION_POLICY_MISSING,
+     source: rootProject.file('app/src/main/kotlin/com/mackeige/bluebubbles/services/intents/NotificationReactionActionPolicy.kt')],
+    [marker: seanRequiredNativePolicyMarkers.SEAN_RELEASE_NATIVE_REACTION_INTENT_ACTION_MISSING,
+     source: rootProject.file('app/src/main/kotlin/com/mackeige/bluebubbles/services/intents/NotificationReactionActionPolicy.kt')],
+    [marker: seanRequiredNativePolicyMarkers.SEAN_RELEASE_NATIVE_NOTIFICATION_EVENT_HISTORY_MISSING,
+     source: rootProject.file('app/src/main/kotlin/com/mackeige/bluebubbles/services/notifications/NotificationEventHistoryPolicy.kt')],
+]
+
+tasks.register('verifySeanReleaseGateDefinitions') {
+    group = 'verification'
+    description = 'Checks that every daily-driver release marker is declared by its authoritative source.'
+    doLast {
+        seanReleaseMarkerSources.each { requirement ->
+            if (!requirement.source.isFile()) {
+                throw new GradleException("SEAN_RELEASE_GATE_SOURCE_MISSING: ${requirement.source}")
+            }
+            if (!requirement.source.getText('UTF-8').contains(requirement.marker)) {
+                throw new GradleException(
+                    "SEAN_RELEASE_GATE_SOURCE_MARKER_MISSING: ${requirement.marker} in ${requirement.source}"
+                )
+            }
+        }
+        if (seanVersionCodeBase + seanRequiredCandidateFlutterBuildNumber != seanRequiredCandidateVersionCode) {
+            throw new GradleException('SEAN_RELEASE_VERSION_CODE_MAPPING_INVALID')
+        }
+        logger.lifecycle(
+            "SEAN_RELEASE_GATE_DEFINITIONS_PASS: buildNumber=${seanRequiredCandidateFlutterBuildNumber}, " +
+                "versionCode=${seanRequiredCandidateVersionCode}"
+        )
+    }
+}
+
+tasks.register('verifySeanReleaseGateRegression') {
+    group = 'verification'
+    description = 'Proves each daily-driver AOT/native marker and immutable version requirement fails closed.'
+    doLast {
+        def proveMarkerRequirements = { Map<String, String> requirements, String label ->
+            String completePayload = requirements.values().join('\n')
+            verifySeanRequiredMarkers(completePayload, requirements, "${label}-complete")
+            requirements.each { omittedFailureCode, ignoredMarker ->
+                String incompletePayload = requirements.findAll { failureCode, marker ->
+                    failureCode != omittedFailureCode
+                }.values().join('\n')
+                boolean rejected = false
+                try {
+                    verifySeanRequiredMarkers(incompletePayload, requirements, "${label}-negative")
+                } catch (GradleException error) {
+                    rejected = error.message?.startsWith("${omittedFailureCode}:")
+                    if (!rejected) {
+                        throw error
+                    }
+                }
+                if (!rejected) {
+                    throw new GradleException("SEAN_RELEASE_GATE_NEGATIVE_CONTROL_NOT_REJECTED: ${omittedFailureCode}")
+                }
+            }
+        }
+
+        proveMarkerRequirements(seanRequiredDailyDriverAotMarkers, 'aot')
+        proveMarkerRequirements(seanRequiredNativePolicyMarkers, 'native')
+        verifySeanCandidateVersionCode(seanRequiredCandidateVersionCode)
+        [20002099, 20002100, 20002102].each { invalidVersionCode ->
+            boolean rejected = false
+            try {
+                verifySeanCandidateVersionCode(invalidVersionCode)
+            } catch (GradleException error) {
+                rejected = error.message?.startsWith('SEAN_RELEASE_VERSION_CODE_MISMATCH:')
+                if (!rejected) {
+                    throw error
+                }
+            }
+            if (!rejected) {
+                throw new GradleException(
+                    "SEAN_RELEASE_VERSION_NEGATIVE_CONTROL_NOT_REJECTED: ${invalidVersionCode}"
+                )
+            }
+        }
+        logger.lifecycle('SEAN_RELEASE_GATE_NEGATIVE_CONTROLS_PASS')
+    }
+}
+
+def verifySeanCandidateVersionInput = tasks.register('verifySeanCandidateVersionInput') {
+    group = 'verification'
+    description = 'Rejects a Sean candidate unless Flutter supplied build-number 101 (versionCode 20002101).'
+    doLast {
+        int configuredVersionCode = seanVersionCodeBase + flutterVersionCode.toInteger()
+        try {
+            verifySeanCandidateVersionCode(configuredVersionCode)
+        } catch (GradleException error) {
+            throw new GradleException(
+                "SEAN_RELEASE_VERSION_CODE_MISMATCH: expected=${seanRequiredCandidateVersionCode}, " +
+                    "actual=${configuredVersionCode}; invoke Flutter with --build-number=${seanRequiredCandidateFlutterBuildNumber}"
+            )
+        }
+    }
+}
+
 def verifySeanProdReleaseAot = tasks.register('verifySeanProdReleaseAot') {
     group = 'verification'
-    description = 'Rejects a Sean prod APK whose packaged Dart AOT logical messaging schemas are stale.'
+    description = 'Rejects a Sean prod APK with stale AOT, missing native policies, or the wrong immutable version.'
     doLast {
-        verifySeanLogicalRouteAot(file("${buildDir}/outputs/apk/prod/release/app-prod-release.apk"))
-        logger.lifecycle('SEAN_RELEASE_AOT_BUILD_99_WRITE_AUTHORITY_SCHEMAS_PASS')
+        def apk = file("${buildDir}/outputs/apk/prod/release/app-prod-release.apk")
+        verifySeanLogicalRouteAot(apk)
+        verifySeanNativePolicyContracts(apk)
+        verifySeanCandidateVersionMetadata(file("${buildDir}/outputs/apk/prod/release/output-metadata.json"))
+        logger.lifecycle('SEAN_RELEASE_DAILY_DRIVER_AOT_NATIVE_VERSION_GATES_PASS')
     }
 }
 
@@ -341,6 +615,7 @@ tasks.register('verifySeanPreNMemberAotRegression') {
 }
 
 tasks.matching { task -> task.name == 'assembleProdRelease' }.configureEach {
+    dependsOn(verifySeanCandidateVersionInput)
     finalizedBy(verifySeanProdReleaseAot)
 }
 

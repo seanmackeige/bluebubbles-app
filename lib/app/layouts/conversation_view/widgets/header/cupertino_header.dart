@@ -40,7 +40,6 @@ class CupertinoHeader extends StatelessWidget implements PreferredSizeWidget {
 
   @override
   Widget build(BuildContext context) {
-    final readOnlyLogical = ChatsSvc.isLogicalConversation(controller.chat);
     return ClipRect(
       child: BackdropFilter(
         filter: ImageFilter.compose(
@@ -135,7 +134,7 @@ class CupertinoHeader extends StatelessWidget implements PreferredSizeWidget {
                         alignment: Alignment.center,
                         child: XGestureDetector(
                           supportTouch: true,
-                          onTap: !kIsDesktop || readOnlyLogical
+                          onTap: !kIsDesktop
                               ? null
                               : (details) {
                                   Navigator.of(context).push(
@@ -145,9 +144,7 @@ class CupertinoHeader extends StatelessWidget implements PreferredSizeWidget {
                                   );
                                 },
                           child: InkWell(
-                            onTap: readOnlyLogical
-                                ? null
-                                : () {
+                            onTap: () {
                                     if (kIsDesktop) return;
                                     Navigator.of(context).push(
                                       ThemeSwitcher.buildPageRoute(

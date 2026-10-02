@@ -32,16 +32,42 @@ class CustomGroupsController extends GetxController {
     loading.value = false;
   }
 
-  Future<void> createGroup(String name, List<String> chatGuids) async {
-    await CustomGroupInterface.create(name: name, chatGuids: chatGuids);
+  Future<void> createGroup(String name, List<Chat> chats) async {
+    final ordinaryGuids = chats
+        .where((chat) => !ChatsSvc.isLogicalConversation(chat))
+        .map((chat) => chat.guid)
+        .toList();
+    final group = await CustomGroupInterface.create(name: name, chatGuids: ordinaryGuids);
+    for (final chat in chats.where(ChatsSvc.isLogicalConversation)) {
+      await ChatsSvc.setConversationCustomGroupMembership(chat, group.id!, true);
+    }
   }
+
+  List<Chat> chatsForGroup(CustomGroup group) =>
+      ChatsSvc.allChats.where((chat) => ChatsSvc.isConversationInCustomGroup(chat, group.id!)).toList();
+
+  List<String> initialSelectionForGroup(CustomGroup group) =>
+      chatsForGroup(group).map((chat) => chat.guid).toList(growable: false);
 
   Future<void> renameGroup(CustomGroup group, String name) async {
     await CustomGroupInterface.rename(id: group.id!, name: name);
   }
 
-  Future<void> updateGroupChats(CustomGroup group, List<String> chatGuids) async {
-    await CustomGroupInterface.updateChats(id: group.id!, chatGuids: chatGuids);
+  Future<void> updateGroupChats(CustomGroup group, List<Chat> chats) async {
+    final selectedKeys = chats.map(ChatsSvc.conversationKeyFor).toSet();
+    for (final logicalChat in ChatsSvc.allChats.where(ChatsSvc.isLogicalConversation)) {
+      await ChatsSvc.setConversationCustomGroupMembership(
+        logicalChat,
+        group.id!,
+        selectedKeys.contains(ChatsSvc.conversationKeyFor(logicalChat)),
+      );
+    }
+    final protectedExistingPhysicalGuids = group.chats.where(ChatsSvc.isApprovedLogicalSource).map((chat) => chat.guid);
+    final ordinarySelectedGuids = chats.where((chat) => !ChatsSvc.isLogicalConversation(chat)).map((chat) => chat.guid);
+    await CustomGroupInterface.updateChats(
+      id: group.id!,
+      chatGuids: <String>{...protectedExistingPhysicalGuids, ...ordinarySelectedGuids}.toList(),
+    );
   }
 
   Future<void> setShowUnreadBadge(CustomGroup group, bool value) async {

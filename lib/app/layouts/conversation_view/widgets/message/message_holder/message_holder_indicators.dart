@@ -53,10 +53,12 @@ class ErrorIndicatorObserver extends StatelessWidget {
                 errorCode: errorCode,
                 errorText: errorText,
                 chatId: chat.id!,
-                retryAllowed: !ChatsSvc.isApprovedLogicalSource(chat),
+                retryAllowed: !ChatsSvc.isPotentialLogicalSource(chat),
+                removeAllowed: !ChatsSvc.isPotentialLogicalSource(chat),
                 onRetry: () => retryMessage(message: message, chat: chat, service: service, controller: ms),
                 onRemove: () async {
                   // Delete the message from DB and remove from service
+                  if (ChatsSvc.isPotentialLogicalSource(chat)) return;
                   await service.deleteMessage(message);
                   // Get the "new" latest info
                   List<Message> latest = await Chat.getMessagesAsync(chat, limit: 1);

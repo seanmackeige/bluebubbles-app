@@ -22,7 +22,8 @@ import 'package:universal_html/html.dart' as html;
 class ConversationTileController extends StatefulController {
   final RxBool shouldHighlight = false.obs;
   final RxBool shouldPartialHighlight = false.obs;
-  final ChatState chatState;
+  final Rx<ChatState> _chatState;
+  ChatState get chatState => _chatState.value;
   final ConversationListController listController;
   final Function(bool)? onSelect;
   final bool inSelectMode;
@@ -34,24 +35,30 @@ class ConversationTileController extends StatefulController {
 
   ConversationTileController({
     Key? key,
-    required this.chatState,
+    required ChatState chatState,
     required this.listController,
     this.onSelect,
     this.inSelectMode = false,
     this.subtitle,
-  });
+  }) : _chatState = chatState.obs;
+
+  /// Keep the stable application-conversation controller while changing only
+  /// its current physical presentation member. The identity check prevents a
+  /// list-key collision from ever rebinding one human conversation to another.
+  void rebindPresentation(ChatState next) {
+    final currentKey = ChatsSvc.conversationKeyFor(chat);
+    final nextKey = ChatsSvc.conversationKeyFor(next.chat);
+    if (currentKey != nextKey) {
+      throw StateError('CONVERSATION_TILE_REBIND_IDENTITY_MISMATCH');
+    }
+    if (!identical(_chatState.value, next)) _chatState.value = next;
+  }
 
   void onTap(BuildContext context) {
     if ((inSelectMode || listController.selectedChats.isNotEmpty) && onSelect != null) {
       onLongPress();
     } else if ((!kIsDesktop && !kIsWeb) || ChatsSvc.activeChat?.chat.guid != chat.guid) {
-      NavigationSvc.pushAndRemoveUntil(
-        context,
-        ConversationView(
-          chat: chat,
-        ),
-        (route) => route.isFirst,
-      );
+      NavigationSvc.pushAndRemoveUntil(context, ConversationView(chat: chat), (route) => route.isFirst);
     } else if (NavigationSvc.isTabletMode(context) && ChatsSvc.activeChat?.isAlive.value == false) {
       // Pops chat details
       Get.back(id: 2);
@@ -66,13 +73,7 @@ class ConversationTileController extends StatefulController {
     }
     shouldPartialHighlight.value = true;
     if (!context.mounted) return;
-    await showConversationTileMenu(
-      context,
-      this,
-      chat,
-      details.globalPosition,
-      context.textTheme,
-    );
+    await showConversationTileMenu(context, this, chat, details.globalPosition, context.textTheme);
     shouldPartialHighlight.value = false;
   }
 
@@ -101,21 +102,43 @@ class ConversationTile extends CustomStateful<ConversationTileController> {
     bool inSelectMode = false,
     Widget? subtitle,
   }) : super(
-            parentController: !inSelectMode && Get.isRegistered<ConversationTileController>(tag: chat.guid)
-                ? Get.find<ConversationTileController>(tag: chat.guid)
-                : Get.put(
-                    ConversationTileController(
-                      chatState: ChatsSvc.getOrCreateChatState(chat),
-                      listController: controller,
-                      onSelect: onSelect,
-                      inSelectMode: inSelectMode,
-                      subtitle: subtitle,
-                    ),
-                    tag: inSelectMode ? randomString(8) : chat.guid,
-                    permanent: kIsDesktop || kIsWeb));
+         parentController: _conversationTileControllerFor(
+           chat: chat,
+           controller: controller,
+           onSelect: onSelect,
+           inSelectMode: inSelectMode,
+           subtitle: subtitle,
+         ),
+       );
 
   @override
   State<ConversationTile> createState() => _ConversationTileState();
+}
+
+ConversationTileController _conversationTileControllerFor({
+  required Chat chat,
+  required ConversationListController controller,
+  required bool inSelectMode,
+  Function(bool)? onSelect,
+  Widget? subtitle,
+}) {
+  final conversationKey = ChatsSvc.conversationKeyFor(chat);
+  if (!inSelectMode && Get.isRegistered<ConversationTileController>(tag: conversationKey)) {
+    final existing = Get.find<ConversationTileController>(tag: conversationKey);
+    existing.rebindPresentation(ChatsSvc.getOrCreateChatState(chat));
+    return existing;
+  }
+  return Get.put(
+    ConversationTileController(
+      chatState: ChatsSvc.getOrCreateChatState(chat),
+      listController: controller,
+      onSelect: onSelect,
+      inSelectMode: inSelectMode,
+      subtitle: subtitle,
+    ),
+    tag: inSelectMode ? randomString(8) : conversationKey,
+    permanent: kIsDesktop || kIsWeb,
+  );
 }
 
 class _ConversationTileState extends CustomState<ConversationTile, void, ConversationTileController>
@@ -129,14 +152,16 @@ class _ConversationTileState extends CustomState<ConversationTile, void, Convers
   @override
   void initState() {
     super.initState();
-    tag = controller.chat.guid;
+    tag = ChatsSvc.conversationKeyFor(controller.chat);
     // keep controller in memory since the widget is part of a list
     // (it will be disposed when scrolled out of view)
     forceDelete = false;
 
     _activeSub = ChatsSvc.activeChatGuid.listen((guid) {
       Future.microtask(() {
-        if (mounted) controller.shouldHighlight.value = NavigationSvc.isTabletMode(context) && guid == controller.chat.guid;
+        if (mounted)
+          controller.shouldHighlight.value =
+              NavigationSvc.isTabletMode(context) && guid == ChatsSvc.conversationKeyFor(controller.chat);
       });
     });
   }
@@ -145,7 +170,9 @@ class _ConversationTileState extends CustomState<ConversationTile, void, Convers
   void didChangeDependencies() {
     super.didChangeDependencies();
     // isTabletMode reads MediaQuery, so it can't run in initState
-    controller.shouldHighlight.value = NavigationSvc.isTabletMode(context) && ChatsSvc.activeChatGuid.value == controller.chat.guid;
+    controller.shouldHighlight.value =
+        NavigationSvc.isTabletMode(context) &&
+        ChatsSvc.activeChatGuid.value == ChatsSvc.conversationKeyFor(controller.chat);
   }
 
   @override
@@ -159,15 +186,9 @@ class _ConversationTileState extends CustomState<ConversationTile, void, Convers
     super.build(context);
     return MouseRegion(
       child: ThemeSwitcher(
-        iOSSkin: CupertinoConversationTile(
-          parentController: controller,
-        ),
-        materialSkin: MaterialConversationTile(
-          parentController: controller,
-        ),
-        samsungSkin: SamsungConversationTile(
-          parentController: controller,
-        ),
+        iOSSkin: CupertinoConversationTile(parentController: controller),
+        materialSkin: MaterialConversationTile(parentController: controller),
+        samsungSkin: SamsungConversationTile(parentController: controller),
       ),
     );
   }
@@ -186,7 +207,7 @@ class _ChatTitleState extends CustomState<ChatTitle, void, ConversationTileContr
   @override
   void initState() {
     super.initState();
-    tag = controller.chat.guid;
+    tag = ChatsSvc.conversationKeyFor(controller.chat);
     // keep controller in memory since the widget is part of a list
     // (it will be disposed when scrolled out of view)
     forceDelete = false;
@@ -199,12 +220,7 @@ class _ChatTitleState extends CustomState<ChatTitle, void, ConversationTileContr
       final _title = controller.chatState.title.value ?? controller.chat.getTitle();
 
       return RichText(
-        text: TextSpan(
-          children: MessageHelper.buildEmojiText(
-            _title,
-            widget.style,
-          ),
-        ),
+        text: TextSpan(children: MessageHelper.buildEmojiText(_title, widget.style)),
         overflow: TextOverflow.ellipsis,
       );
     });
@@ -224,7 +240,7 @@ class _ChatSubtitleState extends CustomState<ChatSubtitle, void, ConversationTil
   @override
   void initState() {
     super.initState();
-    tag = controller.chat.guid;
+    tag = ChatsSvc.conversationKeyFor(controller.chat);
     // keep controller in memory since the widget is part of a list
     // (it will be disposed when scrolled out of view)
     forceDelete = false;
@@ -243,11 +259,16 @@ class _ChatSubtitleState extends CustomState<ChatSubtitle, void, ConversationTil
       // (ChatState.redactContactInfo / updateChatLatestMessage ensure this).
       final String _subtitle = chatState.subtitle.value ?? '';
 
-      // Draft detection — show "Draft: ..." when there is staged text or attachments.
-      final draftText = chatState.textFieldText.value ?? '';
-      final hasDraftText = draftText.isNotEmpty;
-      final hasDraftAttachments = chatState.textFieldAttachments.isNotEmpty;
-      final hasDraft = hasDraftText || hasDraftAttachments;
+      // Certified rows project the durable logical draft. Ordinary chats retain
+      // their historical ChatState-backed draft behavior byte-for-byte.
+      final isLogicalConversation = ChatsSvc.isLogicalConversation(controller.chat);
+      final draftPreview = isLogicalConversation
+          ? ChatsSvc.logicalDraftPreviewFor(controller.chat)
+          : LogicalDraftPreview.fromValues(
+              text: chatState.textFieldText.value ?? '',
+              attachmentCount: chatState.textFieldAttachments.length,
+            );
+      final hasDraft = draftPreview != null;
 
       final maxLines = SettingsSvc.settings.denseChatTiles.value ? 1 : 2;
       final lineHeight = (widget.style.fontSize ?? 14) * (widget.style.height ?? 1.5);
@@ -260,18 +281,17 @@ class _ChatSubtitleState extends CustomState<ChatSubtitle, void, ConversationTil
       final iconColor = isMonet ? context.theme.colorScheme.primary : context.theme.colorScheme.outline;
 
       final TextSpan subtitleSpan;
-      if (hasDraft) {
-        final draftBody = hasDraftText ? draftText : 'Attachment';
-        subtitleSpan = TextSpan(children: [
-          TextSpan(
-            text: 'Draft: ',
-            style: widget.style.copyWith(
-              color: context.theme.colorScheme.error,
-              fontStyle: FontStyle.normal,
+      if (draftPreview != null) {
+        final draftBody = draftPreview.body;
+        subtitleSpan = TextSpan(
+          children: [
+            TextSpan(
+              text: 'Draft: ',
+              style: widget.style.copyWith(color: context.theme.colorScheme.error, fontStyle: FontStyle.normal),
             ),
-          ),
-          ...MessageHelper.buildEmojiText(draftBody, widget.style),
-        ]);
+            ...MessageHelper.buildEmojiText(draftBody, widget.style),
+          ],
+        );
       } else {
         subtitleSpan = TextSpan(
           children: MessageHelper.buildEmojiText(
@@ -281,11 +301,7 @@ class _ChatSubtitleState extends CustomState<ChatSubtitle, void, ConversationTil
         );
       }
 
-      final richText = RichText(
-        text: subtitleSpan,
-        overflow: TextOverflow.ellipsis,
-        maxLines: maxLines,
-      );
+      final richText = RichText(text: subtitleSpan, overflow: TextOverflow.ellipsis, maxLines: maxLines);
 
       return Padding(
         padding: const EdgeInsets.only(right: 10),
@@ -297,14 +313,12 @@ class _ChatSubtitleState extends CustomState<ChatSubtitle, void, ConversationTil
                   children: [
                     Padding(
                       padding: EdgeInsets.only(
-                          right: 4, top: ((widget.style.fontSize ?? 14) * (widget.style.height ?? 1.5) - 14) / 2),
+                        right: 4,
+                        top: ((widget.style.fontSize ?? 14) * (widget.style.height ?? 1.5) - 14) / 2,
+                      ),
                       child: Opacity(
                         opacity: isDelivered ? 1.0 : 0.35,
-                        child: Icon(
-                          Icons.check_circle_outline,
-                          size: 14,
-                          color: iconColor,
-                        ),
+                        child: Icon(Icons.check_circle_outline, size: 14, color: iconColor),
                       ),
                     ),
                     Expanded(child: richText),
@@ -350,13 +364,7 @@ class ChatLeadingState extends State<ChatLeading> with ThemeHelpers {
                         ),
                         width: SettingsSvc.settings.denseChatTiles.value ? 36 : (material ? 50 : 45),
                         height: SettingsSvc.settings.denseChatTiles.value ? 36 : (material ? 50 : 45),
-                        child: Center(
-                          child: Icon(
-                            Icons.check,
-                            color: context.theme.colorScheme.onPrimary,
-                            size: 26,
-                          ),
-                        ),
+                        child: Center(child: Icon(Icons.check, color: context.theme.colorScheme.onPrimary, size: 26)),
                       )
                     : ContactAvatarGroupWidget(
                         chat: widget.controller.chat,
@@ -369,26 +377,18 @@ class ChatLeadingState extends State<ChatLeading> with ThemeHelpers {
                   top: 30,
                   left: 20,
                   height: height,
-                  child: const FittedBox(
-                    alignment: Alignment.centerLeft,
-                    child: TypingIndicator(
-                      visible: true,
-                    ),
-                  ),
+                  child: const FittedBox(alignment: Alignment.centerLeft, child: TypingIndicator(visible: true)),
                 ),
               if (widget.unreadIcon != null && samsung)
                 Positioned(
                   top: 0,
                   right: 0,
                   height: height * 0.75,
-                  child: FittedBox(
-                    alignment: Alignment.centerRight,
-                    child: widget.unreadIcon,
-                  ),
+                  child: FittedBox(alignment: Alignment.centerRight, child: widget.unreadIcon),
                 ),
             ],
           );
-        })
+        }),
       ],
     );
   }

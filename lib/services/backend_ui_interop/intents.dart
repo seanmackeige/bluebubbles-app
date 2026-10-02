@@ -288,8 +288,9 @@ class OpenChatDetailsAction extends Action<OpenChatDetailsIntent> {
 
   @override
   Object? invoke(covariant OpenChatDetailsIntent intent) {
-    final chat = ChatsSvc.getChatState(chatGuid)?.chat;
-    if (chat == null) return null;
+    final sourceChat = ChatsSvc.getChatState(chatGuid)?.chat;
+    if (sourceChat == null) return null;
+    final chat = ChatsSvc.presentationChatFor(sourceChat);
     NavigationSvc.push(context, ConversationDetails(chat: chat));
     return null;
   }

@@ -26,16 +26,11 @@ class _CupertinoCustomGroupsPanelState extends State<CupertinoCustomGroupsPanel>
     final name = await showCreateGroupDialog(context);
     if (name == null || name.isEmpty) return;
     if (!mounted) return;
-    final chats = await Navigator.of(context).push<List<Chat>>(
-      MaterialPageRoute(
-        builder: (_) => ChatSelectorView(
-          multiSelect: true,
-          onMultiSelect: (_) {},
-        ),
-      ),
-    );
+    final chats = await Navigator.of(
+      context,
+    ).push<List<Chat>>(MaterialPageRoute(builder: (_) => ChatSelectorView(multiSelect: true, onMultiSelect: (_) {})));
     if (chats == null) return;
-    await controller.createGroup(name, chats.map((c) => c.guid).toList());
+    await controller.createGroup(name, chats);
   }
 
   Future<void> _onEditChats(CustomGroup group) async {
@@ -43,13 +38,13 @@ class _CupertinoCustomGroupsPanelState extends State<CupertinoCustomGroupsPanel>
       MaterialPageRoute(
         builder: (_) => ChatSelectorView(
           multiSelect: true,
-          initialSelection: group.chats.map((c) => c.guid).toList(),
+          initialSelection: controller.initialSelectionForGroup(group),
           onMultiSelect: (_) {},
         ),
       ),
     );
     if (chats == null) return;
-    await controller.updateGroupChats(group, chats.map((c) => c.guid).toList());
+    await controller.updateGroupChats(group, chats);
   }
 
   void _onDelete(CustomGroup group) {
@@ -88,7 +83,7 @@ class _CupertinoCustomGroupsPanelState extends State<CupertinoCustomGroupsPanel>
   List<Handle> _groupHandles(CustomGroup group) {
     final seen = <String>{};
     final handles = <Handle>[];
-    for (final chat in group.chats) {
+    for (final chat in controller.chatsForGroup(group)) {
       for (final handle in chat.handles) {
         if (seen.add(handle.address)) handles.add(handle);
       }
@@ -122,24 +117,17 @@ class _CupertinoCustomGroupsPanelState extends State<CupertinoCustomGroupsPanel>
       child: SettingsTile(
         backgroundColor: tileColor,
         title: group.name,
-        subtitle: "${group.chats.length} ${group.chats.length == 1 ? 'chat' : 'chats'}",
+        subtitle:
+            "${controller.chatsForGroup(group).length} ${controller.chatsForGroup(group).length == 1 ? 'chat' : 'chats'}",
         onTap: () => _onEditChats(group),
-        leading: ContactAvatarGroupWidget(
-          handles: _groupHandles(group),
-          size: 30,
-          editable: false,
-        ),
+        leading: ContactAvatarGroupWidget(handles: _groupHandles(group), size: 30, editable: false),
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             if (!group.showUnreadBadge)
               Tooltip(
                 message: "Unread badge hidden",
-                child: Icon(
-                  CupertinoIcons.bell_slash_fill,
-                  size: 16,
-                  color: context.theme.colorScheme.outline,
-                ),
+                child: Icon(CupertinoIcons.bell_slash_fill, size: 16, color: context.theme.colorScheme.outline),
               ),
             CupertinoButton(
               padding: EdgeInsets.zero,
@@ -150,10 +138,7 @@ class _CupertinoCustomGroupsPanelState extends State<CupertinoCustomGroupsPanel>
             const SizedBox(width: 12),
             ReorderableDragStartListener(
               index: index,
-              child: Icon(
-                CupertinoIcons.line_horizontal_3,
-                color: context.theme.colorScheme.outline,
-              ),
+              child: Icon(CupertinoIcons.line_horizontal_3, color: context.theme.colorScheme.outline),
             ),
           ],
         ),
@@ -187,37 +172,37 @@ class _CupertinoCustomGroupsPanelState extends State<CupertinoCustomGroupsPanel>
                     child: Center(child: buildProgressIndicator(context)),
                   )
                 : groups.isEmpty
-                    ? Padding(
-                        padding: const EdgeInsets.only(top: 60),
-                        child: Center(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text("You have no custom groups", style: context.theme.textTheme.labelLarge),
-                              const SizedBox(height: 4),
-                              CupertinoButton(onPressed: _onCreate, child: const Text("Create one")),
-                            ],
-                          ),
-                        ),
-                      )
-                    : Padding(
-                        padding: const EdgeInsets.only(top: 8),
-                        child: ReorderableListView.builder(
-                          shrinkWrap: true,
-                          physics: const NeverScrollableScrollPhysics(),
-                          buildDefaultDragHandles: false,
-                          onReorder: _onReorder,
-                          itemCount: groups.length,
-                          itemBuilder: (context, index) => Column(
-                            key: ValueKey(groups[index].id),
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              _buildGroupRow(groups[index], index),
-                              if (index < groups.length - 1) const SettingsDivider(),
-                            ],
-                          ),
-                        ),
+                ? Padding(
+                    padding: const EdgeInsets.only(top: 60),
+                    child: Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text("You have no custom groups", style: context.theme.textTheme.labelLarge),
+                          const SizedBox(height: 4),
+                          CupertinoButton(onPressed: _onCreate, child: const Text("Create one")),
+                        ],
                       ),
+                    ),
+                  )
+                : Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: ReorderableListView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      buildDefaultDragHandles: false,
+                      onReorder: _onReorder,
+                      itemCount: groups.length,
+                      itemBuilder: (context, index) => Column(
+                        key: ValueKey(groups[index].id),
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _buildGroupRow(groups[index], index),
+                          if (index < groups.length - 1) const SettingsDivider(),
+                        ],
+                      ),
+                    ),
+                  ),
           ),
         ],
       );

@@ -50,6 +50,9 @@ Attachment download state machine:
 `queued → downloading → processing → complete / error`
 - Concurrent download management
 - EXIF extraction and format conversion post-download
+- Active-download priority compares canonical application conversation keys so
+  every certified sibling source is active.
+- Queue ownership and attachment/message provenance remain exact physical GUIDs.
 
 ## Firebase (`firebase/`) → `firebase/CLAUDE.md`
 - `cloud_messaging_service.dart` — FCM device token registration (Android + Desktop)

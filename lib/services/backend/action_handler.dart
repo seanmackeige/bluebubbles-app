@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:bluebubbles/helpers/ui/facetime_helpers.dart';
 import 'package:bluebubbles/database/models.dart';
+import 'package:bluebubbles/services/backend/typing_indicator_routing.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
@@ -9,8 +10,9 @@ import 'package:flutter/foundation.dart';
 import 'package:get/get.dart' hide Response;
 
 // ignore: non_constant_identifier_names
-ActionHandler MessageHandlerSvc =
-    Get.isRegistered<ActionHandler>() ? Get.find<ActionHandler>() : Get.put(ActionHandler());
+ActionHandler MessageHandlerSvc = Get.isRegistered<ActionHandler>()
+    ? Get.find<ActionHandler>()
+    : Get.put(ActionHandler());
 
 class ActionHandler extends GetxService {
   /// Tracks in-flight real GUIDs (from our own `new-message` events) that
@@ -103,18 +105,19 @@ class ActionHandler extends GetxService {
           }
 
           await IncomingMsgHandler.handle(
-              IncomingPayload(
-                type: MessageEventType.newMessage,
-                source: MessageSource.socket,
-                chat: Chat.fromMap(payload.data['chats'].first.cast<String, Object>()),
-                message: message,
-                attachments: ((payload.data['attachments'] as List?) ?? const [])
-                    .whereType<Map>()
-                    .map((e) => Attachment.fromMap(e.cast<String, Object>()))
-                    .toList(),
-                tempGuid: payload.data['tempGuid'],
-              ),
-              front: !useQueue);
+            IncomingPayload(
+              type: MessageEventType.newMessage,
+              source: MessageSource.socket,
+              chat: Chat.fromMap(payload.data['chats'].first.cast<String, Object>()),
+              message: message,
+              attachments: ((payload.data['attachments'] as List?) ?? const [])
+                  .whereType<Map>()
+                  .map((e) => Attachment.fromMap(e.cast<String, Object>()))
+                  .toList(),
+              tempGuid: payload.data['tempGuid'],
+            ),
+            front: !useQueue,
+          );
         }
         return;
       case "updated-message":
@@ -123,18 +126,19 @@ class ActionHandler extends GetxService {
           final updatedMessage = Message.fromMap(payload.data);
           if (updatedMessage.error > 0) updatedMessage.errorMessage = serverErrorMessage(updatedMessage.error);
           await IncomingMsgHandler.handle(
-              IncomingPayload(
-                type: MessageEventType.updatedMessage,
-                source: MessageSource.socket,
-                chat: Chat.fromMap(payload.data['chats'].first.cast<String, Object>()),
-                message: updatedMessage,
-                attachments: ((payload.data['attachments'] as List?) ?? const [])
-                    .whereType<Map>()
-                    .map((e) => Attachment.fromMap(e.cast<String, Object>()))
-                    .toList(),
-                tempGuid: payload.data['tempGuid'],
-              ),
-              front: !useQueue);
+            IncomingPayload(
+              type: MessageEventType.updatedMessage,
+              source: MessageSource.socket,
+              chat: Chat.fromMap(payload.data['chats'].first.cast<String, Object>()),
+              message: updatedMessage,
+              attachments: ((payload.data['attachments'] as List?) ?? const [])
+                  .whereType<Map>()
+                  .map((e) => Attachment.fromMap(e.cast<String, Object>()))
+                  .toList(),
+              tempGuid: payload.data['tempGuid'],
+            ),
+            front: !useQueue,
+          );
         }
         return;
       case "group-name-change":
@@ -148,17 +152,26 @@ class ActionHandler extends GetxService {
         }
         return;
       case "chat-read-status-changed":
-        Chat? chat = Chat.findOne(guid: data["chatGuid"]);
-        if (chat != null && (data["read"] == true || data["read"] == false)) {
-          chat.toggleHasUnreadAsync(!data["read"]!, privateMark: false);
+        final sourceChatGuid = data["chatGuid"];
+        final read = data["read"];
+        if (sourceChatGuid is String && read is bool) {
+          await ChatsSvc.observeProviderChatReadStatus(sourceChatGuid: sourceChatGuid, read: read);
         }
         return;
       case "typing-indicator":
-        final chat = ChatsSvc.findChatByGuid(data["guid"]);
-        if (chat != null) {
-          final controller = cvc(chat);
-          controller.showTypingIndicator.value = data["display"];
-        }
+        final display = data["display"];
+        if (display is! bool) return;
+        final physicalSourceGuid = data["guid"];
+        final conversationKey = incomingTypingConversationKey(
+          sourceChatGuid: physicalSourceGuid,
+          conversationKeyForGuid: ChatsSvc.conversationKeyForGuid,
+        );
+        if (conversationKey == null || physicalSourceGuid is! String) return;
+        final sourceChat = ChatsSvc.findChatByGuid(physicalSourceGuid);
+        if (sourceChat == null) return;
+        final presentationChat = ChatsSvc.presentationChatFor(sourceChat);
+        final controller = cvc(presentationChat, tag: conversationKey);
+        controller.showTypingIndicator.value = display;
         return;
       case "incoming-facetime":
         Logger.info("Received legacy incoming FaceTime call");

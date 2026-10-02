@@ -85,10 +85,16 @@ class SyncService {
         if (message.id != null) processedMessageIds.add(message.id!);
         final chatGuid = message.chat.target?.guid;
         if (chatGuid == null || message.guid == null) continue;
-        ChatsSvc.noteLogicalSourceEvent(chatGuid, authorityRelevant: message.isFromMe != false);
+        ChatsSvc.noteLogicalSourceEvent(
+          chatGuid,
+          authorityRelevant: message.isLogicalWriteAuthorityRelevant,
+          unreadRelevant:
+              message.isFromMe == false && !message.isTapback && message.chat.target?.hasUnreadMessage == true,
+          unreadEventWatermark: message.originalROWID,
+        );
         final presentationGuid = ChatsSvc.presentationGuidFor(chatGuid);
-        if (Get.isRegistered<MessagesService>(tag: presentationGuid)) {
-          final service = Get.find<MessagesService>(tag: presentationGuid);
+        final service = maybeFindMessagesSvc(presentationGuid);
+        if (service != null) {
           if (service.struct.getMessage(message.guid!) == null) {
             unawaited(service.addNewMessage(message));
           } else {
@@ -153,10 +159,16 @@ class SyncService {
           if (message.id != null && processedMessageIds.contains(message.id)) continue;
           final chatGuid = message.chat.target?.guid;
           if (chatGuid == null || message.guid == null) continue;
-          ChatsSvc.noteLogicalSourceEvent(chatGuid, authorityRelevant: message.isFromMe != false);
+          ChatsSvc.noteLogicalSourceEvent(
+            chatGuid,
+            authorityRelevant: message.isLogicalWriteAuthorityRelevant,
+            unreadRelevant:
+                message.isFromMe == false && !message.isTapback && message.chat.target?.hasUnreadMessage == true,
+            unreadEventWatermark: message.originalROWID,
+          );
           final presentationGuid = ChatsSvc.presentationGuidFor(chatGuid);
-          if (Get.isRegistered<MessagesService>(tag: presentationGuid)) {
-            final service = Get.find<MessagesService>(tag: presentationGuid);
+          final service = maybeFindMessagesSvc(presentationGuid);
+          if (service != null) {
             if (service.struct.getMessage(message.guid!) == null) {
               unawaited(service.addNewMessage(message));
             } else {
@@ -174,9 +186,10 @@ class SyncService {
         tag: 'Incremental Chat Sync',
       );
     } catch (e, stack) {
-      if (e.toString().contains('SOURCE_PROVENANCE_CONFLICT')) {
-        ChatsSvc.invalidateLogicalAuthority('SOURCE_PROVENANCE_CONFLICT');
-      }
+      // This catch no longer owns an exact source chat. Page-level events
+      // already invalidate the banked writer with source provenance; an
+      // unscoped sync failure must not mutate global Comcast authority for an
+      // unrelated certified conversation.
       Logger.error('Incremental chat sync failed!', error: e, trace: stack, tag: 'Incremental Chat Sync');
       errors += 1;
     } finally {

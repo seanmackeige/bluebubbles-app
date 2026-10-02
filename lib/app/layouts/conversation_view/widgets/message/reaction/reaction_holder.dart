@@ -2,17 +2,13 @@ import 'package:bluebubbles/app/state/message_state_scope.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reaction/reaction.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/database/models.dart';
+import 'package:bluebubbles/services/services.dart';
 import 'package:defer_pointer/defer_pointer.dart';
 import 'package:flutter/material.dart';
 
 /// Stateful widget that animates a reaction pop-in only once
 class _ReactionAnimator extends StatefulWidget {
-  const _ReactionAnimator({
-    super.key,
-    required this.stableKey,
-    required this.shouldAnimate,
-    required this.child,
-  });
+  const _ReactionAnimator({super.key, required this.stableKey, required this.shouldAnimate, required this.child});
 
   final String stableKey;
   final bool shouldAnimate;
@@ -29,15 +25,9 @@ class _ReactionAnimatorState extends State<_ReactionAnimator> with SingleTickerP
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(
-      duration: const Duration(milliseconds: 200),
-      vsync: this,
-    );
+    _controller = AnimationController(duration: const Duration(milliseconds: 200), vsync: this);
 
-    _scaleAnimation = CurvedAnimation(
-      parent: _controller,
-      curve: Curves.easeOutBack,
-    );
+    _scaleAnimation = CurvedAnimation(parent: _controller, curve: Curves.easeOutBack);
 
     // Animate in only if this is a new reaction
     if (widget.shouldAnimate) {
@@ -56,18 +46,12 @@ class _ReactionAnimatorState extends State<_ReactionAnimator> with SingleTickerP
 
   @override
   Widget build(BuildContext context) {
-    return ScaleTransition(
-      scale: _scaleAnimation,
-      child: widget.child,
-    );
+    return ScaleTransition(scale: _scaleAnimation, child: widget.child);
   }
 }
 
 class ReactionHolder extends StatefulWidget {
-  const ReactionHolder({
-    super.key,
-    required this.reactions,
-  });
+  const ReactionHolder({super.key, required this.reactions});
 
   final Iterable<Message> reactions;
 
@@ -76,7 +60,12 @@ class ReactionHolder extends StatefulWidget {
 }
 
 class _ReactionHolderState extends State<ReactionHolder> {
-  Iterable<Message> get reactions => getUniqueReactionMessages(widget.reactions.toList());
+  bool get _logical => widget.reactions.any((reaction) {
+    final source = reaction.chat.target;
+    return source != null && ChatsSvc.isLogicalConversation(source);
+  });
+
+  Iterable<Message> get reactions => getUniqueReactionMessages(widget.reactions.toList(), logical: _logical);
 
   // Cache the unique reactions to prevent unnecessary rebuilds
   late List<Message> _cachedReactions;
@@ -153,10 +142,7 @@ class _ReactionHolderState extends State<ReactionHolder> {
                     key: ValueKey(stableKey),
                     stableKey: stableKey,
                     shouldAnimate: shouldAnimate,
-                    child: ReactionWidget(
-                      reaction: e,
-                      reactions: _cachedReactions,
-                    ),
+                    child: ReactionWidget(reaction: e, reactions: _cachedReactions),
                   ),
                 ),
               );

@@ -39,3 +39,6 @@ Chat list state: `ChatsSvc` → `lib/services/ui/chat/chats_service.dart`
 ## Search Notes
 - Prefer typed search mode (`SearchMode`) over string literals (`"local"`, `"network"`).
 - Keep SQL/ObjectBox query-building and message/chat hydration in `search_query_helper.dart`, not inline in `search_view.dart`.
+- A selected logical conversation searches every certified physical source in both ObjectBox and server predicates.
+- `SearchResultItem` keeps the exact source chat/message as provenance while exposing a separate presentation chat.
+- Search-result navigation always opens the presentation chat's one logical timeline at the exact message GUID.

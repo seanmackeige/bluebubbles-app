@@ -1,18 +1,22 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:bluebubbles/database/database.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/backend/settings_helpers.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
+import 'package:bluebubbles/services/ui/chat/logical_conversation_identity.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:get_it/get_it.dart';
 
+import 'method_channel_completion_policy.dart';
 import 'method_channel_constants.dart';
+import 'notification_reply_operation.dart';
 
 abstract class MethodChannelServiceDelegate {
   bool get headless;
@@ -24,7 +28,15 @@ abstract class MethodChannelServiceDelegate {
 }
 
 class MethodChannelHandlers {
-  MethodChannelHandlers(this.service) {
+  MethodChannelHandlers(
+    this.service, {
+    NotificationReplyOperationCoordinator? notificationReplyOperations,
+  }) : _notificationReplyOperations = notificationReplyOperations ??
+            NotificationReplyOperationCoordinator(
+              processFingerprint: notificationReplyProcessFingerprint(pid),
+              load: () => PrefsSvc.messaging.loadNotificationReplyOperationJournalFresh(),
+              save: (value) => PrefsSvc.messaging.saveNotificationReplyOperationJournal(value),
+            ) {
     _handlers = {
       MethodChannelInboundMethods.newServerUrl: _handleNewServerUrl,
       MethodChannelInboundMethods.newMessage: _handleNewMessage,
@@ -49,6 +61,7 @@ class MethodChannelHandlers {
   }
 
   final MethodChannelServiceDelegate service;
+  final NotificationReplyOperationCoordinator _notificationReplyOperations;
   late final Map<String, Future<bool> Function(MethodCall, Map<String, dynamic>?)> _handlers;
 
   Future<bool> handle(MethodCall call, Map<String, dynamic>? arguments) {
@@ -247,68 +260,114 @@ class MethodChannelHandlers {
   Future<bool> _handleReplyChat(MethodCall _, Map<String, dynamic>? arguments) async {
     await Database.waitForInit();
     Logger.info('Received reply to message from Kotlin');
-    final Map<String, dynamic>? data = arguments;
-    if (data == null) return _ok();
+    final data = arguments;
+    if (data == null) return _retry();
+    final conversationKey = data['conversationKey'];
+    final sourceChatGuid = data['sourceChatGuid'];
+    final messageGuid = data['messageGuid'];
+    final text = data['text'];
+    if (conversationKey is! String ||
+        sourceChatGuid is! String ||
+        messageGuid is! String ||
+        text is! String ||
+        text.isEmpty) {
+      return _retry();
+    }
 
-    final recentReply = PrefsSvc.messaging.getRecentReply();
-    final recentReplyGuid = recentReply?.messageGuid;
-    final recentReplyText = recentReply?.text;
-    if (recentReplyGuid == data['messageGuid'] && recentReplyText == data['text']) return _retry();
+    final NotificationReplyOperationIdentity identity;
+    try {
+      identity = NotificationReplyOperationIdentity.fromExactInput(
+        conversationKey: conversationKey,
+        sourceChatGuid: sourceChatGuid,
+        messageGuid: messageGuid,
+        text: text,
+      );
+    } on FormatException {
+      return _retry();
+    }
 
-    await PrefsSvc.messaging.setRecentReply(messageGuid: data['messageGuid'], text: data['text']);
-    Logger.info('Updated recent reply cache to ${PrefsSvc.messaging.getRecentReplyRaw()}');
+    final result = await _notificationReplyOperations.execute(
+      identity: identity,
+      dispatch: (markExecutionStarted) async {
+        final route = ChatsSvc.admitNotificationConversation(
+          conversationKey: conversationKey,
+          sourceChatGuid: sourceChatGuid,
+        );
+        if (route == null) {
+          throw StateError('NOTIFICATION_REPLY_ROUTE_UNQUALIFIED');
+        }
 
-    final Chat? chat = Chat.findOne(guid: data['chatGuid']);
-    if (chat == null) return _retry();
-
-    final Completer<void> completer = Completer();
-    OutgoingMsgHandler.queue(
-      OutgoingMessage(
-        completer: completer,
-        chat: chat,
-        logicalActionId: logicalActionIdentity('android-notification-reply', <Object?>[
-          data['messageGuid'],
-          data['text'],
-        ]),
-        message: Message(
-          text: data['text'],
-          dateCreated: DateTime.now(),
-          hasAttachments: false,
-          isFromMe: true,
-          handleId: 0,
-        ),
-        clearNotificationsIfFromMe: false,
-      ),
+        final completer = Completer<void>();
+        await OutgoingMsgHandler.queue(
+          OutgoingMessage(
+            completer: completer,
+            chat: route.presentation,
+            logicalActionId: logicalActionIdentity(
+              'android-notification-reply-v2',
+              <Object?>[identity.operationId],
+            ),
+            message: Message(
+              guid: notificationReplyTempMessageGuid(identity),
+              text: text,
+              dateCreated: DateTime.now(),
+              hasAttachments: false,
+              isFromMe: true,
+              handleId: 0,
+            ),
+            clearNotificationsIfFromMe: false,
+            beforeProviderDispatch: markExecutionStarted,
+          ),
+        );
+        await completer.future;
+      },
     );
-
-    await completer.future;
-    return _ok();
+    Logger.info(
+      'Notification reply operation ${identity.operationId.substring(0, 12)} '
+      'completed as ${result.disposition.name}',
+    );
+    return result.shouldCommitWorker ? _ok() : _retry();
   }
 
   Future<bool> _handleMarkChatRead(MethodCall _, Map<String, dynamic>? arguments) async {
-    if (!service.headless && LifecycleSvc.isAlive) return _ok();
+    if (!MethodChannelCompletionPolicy.notificationMarkReadRequiresAdmission(
+      headless: service.headless,
+      lifecycleAlive: LifecycleSvc.isAlive,
+    )) {
+      return _retry();
+    }
     await Database.waitForInit();
     Logger.info('Received markAsRead from Kotlin');
 
     try {
-      if (arguments != null) {
-        final Chat? chat = Chat.findOne(guid: arguments['chatGuid']);
-        if (chat != null) {
-          if (ChatsSvc.isApprovedLogicalSource(chat)) return _ok();
-          await chat.toggleHasUnreadAsync(false, clearLocalNotifications: false);
-          ChatsSvc.getChatState(chat.guid)?.updateHasUnreadInternal(false);
-          return _ok();
-        }
+      final conversationKey = arguments?['conversationKey'];
+      final sourceChatGuid = arguments?['sourceChatGuid'];
+      if (conversationKey is! String || sourceChatGuid is! String) return _retry();
+      final route = ChatsSvc.admitNotificationConversation(
+        conversationKey: conversationKey,
+        sourceChatGuid: sourceChatGuid,
+      );
+      if (route == null) {
+        Logger.warn('Notification mark-read identity is stale or unqualified; preserving the notification');
+        return _retry();
       }
+      if (route.isLogical) {
+        final decision = await ChatsSvc.markLogicalConversationRead(route.presentation);
+        final outcome = ChatsSvc.logicalMarkReadOutcomeFor(route.presentation);
+        if (!decision.isQualified || outcome == LogicalMarkReadOutcome.partial) {
+          Logger.warn('Logical mark-read was unqualified or partial; retrying notification action');
+          return _retry();
+        }
+        return _ok();
+      }
+      await route.source.toggleHasUnreadAsync(false, clearLocalNotifications: false);
+      ChatsSvc.getChatState(route.source.guid)?.updateHasUnreadInternal(false);
+      return _ok();
     } catch (e, s) {
       return Future.error(e, s);
     }
-
-    return _retry();
   }
 
   Future<bool> _handleChatReadStatusChanged(MethodCall _, Map<String, dynamic>? arguments) async {
-    if (!service.headless && LifecycleSvc.isAlive) return _ok();
     await Database.waitForInit();
     Logger.info('Received chat status change from FCM');
 
@@ -316,13 +375,14 @@ class MethodChannelHandlers {
       final Map<String, dynamic>? data = arguments;
       if (!isNullOrEmpty(data)) {
         final payload = ServerPayload.fromJson(data!);
-        final Chat? chat = Chat.findOne(guid: payload.data['chatGuid']);
-        if (chat == null || (payload.data['read'] != true && payload.data['read'] != false)) {
+        final sourceChatGuid = payload.data['chatGuid'];
+        final read = payload.data['read'];
+        if (sourceChatGuid is! String || read is! bool) {
           return _retry();
         }
 
-        chat.toggleHasUnreadAsync(!payload.data['read']!, privateMark: false);
-        return _ok();
+        final observed = await ChatsSvc.observeProviderChatReadStatus(sourceChatGuid: sourceChatGuid, read: read);
+        return observed ? _ok() : _retry();
       }
 
       return _retry();

@@ -58,7 +58,11 @@ object DartWorkManager {
                         PersistentLog.w(context, Constants.logTag, "Work record for method $method was pruned before completion was observed")
                         return@Observer
                     }
-                    PersistentLog.d(context, Constants.logTag, "Running callback after worker with method $method completed (state: ${workInfo.state})")
+                    if (!WorkerCompletionPolicy.shouldCommit(workInfo.state)) {
+                        PersistentLog.w(context, Constants.logTag, "Worker $method finished without success (state: ${workInfo.state}); preserving caller state")
+                        return@Observer
+                    }
+                    PersistentLog.d(context, Constants.logTag, "Running callback after successful worker with method $method")
                     try {
                         callback()
                     } catch (e: Exception) {

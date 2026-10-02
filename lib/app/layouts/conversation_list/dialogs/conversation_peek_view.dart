@@ -252,113 +252,111 @@ class _ConversationPeekViewState extends State<ConversationPeekView>
   Widget buildDetailsMenu(BuildContext context) {
     double maxMenuWidth = min(max(context.width * 3 / 5, 200), context.width * 4 / 5);
     bool ios = SettingsSvc.settings.skin.value == Skins.iOS;
+    final localStateMutationAllowed = ChatsSvc.canApplyConversationLocalStateMutation(widget.chat);
 
     List<Widget> allActions = [
-      Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: () async {
-            final chatState = ChatsSvc.getChatState(widget.chat.guid);
-            await ChatsSvc.setChatPinned(chatState?.chat ?? widget.chat, !widget.chat.isPinned!);
-            popPeekView();
-          },
-          child: ListTile(
-            mouseCursor: MouseCursor.defer,
-            dense: !kIsDesktop && !kIsWeb,
-            title: Text(
-              widget.chat.isPinned! ? "Unpin" : "Pin",
-              style: context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
-            ),
-            trailing: Icon(
-              widget.chat.isPinned!
-                  ? (ios ? cupertino.CupertinoIcons.pin_slash : Icons.star_outline)
-                  : (ios ? cupertino.CupertinoIcons.pin : Icons.star),
-              color: context.theme.colorScheme.onSurfaceVariant,
-            ),
-          ),
-        ),
-      ),
-      Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: () async {
-            final chatState = ChatsSvc.getChatState(widget.chat.guid);
-            if (chatState != null) {
-              await ChatsSvc.setChatMuted(chatState.chat, widget.chat.muteType != "mute");
-            } else {
-              await widget.chat.toggleMuteAsync(widget.chat.muteType != "mute");
-            }
-            popPeekView();
-          },
-          child: ListTile(
-            mouseCursor: MouseCursor.defer,
-            dense: !kIsDesktop && !kIsWeb,
-            title: Text(
-              widget.chat.muteType == "mute" ? 'Show Alerts' : 'Hide Alerts',
-              style: context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
-            ),
-            trailing: Icon(
-              widget.chat.muteType == "mute"
-                  ? (ios ? cupertino.CupertinoIcons.bell : Icons.notifications_active)
-                  : (ios ? cupertino.CupertinoIcons.bell_slash : Icons.notifications_off),
-              color: context.theme.colorScheme.onSurfaceVariant,
+      if (localStateMutationAllowed)
+        Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () async {
+              final chatState = ChatsSvc.getChatState(widget.chat.guid);
+              await ChatsSvc.setChatPinned(chatState?.chat ?? widget.chat, !ChatsSvc.isConversationPinned(widget.chat));
+              popPeekView();
+            },
+            child: ListTile(
+              mouseCursor: MouseCursor.defer,
+              dense: !kIsDesktop && !kIsWeb,
+              title: Text(
+                ChatsSvc.isConversationPinned(widget.chat) ? "Unpin" : "Pin",
+                style: context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
+              ),
+              trailing: Icon(
+                ChatsSvc.isConversationPinned(widget.chat)
+                    ? (ios ? cupertino.CupertinoIcons.pin_slash : Icons.star_outline)
+                    : (ios ? cupertino.CupertinoIcons.pin : Icons.star),
+                color: context.theme.colorScheme.onSurfaceVariant,
+              ),
             ),
           ),
         ),
-      ),
-      Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: () async {
-            final chatState = ChatsSvc.getChatState(widget.chat.guid);
-            if (chatState != null) {
-              await ChatsSvc.setChatHasUnread(chatState.chat, !widget.chat.hasUnreadMessage!, force: true);
-            } else {
-              await widget.chat.toggleHasUnreadAsync(!widget.chat.hasUnreadMessage!, force: true);
-            }
-            popPeekView();
-          },
-          child: ListTile(
-            mouseCursor: MouseCursor.defer,
-            dense: !kIsDesktop && !kIsWeb,
-            title: Text(
-              widget.chat.hasUnreadMessage! ? 'Mark Read' : 'Mark Unread',
-              style: context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
-            ),
-            trailing: Icon(
-              widget.chat.hasUnreadMessage!
-                  ? (ios ? cupertino.CupertinoIcons.person_crop_circle_badge_xmark : Icons.mark_chat_unread)
-                  : (ios ? cupertino.CupertinoIcons.person_crop_circle_badge_checkmark : Icons.mark_chat_read),
-              color: context.theme.colorScheme.onSurfaceVariant,
+      if (localStateMutationAllowed)
+        Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () async {
+              await ChatsSvc.setChatMuted(widget.chat, !ChatsSvc.isConversationMuted(widget.chat));
+              popPeekView();
+            },
+            child: ListTile(
+              mouseCursor: MouseCursor.defer,
+              dense: !kIsDesktop && !kIsWeb,
+              title: Text(
+                ChatsSvc.isConversationMuted(widget.chat) ? 'Show Alerts' : 'Hide Alerts',
+                style: context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
+              ),
+              trailing: Icon(
+                ChatsSvc.isConversationMuted(widget.chat)
+                    ? (ios ? cupertino.CupertinoIcons.bell : Icons.notifications_active)
+                    : (ios ? cupertino.CupertinoIcons.bell_slash : Icons.notifications_off),
+                color: context.theme.colorScheme.onSurfaceVariant,
+              ),
             ),
           ),
         ),
-      ),
-      Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: () async {
-            final chatState = ChatsSvc.getChatState(widget.chat.guid);
-            await ChatsSvc.setChatArchived(chatState?.chat ?? widget.chat, !widget.chat.isArchived!);
-            popPeekView();
-          },
-          child: ListTile(
-            mouseCursor: MouseCursor.defer,
-            dense: !kIsDesktop && !kIsWeb,
-            title: Text(
-              widget.chat.isArchived! ? 'Unarchive' : 'Archive',
-              style: context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
-            ),
-            trailing: Icon(
-              widget.chat.isArchived!
-                  ? (ios ? cupertino.CupertinoIcons.tray_arrow_up : Icons.unarchive)
-                  : (ios ? cupertino.CupertinoIcons.tray_arrow_down : Icons.archive),
-              color: context.theme.colorScheme.onSurfaceVariant,
+      if (localStateMutationAllowed)
+        Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () async {
+              await ChatsSvc.toggleConversationUnreadFromUi(widget.chat, force: true);
+              popPeekView();
+            },
+            child: ListTile(
+              mouseCursor: MouseCursor.defer,
+              dense: !kIsDesktop && !kIsWeb,
+              title: Text(
+                ChatsSvc.isConversationUnread(widget.chat) ? 'Mark Read' : 'Mark Unread',
+                style: context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
+              ),
+              trailing: Icon(
+                ChatsSvc.isConversationUnread(widget.chat)
+                    ? (ios ? cupertino.CupertinoIcons.person_crop_circle_badge_xmark : Icons.mark_chat_unread)
+                    : (ios ? cupertino.CupertinoIcons.person_crop_circle_badge_checkmark : Icons.mark_chat_read),
+                color: context.theme.colorScheme.onSurfaceVariant,
+              ),
             ),
           ),
         ),
-      ),
-      if (CustomGroupsSvc.groups.isNotEmpty)
+      if (localStateMutationAllowed)
+        Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () async {
+              final chatState = ChatsSvc.getChatState(widget.chat.guid);
+              await ChatsSvc.setChatArchived(
+                chatState?.chat ?? widget.chat,
+                !ChatsSvc.isConversationArchived(widget.chat),
+              );
+              popPeekView();
+            },
+            child: ListTile(
+              mouseCursor: MouseCursor.defer,
+              dense: !kIsDesktop && !kIsWeb,
+              title: Text(
+                ChatsSvc.isConversationArchived(widget.chat) ? 'Unarchive' : 'Archive',
+                style: context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
+              ),
+              trailing: Icon(
+                ChatsSvc.isConversationArchived(widget.chat)
+                    ? (ios ? cupertino.CupertinoIcons.tray_arrow_up : Icons.unarchive)
+                    : (ios ? cupertino.CupertinoIcons.tray_arrow_down : Icons.archive),
+                color: context.theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+        ),
+      if (localStateMutationAllowed && CustomGroupsSvc.groups.isNotEmpty)
         Material(
           color: Colors.transparent,
           child: InkWell(
@@ -369,9 +367,12 @@ class _ConversationPeekViewState extends State<ConversationPeekView>
                 options: CustomGroupsSvc.groups.map((g) => BBListSelectorOption(label: g.name, value: g)).toList(),
               );
               if (group != null) {
-                final chatGuids = group.chats.map((c) => c.guid).toSet();
-                chatGuids.add(widget.chat.guid);
-                await CustomGroupInterface.updateChats(id: group.id!, chatGuids: chatGuids.toList());
+                if (ChatsSvc.isApprovedLogicalSource(widget.chat)) {
+                  await ChatsSvc.setConversationCustomGroupMembership(widget.chat, group.id!, true);
+                } else {
+                  final chatGuids = group.chats.map((c) => c.guid).toSet()..add(widget.chat.guid);
+                  await CustomGroupInterface.updateChats(id: group.id!, chatGuids: chatGuids.toList());
+                }
               }
               if (mounted) popPeekView();
             },
@@ -389,41 +390,42 @@ class _ConversationPeekViewState extends State<ConversationPeekView>
             ),
           ),
         ),
-      Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: () async {
-            await showBBDialog(
-              barrierDismissible: false,
-              context: context,
-              title: "Are you sure?",
-              body: "This chat will be deleted from this device only",
-              actions: [
-                BBDialogAction(text: "No", onPressed: () => Navigator.of(context, rootNavigator: true).pop()),
-                BBDialogAction(
-                  text: "Yes",
-                  isDefault: true,
-                  onPressed: () {
-                    ChatsSvc.removeChat(widget.chat);
-                    ChatsSvc.softDeleteChat(widget.chat);
-                    Navigator.of(context, rootNavigator: true).pop();
-                  },
-                ),
-              ],
-            );
-            if (mounted) popPeekView();
-          },
-          child: ListTile(
-            mouseCursor: MouseCursor.defer,
-            dense: !kIsDesktop && !kIsWeb,
-            title: Text(
-              'Delete',
-              style: context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
+      if (!ChatsSvc.isPotentialLogicalSource(widget.chat))
+        Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () async {
+              await showBBDialog(
+                barrierDismissible: false,
+                context: context,
+                title: "Are you sure?",
+                body: "This chat will be deleted from this device only",
+                actions: [
+                  BBDialogAction(text: "No", onPressed: () => Navigator.of(context, rootNavigator: true).pop()),
+                  BBDialogAction(
+                    text: "Yes",
+                    isDefault: true,
+                    onPressed: () {
+                      ChatsSvc.removeChat(widget.chat);
+                      ChatsSvc.softDeleteChat(widget.chat);
+                      Navigator.of(context, rootNavigator: true).pop();
+                    },
+                  ),
+                ],
+              );
+              if (mounted) popPeekView();
+            },
+            child: ListTile(
+              mouseCursor: MouseCursor.defer,
+              dense: !kIsDesktop && !kIsWeb,
+              title: Text(
+                'Delete',
+                style: context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
+              ),
+              trailing: Icon(cupertino.CupertinoIcons.trash, color: context.theme.colorScheme.onSurfaceVariant),
             ),
-            trailing: Icon(cupertino.CupertinoIcons.trash, color: context.theme.colorScheme.onSurfaceVariant),
           ),
         ),
-      ),
     ];
 
     return ClipRRect(

@@ -65,8 +65,9 @@ class _SamsungConversationListState extends State<SamsungConversationList> with 
       },
       child: Scaffold(
         backgroundColor: backgroundColor,
-        floatingActionButton:
-            !showArchived && !showUnknown ? ConversationListFAB(parentController: controller) : const SizedBox.shrink(),
+        floatingActionButton: !showArchived && !showUnknown
+            ? ConversationListFAB(parentController: controller)
+            : const SizedBox.shrink(),
         body: SafeArea(
           child: NotificationListener<ScrollEndNotification>(
             onNotification: (_) {
@@ -76,11 +77,17 @@ class _SamsungConversationListState extends State<SamsungConversationList> with 
                   controller.samsungScrollController.offset < scrollDistance &&
                   controller.samsungScrollController.offset !=
                       controller.samsungScrollController.position.maxScrollExtent) {
-                final double snapOffset =
-                    controller.samsungScrollController.offset / scrollDistance > 0.5 ? scrollDistance : 0;
+                final double snapOffset = controller.samsungScrollController.offset / scrollDistance > 0.5
+                    ? scrollDistance
+                    : 0;
 
-                Future.microtask(() => controller.samsungScrollController
-                    .animateTo(snapOffset, duration: const Duration(milliseconds: 200), curve: Curves.linear));
+                Future.microtask(
+                  () => controller.samsungScrollController.animateTo(
+                    snapOffset,
+                    duration: const Duration(milliseconds: 200),
+                    curve: Curves.linear,
+                  ),
+                );
               }
               return false;
             },
@@ -97,8 +104,8 @@ class _SamsungConversationListState extends State<SamsungConversationList> with 
                   showUnknown: controller.showUnknownSenders,
                   filters: ChatsSvc.chatListFilters.value,
                 );
-                final _pinnedChats = _chats.where((e) => e.isPinned ?? false).toList();
-                final _unpinnedChats = _chats.where((e) => !(e.isPinned ?? false)).toList();
+                final _pinnedChats = _chats.where(ChatsSvc.isConversationPinned).toList();
+                final _unpinnedChats = _chats.where((e) => !ChatsSvc.isConversationPinned(e)).toList();
 
                 return CustomScrollView(
                   physics: ThemeSwitcher.getScrollPhysics(),
@@ -117,8 +124,12 @@ class _SamsungConversationListState extends State<SamsungConversationList> with 
                           child: Padding(
                             padding: const EdgeInsets.only(top: 50),
                             child: loaded
-                                ? buildEmptyChatListState(context,
-                                    showArchived: showArchived, showUnknown: showUnknown, filters: ChatsSvc.chatListFilters.value)
+                                ? buildEmptyChatListState(
+                                    context,
+                                    showArchived: showArchived,
+                                    showUnknown: showUnknown,
+                                    filters: ChatsSvc.chatListFilters.value,
+                                  )
                                 : Column(
                                     children: [
                                       Padding(
@@ -142,18 +153,17 @@ class _SamsungConversationListState extends State<SamsungConversationList> with 
                           color: _tileColor,
                           borderRadius: BorderRadius.circular(25),
                           sliver: SliverList(
-                              delegate: SliverChildBuilderDelegate(
-                            (context, index) {
+                            delegate: SliverChildBuilderDelegate((context, index) {
                               final chat = _pinnedChats[index];
                               return ListItem(
-                                  chat: chat,
-                                  controller: controller,
-                                  update: () {
-                                    setState(() {});
-                                  });
-                            },
-                            childCount: _pinnedChats.length,
-                          )),
+                                chat: chat,
+                                controller: controller,
+                                update: () {
+                                  setState(() {});
+                                },
+                              );
+                            }, childCount: _pinnedChats.length),
+                          ),
                         ),
                       ),
                     SliverPadding(
@@ -162,18 +172,16 @@ class _SamsungConversationListState extends State<SamsungConversationList> with 
                         color: _tileColor,
                         borderRadius: BorderRadius.circular(25),
                         sliver: SliverList(
-                          delegate: SliverChildBuilderDelegate(
-                            (context, index) {
-                              final chat = _unpinnedChats[index];
-                              return ListItem(
-                                  chat: chat,
-                                  controller: controller,
-                                  update: () {
-                                    setState(() {});
-                                  });
-                            },
-                            childCount: _unpinnedChats.length,
-                          ),
+                          delegate: SliverChildBuilderDelegate((context, index) {
+                            final chat = _unpinnedChats[index];
+                            return ListItem(
+                              chat: chat,
+                              controller: controller,
+                              update: () {
+                                setState(() {});
+                              },
+                            );
+                          }, childCount: _unpinnedChats.length),
                         ),
                       ),
                     ),

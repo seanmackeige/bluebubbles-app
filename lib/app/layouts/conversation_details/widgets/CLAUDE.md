@@ -6,12 +6,13 @@ Reusable widgets composing the conversation details / info panel.
 
 | File | Purpose |
 |------|---------|
-| `chat_info.dart` | Top section: avatar, name, participant count, edit name button |
+| `chat_info.dart` | Top section: avatar/name/count; logical read-only mode suppresses edit controls |
 | `chat_options.dart` | Action row: mute, pin, archive, block, delete |
+| `logical_conversation_health_card.dart` | Collapsed read-only diagnostics projected from the central logical application snapshot; no provider coordinates, PII, or actions |
 | `contact_tile.dart` | Single participant row (avatar, name, address, remove button) |
-| `participants_list.dart` | Scrollable list of `ContactTile`s for group chats |
+| `participants_list.dart` | Group members; logical read-only mode suppresses add/remove controls |
 | `attachment_section_header.dart` | Section label + "Show more" for attachment previews |
-| `attachments_loader.dart` | Loads shared attachments for media/docs/locations |
+| `attachments_loader.dart` | Aggregates exact-identity attachments across every certified logical source |
 | `media_gallery_card.dart` | Tappable thumbnail card for media or file items |
 
 ## `filters/`

@@ -24,6 +24,11 @@
 7. `ContactServiceV2`, `ChatsService`, `SocketService`, `NotificationsService`
 8. `EventDispatcher`
 
+Every startup path binds the complete logical-certificate ledger immediately
+after database initialization. A missing V2 ledger is migrated idempotently
+from the banked V1 singleton; a corrupt V2 ledger fails closed and is never
+replaced from legacy state.
+
 If adding a new service, place it in this file at the correct position in the dependency chain. Do not register services ad-hoc elsewhere.
 
 **Isolate-specific init sequences** (subset of full startup):

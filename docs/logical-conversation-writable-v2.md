@@ -5,12 +5,13 @@ replaces the fixed Comcast execution cutover with
 `LOGICAL_EXECUTION_GENERATION_CERTIFICATE_V3_EVIDENCE_GRAPH`. Read membership
 and write authority remain separate facts.
 
-The banked Comcast Node Updates read root contains physical chats 2027, 2155,
-and 2156. Each member carries its own provider GUID binding, exact normalized
+The banked Comcast Node Updates read root contains an iMessage predecessor, an
+SMS self-alias representation, and an SMS canonical-writer representation.
+Each member carries its own provider GUID binding, exact normalized
 external-participant proof, pairwise comparison, direct structured relationship
-evidence, passive natural history, and admission receipt. Candidate 1674
-remains a historical related identity with a different participant set and is
-not enrolled.
+evidence, passive natural history, and admission receipt. A separately banked
+historical related identity has a different participant set and is not
+enrolled. Exact provider coordinates remain test-fixture evidence only.
 
 The presentation layer exposes one conversation list row and one canonical
 timeline while preserving physical chat, message, attachment, reaction, reply,
@@ -77,10 +78,10 @@ display title, highest ROWID, newest message alone, and historical success are
 never writer selectors.
 
 For the 2026-09-28 observed topology, this graph identifies the current SMS
-generation and its one no-self writer at row 2156. That conclusion comes from
-the exact participant set, current service/account, direct relationships across
-2027/2155/2156, the natural 06:59 terminal outbound, its later natural reply,
-and the self-alias differential. It is not a hard-coded row selection.
+generation and its one no-self writer representation. That conclusion comes
+from the exact participant set, current service/account, direct relationships
+across all certified members, the natural terminal outbound, its later natural
+reply, and the self-alias differential. It is not a hard-coded row selection.
 
 ## Transport and execution boundary
 

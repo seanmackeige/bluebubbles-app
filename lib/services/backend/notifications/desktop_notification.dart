@@ -16,13 +16,30 @@ class _Callbacks {
 /// Self-contained message notification context. It is encoded into the toast
 /// payload, so it remains available after the process that posted the toast exits.
 class DesktopMessageData {
-  const DesktopMessageData({required this.chatGuid, this.messageGuid, this.actions = const []});
+  const DesktopMessageData({
+    required this.chatGuid,
+    this.conversationKey,
+    this.sourceChatGuid,
+    this.messageGuid,
+    this.actions = const [],
+  });
 
+  /// Physical presentation GUID retained only as a compatible navigation route.
   final String chatGuid;
+  final String? conversationKey;
+  final String? sourceChatGuid;
   final String? messageGuid;
   final List<String> actions;
 
-  Map<String, dynamic> toJson() => {'v': 1, 'c': chatGuid, if (messageGuid != null) 'm': messageGuid, 'a': actions};
+  String get effectiveConversationKey => conversationKey ?? chatGuid;
+  Map<String, dynamic> toJson() => {
+    'v': 2,
+    'c': chatGuid,
+    'k': effectiveConversationKey,
+    if (sourceChatGuid != null) 's': sourceChatGuid,
+    if (messageGuid != null) 'm': messageGuid,
+    'a': actions,
+  };
 
   String get payload => 'dm:${base64UrlEncode(utf8.encode(jsonEncode(toJson()))).replaceAll('=', '')}';
 
@@ -31,9 +48,20 @@ class DesktopMessageData {
   static DesktopMessageData? fromJson(Map<String, dynamic> json) {
     try {
       final String? chatGuid = json['c'] as String?;
-      if (json['v'] != 1 || chatGuid == null || chatGuid.isEmpty) return null;
+      final int? version = json['v'] as int?;
+      if ((version != 1 && version != 2) || chatGuid == null || chatGuid.isEmpty) return null;
+      final String? conversationKey = version == 2 ? json['k'] as String? : null;
+      if (version == 2 && (conversationKey == null || conversationKey.isEmpty)) return null;
+      final String? sourceChatGuid = version == 2 ? json['s'] as String? : null;
+      if (version == 2 && (sourceChatGuid == null || sourceChatGuid.isEmpty)) return null;
       final List<String> actions = (json['a'] as List? ?? const []).whereType<String>().toList();
-      return DesktopMessageData(chatGuid: chatGuid, messageGuid: json['m'] as String?, actions: actions);
+      return DesktopMessageData(
+        chatGuid: chatGuid,
+        conversationKey: conversationKey,
+        sourceChatGuid: sourceChatGuid,
+        messageGuid: json['m'] as String?,
+        actions: actions,
+      );
     } catch (_) {
       return null;
     }

@@ -3,6 +3,7 @@ import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
+import 'package:bluebubbles/services/network/attachment_download_priority.dart';
 import 'package:collection/collection.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
@@ -95,8 +96,12 @@ class AttachmentDownloadService extends GetxService {
     }
   }
 
-  AttachmentDownloadController startDownload(Attachment a,
-      {Function(PlatformFile)? onComplete, Function? onError, bool forceFresh = false}) {
+  AttachmentDownloadController startDownload(
+    Attachment a, {
+    Function(PlatformFile)? onComplete,
+    Function? onError,
+    bool forceFresh = false,
+  }) {
     final guid = a.guid;
     if (guid != null && forceFresh) {
       clearControllerForGuid(guid);
@@ -112,12 +117,9 @@ class AttachmentDownloadService extends GetxService {
     }
 
     return Get.put(
-        AttachmentDownloadController(
-          attachment: a,
-          onComplete: onComplete,
-          onError: onError,
-        ),
-        tag: a.guid!);
+      AttachmentDownloadController(attachment: a, onComplete: onComplete, onError: onError),
+      tag: a.guid!,
+    );
   }
 
   void _addToQueue(AttachmentDownloadController downloader) {
@@ -145,13 +147,22 @@ class AttachmentDownloadService extends GetxService {
     if (_downloaders.values.flattened.where((e) => e.state.value == AttachmentDownloadState.downloading).length <
         maxDownloads) {
       AttachmentDownloadController? activeChatDownloader;
-      // first check if we have an active chat that needs downloads, if so prioritize that chat
-      if (ChatsSvc.activeChat != null && _downloaders.containsKey(ChatsSvc.activeChat!.chat.guid)) {
-        activeChatDownloader = _downloaders[ChatsSvc.activeChat!.chat.guid]!
-            .firstWhereOrNull((e) => e.state.value == AttachmentDownloadState.queued);
+      // Compare canonical application conversation keys so every certified
+      // sibling source is active, while retaining the exact physical queue key.
+      final activeSourceGuid = selectActiveAttachmentSourceGuid(
+        physicalSourceGuids: _downloaders.entries
+            .where((entry) => entry.value.any((e) => e.state.value == AttachmentDownloadState.queued))
+            .map((entry) => entry.key),
+        activeConversationKey: ChatsSvc.activeChatGuid.value,
+        conversationKeyForGuid: ChatsSvc.conversationKeyForGuid,
+      );
+      if (activeSourceGuid != null) {
+        activeChatDownloader = _downloaders[activeSourceGuid]!.firstWhereOrNull(
+          (e) => e.state.value == AttachmentDownloadState.queued,
+        );
         activeChatDownloader?.fetchAttachment();
       }
-      // otherwise just grab a random attachment that needs fetching
+      // Otherwise just grab a random attachment that needs fetching.
       if (activeChatDownloader == null) {
         _downloaders.values.flattened
             .firstWhereOrNull((e) => e.state.value == AttachmentDownloadState.queued)
@@ -170,11 +181,7 @@ class AttachmentDownloadController extends GetxController {
   final Rx<AttachmentDownloadState> state = Rx<AttachmentDownloadState>(AttachmentDownloadState.queued);
   Stopwatch stopwatch = Stopwatch();
 
-  AttachmentDownloadController({
-    required this.attachment,
-    Function(PlatformFile)? onComplete,
-    Function? onError,
-  }) {
+  AttachmentDownloadController({required this.attachment, Function(PlatformFile)? onComplete, Function? onError}) {
     if (onComplete != null) completeFuncs.add(onComplete);
     if (onError != null) errorFuncs.add(onError);
   }
@@ -206,25 +213,25 @@ class AttachmentDownloadController extends GetxController {
 
     var response = await HttpSvc.attachment
         .download(
-      attachment.guid!,
-      savePath: tempPath,
-      onReceiveProgress: (count, total) => setProgress(kIsWeb ? (count / total) : (count / attachment.totalBytes!)),
-    )
+          attachment.guid!,
+          savePath: tempPath,
+          onReceiveProgress: (count, total) => setProgress(kIsWeb ? (count / total) : (count / attachment.totalBytes!)),
+        )
         .catchError((err) async {
-      if (!kIsWeb && tempPath != null) {
-        File file = File(tempPath);
-        if (await file.exists()) {
-          await file.delete();
-        }
-      }
-      for (Function f in errorFuncs) {
-        f.call();
-      }
+          if (!kIsWeb && tempPath != null) {
+            File file = File(tempPath);
+            if (await file.exists()) {
+              await file.delete();
+            }
+          }
+          for (Function f in errorFuncs) {
+            f.call();
+          }
 
-      state.value = AttachmentDownloadState.error;
-      AttachmentDownloader._removeFromQueue(this);
-      return Response(requestOptions: RequestOptions(path: ''));
-    });
+          state.value = AttachmentDownloadState.error;
+          AttachmentDownloader._removeFromQueue(this);
+          return Response(requestOptions: RequestOptions(path: ''));
+        });
 
     Logger.info("Finished downloading attachment");
     if (response.statusCode != 200) {

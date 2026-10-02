@@ -29,54 +29,56 @@ class ContactTile extends StatelessWidget {
     return contact?.addresses.any((addr) => addr.contains('@')) ?? false;
   }
 
-  const ContactTile({
-    super.key,
-    required this.handle,
-    required this.chat,
-    required this.canBeRemoved,
-  });
+  const ContactTile({super.key, required this.handle, required this.chat, required this.canBeRemoved});
 
   void _removeParticipant(BuildContext context) {
+    if (ChatsSvc.isPotentialLogicalSource(chat)) {
+      showSnackbar('Action unavailable', 'This conversation is read-only.');
+      return;
+    }
     final navigator = Navigator.of(context, rootNavigator: true);
     showDialog(
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
           backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-          title: Text(
-            "Removing participant...",
-            style: context.theme.textTheme.titleLarge,
-          ),
-          content: SizedBox(
-            height: 70,
-            child: Center(child: buildProgressIndicator(context)),
-          ),
+          title: Text("Removing participant...", style: context.theme.textTheme.titleLarge),
+          content: SizedBox(height: 70, child: Center(child: buildProgressIndicator(context))),
         );
       },
     );
 
-    HttpSvc.chat.modifyParticipant("remove", chat.guid, handle.address).then((response) async {
+    if (ChatsSvc.isPotentialLogicalSource(chat)) {
       navigator.pop();
-      if (response.statusCode == 200 && response.data != null && response.data['data'] != null) {
-        final result = await ChatInterface.bulkSyncChats(
-          chatsData: [response.data['data'] as Map<String, dynamic>],
-        );
-        if (result.chats.isNotEmpty) {
-          ChatsSvc.updateChat(result.chats.first, override: true);
-        }
-      }
-      Logger.info("Removed participant ${handle.address}");
-      showSnackbar("Notice", "Removed participant from chat!");
-    }).catchError((err, stack) {
-      Logger.error("Failed to remove participant ${handle.address}", error: err, trace: stack);
-      late final String error;
-      if (err is Response) {
-        error = err.data["error"]["message"].toString();
-      } else {
-        error = err.toString();
-      }
-      showSnackbar("Error", "Failed to remove participant: $error");
-    });
+      showSnackbar('Action unavailable', 'This conversation is read-only.');
+      return;
+    }
+
+    HttpSvc.chat
+        .modifyParticipant("remove", chat.guid, handle.address)
+        .then((response) async {
+          navigator.pop();
+          if (response.statusCode == 200 && response.data != null && response.data['data'] != null) {
+            final result = await ChatInterface.bulkSyncChats(
+              chatsData: [response.data['data'] as Map<String, dynamic>],
+            );
+            if (result.chats.isNotEmpty) {
+              ChatsSvc.updateChat(result.chats.first, override: true);
+            }
+          }
+          Logger.info("Removed participant ${handle.address}");
+          showSnackbar("Notice", "Removed participant from chat!");
+        })
+        .catchError((err, stack) {
+          Logger.error("Failed to remove participant ${handle.address}", error: err, trace: stack);
+          late final String error;
+          if (err is Response) {
+            error = err.data["error"]["message"].toString();
+          } else {
+            error = err.toString();
+          }
+          showSnackbar("Error", "Failed to remove participant: $error");
+        });
   }
 
   @override
@@ -115,9 +117,7 @@ class ContactTile extends StatelessWidget {
           showModalBottomSheet(
             context: context,
             backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-            shape: const RoundedRectangleBorder(
-              borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-            ),
+            shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
             builder: (ctx) {
               return SafeArea(
                 child: Column(
@@ -169,12 +169,7 @@ class ContactTile extends StatelessWidget {
         },
         child: ListTile(
           title: RichText(
-            text: TextSpan(
-              children: MessageHelper.buildEmojiText(
-                displayName,
-                context.theme.textTheme.bodyLarge!,
-              ),
-            ),
+            text: TextSpan(children: MessageHelper.buildEmojiText(displayName, context.theme.textTheme.bodyLarge!)),
           ),
           subtitle: handle.contactsV2.isEmpty
               ? null
@@ -208,11 +203,12 @@ class ContactTile extends StatelessWidget {
                                 showAddressPicker(contact, handle, context, isEmail: true, isLongPressed: true),
                             onPressed: () => showAddressPicker(contact, handle, isEmail: true, context),
                             child: Icon(
-                                SettingsSvc.settings.skin.value == Skins.iOS ? CupertinoIcons.mail : Icons.email,
-                                color: SettingsSvc.settings.skin.value != Skins.iOS
-                                    ? context.theme.colorScheme.onSurface
-                                    : context.theme.colorScheme.onSecondary,
-                                size: SettingsSvc.settings.skin.value != Skins.iOS ? 25 : 20),
+                              SettingsSvc.settings.skin.value == Skins.iOS ? CupertinoIcons.mail : Icons.email,
+                              color: SettingsSvc.settings.skin.value != Skins.iOS
+                                  ? context.theme.colorScheme.onSurface
+                                  : context.theme.colorScheme.onSecondary,
+                              size: SettingsSvc.settings.skin.value != Skins.iOS ? 25 : 20,
+                            ),
                           ),
                         ),
                       if (((contact == null && !isEmail) || hasPhones) && !kIsWeb && !kIsDesktop)
@@ -228,11 +224,12 @@ class ContactTile extends StatelessWidget {
                             onLongPress: () => showAddressPicker(contact, handle, context, isLongPressed: true),
                             onPressed: () => showAddressPicker(contact, handle, context),
                             child: Icon(
-                                SettingsSvc.settings.skin.value == Skins.iOS ? CupertinoIcons.phone : Icons.call,
-                                color: SettingsSvc.settings.skin.value != Skins.iOS
-                                    ? context.theme.colorScheme.onSurface
-                                    : context.theme.colorScheme.onSecondary,
-                                size: SettingsSvc.settings.skin.value != Skins.iOS ? 25 : 20),
+                              SettingsSvc.settings.skin.value == Skins.iOS ? CupertinoIcons.phone : Icons.call,
+                              color: SettingsSvc.settings.skin.value != Skins.iOS
+                                  ? context.theme.colorScheme.onSurface
+                                  : context.theme.colorScheme.onSecondary,
+                              size: SettingsSvc.settings.skin.value != Skins.iOS ? 25 : 20,
+                            ),
                           ),
                         ),
                       if (((contact == null && !isEmail) || hasPhones) && !kIsWeb && !kIsDesktop)
@@ -249,13 +246,14 @@ class ContactTile extends StatelessWidget {
                                 showAddressPicker(contact, handle, context, isLongPressed: true, video: true),
                             onPressed: () => showAddressPicker(contact, handle, context, video: true),
                             child: Icon(
-                                SettingsSvc.settings.skin.value == Skins.iOS
-                                    ? CupertinoIcons.video_camera
-                                    : Icons.video_call_outlined,
-                                color: SettingsSvc.settings.skin.value != Skins.iOS
-                                    ? context.theme.colorScheme.onSurface
-                                    : context.theme.colorScheme.onSecondary,
-                                size: SettingsSvc.settings.skin.value != Skins.iOS ? 25 : 20),
+                              SettingsSvc.settings.skin.value == Skins.iOS
+                                  ? CupertinoIcons.video_camera
+                                  : Icons.video_call_outlined,
+                              color: SettingsSvc.settings.skin.value != Skins.iOS
+                                  ? context.theme.colorScheme.onSurface
+                                  : context.theme.colorScheme.onSecondary,
+                              size: SettingsSvc.settings.skin.value != Skins.iOS ? 25 : 20,
+                            ),
                           ),
                         ),
                     ],

@@ -16,6 +16,8 @@ class _SamsungFooterState extends CustomState<SamsungFooter, void, ConversationL
   bool get showArchived => controller.showArchivedChats;
   bool get showUnknown => controller.showUnknownSenders;
 
+  bool get localStateMutationAllowed => controller.selectedChats.every(ChatsSvc.canApplyConversationLocalStateMutation);
+
   @override
   Widget build(BuildContext context) {
     return AnimatedSwitcher(
@@ -26,89 +28,87 @@ class _SamsungFooterState extends CustomState<SamsungFooter, void, ConversationL
           : Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
-                if (([0, controller.selectedChats.length])
-                    .contains(controller.selectedChats.where((element) => element.hasUnreadMessage!).length))
+                if (([
+                      0,
+                      controller.selectedChats.length,
+                    ]).contains(controller.selectedChats.where(ChatsSvc.isConversationUnread).length) &&
+                    localStateMutationAllowed)
                   IconButton(
-                    onPressed: () {
+                    onPressed: () async {
                       for (Chat element in controller.selectedChats) {
-                        final chatState = ChatsSvc.getChatState(element.guid);
-                        if (chatState != null) {
-                          ChatsSvc.setChatHasUnread(chatState.chat, !element.hasUnreadMessage!);
-                        } else {
-                          element.toggleHasUnreadAsync(!element.hasUnreadMessage!);
-                        }
+                        await ChatsSvc.toggleConversationUnreadFromUi(element);
                       }
                       controller.clearSelectedChats();
                     },
                     icon: Icon(
-                      controller.selectedChats[0].hasUnreadMessage!
+                      ChatsSvc.isConversationUnread(controller.selectedChats[0])
                           ? Icons.mark_chat_read_outlined
                           : Icons.mark_chat_unread_outlined,
                       color: context.theme.colorScheme.primary,
                     ),
                   ),
-                if (([0, controller.selectedChats.length])
-                    .contains(controller.selectedChats.where((element) => element.muteType == "mute").length))
+                if (([
+                      0,
+                      controller.selectedChats.length,
+                    ]).contains(controller.selectedChats.where(ChatsSvc.isConversationMuted).length) &&
+                    localStateMutationAllowed)
                   IconButton(
-                    onPressed: () {
+                    onPressed: () async {
                       for (Chat element in controller.selectedChats) {
-                        final chatState = ChatsSvc.getChatState(element.guid);
-                        if (chatState != null) {
-                          ChatsSvc.setChatMuted(chatState.chat, element.muteType != "mute");
-                        } else {
-                          element.toggleMuteAsync(element.muteType != "mute");
-                        }
+                        await ChatsSvc.setChatMuted(element, !ChatsSvc.isConversationMuted(element));
                       }
                       controller.clearSelectedChats();
                     },
                     icon: Icon(
-                      controller.selectedChats[0].muteType == "mute"
+                      ChatsSvc.isConversationMuted(controller.selectedChats[0])
                           ? Icons.notifications_active_outlined
                           : Icons.notifications_off_outlined,
                       color: context.theme.colorScheme.primary,
                     ),
                   ),
-                if (([0, controller.selectedChats.length])
-                    .contains(controller.selectedChats.where((element) => element.isPinned!).length))
+                if (([
+                      0,
+                      controller.selectedChats.length,
+                    ]).contains(controller.selectedChats.where(ChatsSvc.isConversationPinned).length) &&
+                    localStateMutationAllowed)
                   IconButton(
-                    onPressed: () {
+                    onPressed: () async {
                       for (Chat element in controller.selectedChats) {
-                        final chatState = ChatsSvc.getChatState(element.guid);
-                        ChatsSvc.setChatPinned(chatState?.chat ?? element, !element.isPinned!);
+                        await ChatsSvc.setChatPinned(element, !ChatsSvc.isConversationPinned(element));
                       }
                       controller.clearSelectedChats();
                     },
                     icon: Icon(
-                      controller.selectedChats[0].isPinned! ? Icons.push_pin_outlined : Icons.push_pin,
+                      ChatsSvc.isConversationPinned(controller.selectedChats[0])
+                          ? Icons.push_pin_outlined
+                          : Icons.push_pin,
                       color: context.theme.colorScheme.primary,
                     ),
                   ),
-                IconButton(
-                  onPressed: () {
-                    for (Chat element in controller.selectedChats) {
-                      final chatState = ChatsSvc.getChatState(element.guid);
-                      ChatsSvc.setChatArchived(chatState?.chat ?? element, !element.isArchived!);
-                    }
-                    controller.clearSelectedChats();
-                  },
-                  icon: Icon(
-                    showArchived ? Icons.unarchive_outlined : Icons.archive_outlined,
-                    color: context.theme.colorScheme.primary,
+                if (localStateMutationAllowed)
+                  IconButton(
+                    onPressed: () async {
+                      for (Chat element in controller.selectedChats) {
+                        await ChatsSvc.setChatArchived(element, !ChatsSvc.isConversationArchived(element));
+                      }
+                      controller.clearSelectedChats();
+                    },
+                    icon: Icon(
+                      showArchived ? Icons.unarchive_outlined : Icons.archive_outlined,
+                      color: context.theme.colorScheme.primary,
+                    ),
                   ),
-                ),
-                IconButton(
-                  onPressed: () {
-                    for (Chat element in controller.selectedChats) {
-                      ChatsSvc.removeChat(element);
-                      ChatsSvc.softDeleteChat(element);
-                    }
-                    controller.clearSelectedChats();
-                  },
-                  icon: Icon(
-                    Icons.delete_outlined,
-                    color: context.theme.colorScheme.primary,
+                if (controller.selectedChats.every((chat) => !ChatsSvc.isPotentialLogicalSource(chat)))
+                  IconButton(
+                    onPressed: () {
+                      for (Chat element in controller.selectedChats) {
+                        ChatsSvc.removeChat(element);
+                        ChatsSvc.softDeleteChat(element);
+                      }
+                      controller.clearSelectedChats();
+                    },
+                    icon: Icon(Icons.delete_outlined, color: context.theme.colorScheme.primary),
                   ),
-                ),
               ],
             ),
     );

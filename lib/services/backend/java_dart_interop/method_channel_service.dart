@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:bluebubbles/services/network/method_channel_actions.dart';
+import 'package:bluebubbles/services/backend/java_dart_interop/method_channel_completion_policy.dart';
 import 'package:bluebubbles/services/backend/java_dart_interop/method_channel_handlers.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
@@ -88,7 +89,7 @@ class MethodChannelService implements MethodChannelServiceDelegate {
     // Future.value(false) will have the engine retry the call
     // Future.value(true) will have the engine stop trying to call the method
 
-    return _handlers.handle(call, arguments);
+    return MethodChannelCompletionPolicy.propagate(() => _handlers.handle(call, arguments));
   }
 
   Future<dynamic> invokeMethod(String method, [dynamic arguments]) async {

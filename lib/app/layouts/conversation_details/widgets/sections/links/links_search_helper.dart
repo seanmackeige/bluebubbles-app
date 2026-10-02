@@ -1,4 +1,5 @@
 import 'package:bluebubbles/database/models.dart';
+import 'package:bluebubbles/services/ui/chat/logical_message_chronology.dart';
 
 /// Domain text shown on link preview cards (host without leading `www.`).
 String linkPreviewDomain(UrlPreviewData data) {
@@ -49,9 +50,7 @@ List<Message> filterAndSortLinks(List<Message> messages, String query) {
   scored.sort((a, b) {
     final scoreCompare = b.score.compareTo(a.score);
     if (scoreCompare != 0) return scoreCompare;
-    final aDate = a.message.dateCreated?.millisecondsSinceEpoch ?? 0;
-    final bDate = b.message.dateCreated?.millisecondsSinceEpoch ?? 0;
-    return bDate.compareTo(aDate);
+    return compareLogicalMessagesDescending(a.message, b.message);
   });
 
   return scored.map((e) => e.message).toList();

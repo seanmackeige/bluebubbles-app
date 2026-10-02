@@ -4,12 +4,102 @@ import 'package:bluebubbles/services/ui/chat/logical_conversation_view.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'support/logical_read_certificate_fixture.dart';
+
 void main() {
+  setUp(bindBankedReadFixture);
   tearDown(LogicalConversationViewPolicy.resetRuntimeCertificateForTesting);
+
+  group('banked fingerprint trust-anchor binding', () {
+    test('binding is independent of observation order and local row allocation', () {
+      final assignments = <List<int>>[
+        <int>[41, 42, 43],
+        <int>[1043, 1041, 1042],
+        <int>[900003, 900001, 900002],
+      ];
+      for (final rows in assignments) {
+        for (final reverse in <bool>[false, true]) {
+          final bindings = bankedReadFixtureBindings(firstRow: rows[0], secondRow: rows[1], presentationRow: rows[2]);
+          expect(
+            LogicalConversationViewPolicy.bindRuntimeCertificate(
+              physicalChats: reverse ? bindings.reversed : bindings,
+              persistedCertificateJson: null,
+            ),
+            isTrue,
+          );
+          expect(LogicalConversationViewPolicy.activeCertificate.sourceChatRowIds, rows.toSet());
+          expect(LogicalConversationViewPolicy.activeCertificate.presentationSourceChatRowId, rows[2]);
+        }
+      }
+    });
+
+    test('missing, duplicate fingerprint, and duplicate row bindings fail closed', () {
+      final complete = bankedReadFixtureBindings();
+      expect(
+        LogicalConversationViewPolicy.bindRuntimeCertificate(
+          physicalChats: complete.take(2),
+          persistedCertificateJson: null,
+        ),
+        isFalse,
+      );
+      expect(LogicalConversationViewPolicy.runtimeCertificateAvailable, isFalse);
+      expect(LogicalConversationViewPolicy.activeCertificate.sourceChatRowIds, isEmpty);
+
+      expect(
+        LogicalConversationViewPolicy.bindRuntimeCertificate(
+          physicalChats: <LogicalConversationPhysicalChatBinding>[...complete, complete.last],
+          persistedCertificateJson: null,
+        ),
+        isFalse,
+      );
+      expect(LogicalConversationViewPolicy.activeCertificate.sourceChatRowIds, isEmpty);
+
+      final duplicateRow = <LogicalConversationPhysicalChatBinding>[
+        complete[0],
+        LogicalConversationPhysicalChatBinding.fromGuidSha256(
+          sourceChatRowId: complete[0].sourceChatRowId,
+          sourceChatGuidSha256: complete[1].sourceChatGuidSha256,
+        ),
+        complete[2],
+      ];
+      expect(
+        LogicalConversationViewPolicy.bindRuntimeCertificate(
+          physicalChats: duplicateRow,
+          persistedCertificateJson: null,
+        ),
+        isFalse,
+      );
+      expect(LogicalConversationViewPolicy.activeCertificate.sourceChatRowIds, isEmpty);
+    });
+
+    test('Build 99 row-bound persistence migrates onto newly allocated rows', () {
+      final legacy = encodeLegacyBuild99ReadCertificate(LogicalConversationViewPolicy.activeCertificate);
+      LogicalConversationViewPolicy.resetRuntimeCertificateForTesting();
+
+      expect(
+        LogicalConversationViewPolicy.bindRuntimeCertificate(
+          physicalChats: bankedReadFixtureBindings(firstRow: 71, secondRow: 72, presentationRow: 73),
+          persistedCertificateJson: legacy,
+        ),
+        isTrue,
+      );
+      expect(LogicalConversationViewPolicy.activeCertificate.sourceChatRowIds, <int>{71, 72, 73});
+      expect(LogicalConversationViewPolicy.activeCertificate.presentationSourceChatRowId, 73);
+
+      final migrated = LogicalConversationViewPolicy.encodeRuntimeCertificate(
+        LogicalConversationViewPolicy.activeCertificate,
+      );
+      final decoded = jsonDecode(migrated) as Map<String, dynamic>;
+      expect(decoded['schema'], logicalConversationRuntimeCertificateSchema);
+      expect(migrated, isNot(contains('sourceChatRowId')));
+      expect(migrated, isNot(contains('pairwiseComparedSourceRowIds')));
+      expect(migrated, isNot(contains('presentationSourceChatRowId')));
+    });
+  });
 
   group('N-member read certificate admission', () {
     test('all three physical members retain independent admission proof', () {
-      const certificate = LogicalConversationViewPolicy.comcastNodeUpdates;
+      final certificate = LogicalConversationViewPolicy.activeCertificate;
       expect(certificate.schema, logicalConversationReadCertificateSchema);
       expect(certificate.isValid, isTrue);
       expect(certificate.sourceChatRowIds, {2027, 2155, 2156});
@@ -34,7 +124,7 @@ void main() {
         [9000, 2156, 2027, 2155],
       ];
       for (final rows in orders) {
-        expect(LogicalConversationViewPolicy.resolve(rows), same(LogicalConversationViewPolicy.comcastNodeUpdates));
+        expect(LogicalConversationViewPolicy.resolve(rows), same(LogicalConversationViewPolicy.activeCertificate));
       }
     });
 
@@ -46,18 +136,18 @@ void main() {
 
     test('removing any proof removes only that member', () {
       for (final removed in [2027, 2155, 2156]) {
-        final reduced = LogicalConversationViewPolicy.comcastNodeUpdates.withoutMemberProof(removed);
+        final reduced = LogicalConversationViewPolicy.activeCertificate.withoutMemberProof(removed);
         expect(reduced.isValid, isTrue, reason: 'invalid after removing $removed');
         expect(reduced.sourceChatRowIds, {2027, 2155, 2156}.difference({removed}));
         expect(reduced.proofFor(removed), isNull);
         for (final retained in reduced.sourceChatRowIds) {
-          expect(reduced.proofFor(retained), same(LogicalConversationViewPolicy.comcastNodeUpdates.proofFor(retained)));
+          expect(reduced.proofFor(retained), same(LogicalConversationViewPolicy.activeCertificate.proofFor(retained)));
         }
       }
     });
 
     test('removing 2027 preserves accepted pair behavior', () {
-      final pairCertificate = LogicalConversationViewPolicy.comcastNodeUpdates.withoutMemberProof(2027);
+      final pairCertificate = LogicalConversationViewPolicy.activeCertificate.withoutMemberProof(2027);
       expect(pairCertificate.isValid, isTrue);
       expect(pairCertificate.sourceChatRowIds, {2155, 2156});
       expect(pairCertificate.proofFor(2027), isNull);
@@ -73,7 +163,7 @@ void main() {
     });
 
     test('transitive-only candidate proof cannot extend the certificate', () {
-      final pairCertificate = LogicalConversationViewPolicy.comcastNodeUpdates.withoutMemberProof(2027);
+      final pairCertificate = LogicalConversationViewPolicy.activeCertificate.withoutMemberProof(2027);
       const transitiveOnly = LogicalConversationMemberProof(
         sourceChatRowId: 9000,
         sourceChatGuidHmacSha256: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
@@ -116,7 +206,7 @@ void main() {
         explanation: 'Direct structured lineage and complete individual proof for a newly observed identity.',
       );
       final result = LogicalConversationViewPolicy.reconcileCertificate(
-        LogicalConversationViewPolicy.comcastNodeUpdates,
+        LogicalConversationViewPolicy.activeCertificate,
         const [candidate],
       );
       expect(result.certificate.isValid, isTrue);
@@ -224,31 +314,47 @@ void main() {
 
       LogicalConversationViewPolicy.resetRuntimeCertificateForTesting();
       expect(LogicalConversationViewPolicy.isApprovedSourceRowId(9121), isFalse);
-      expect(LogicalConversationViewPolicy.hydrateRuntimeCertificate(persisted), isTrue);
+      expect(LogicalConversationViewPolicy.hydrateRuntimeCertificate(persisted), isFalse);
+      expect(
+        LogicalConversationViewPolicy.bindRuntimeCertificate(
+          physicalChats: <LogicalConversationPhysicalChatBinding>[
+            ...bankedReadFixtureBindings(),
+            LogicalConversationPhysicalChatBinding.fromGuidSha256(
+              sourceChatRowId: 9121,
+              sourceChatGuidSha256: sourceGuidSha256,
+            ),
+          ],
+          persistedCertificateJson: persisted,
+        ),
+        isTrue,
+      );
       expect(LogicalConversationViewPolicy.runtimeCertificateAvailable, isTrue);
       expect(LogicalConversationViewPolicy.isApprovedSourceRowId(9121), isTrue);
       expect(LogicalConversationViewPolicy.sourceGuidMatchesActiveProof(9121, 'future-guid'), isTrue);
       expect(LogicalConversationViewPolicy.sourceGuidMatchesActiveProof(9121, 'wrong-guid'), isFalse);
     });
 
-    test('corrupt or regressed runtime certificate fails closed to the banked root', () {
+    test('corrupt or regressed runtime certificate fails closed to unbound state', () {
+      final persisted = LogicalConversationViewPolicy.encodeRuntimeCertificate(
+        LogicalConversationViewPolicy.activeCertificate,
+      );
       expect(LogicalConversationViewPolicy.hydrateRuntimeCertificate('{not-json'), isFalse);
       expect(LogicalConversationViewPolicy.runtimeCertificateAvailable, isFalse);
-      expect(LogicalConversationViewPolicy.activeCertificate.sourceChatRowIds, {2027, 2155, 2156});
+      expect(LogicalConversationViewPolicy.activeCertificate.sourceChatRowIds, isEmpty);
 
-      final decoded =
-          jsonDecode(
-                LogicalConversationViewPolicy.encodeRuntimeCertificate(
-                  LogicalConversationViewPolicy.comcastNodeUpdates,
-                ),
-              )
-              as Map<String, dynamic>;
+      final decoded = jsonDecode(persisted) as Map<String, dynamic>;
       final payload = (decoded['certificate'] as Map).cast<String, dynamic>();
       final members = payload['members'] as List;
       (members.first as Map)['sourceChatGuidHmacSha256'] = List.filled(64, '0').join();
-      expect(LogicalConversationViewPolicy.hydrateRuntimeCertificate(jsonEncode(decoded)), isFalse);
+      expect(
+        LogicalConversationViewPolicy.bindRuntimeCertificate(
+          physicalChats: bankedReadFixtureBindings(),
+          persistedCertificateJson: jsonEncode(decoded),
+        ),
+        isFalse,
+      );
       expect(LogicalConversationViewPolicy.runtimeCertificateAvailable, isFalse);
-      expect(LogicalConversationViewPolicy.activeCertificate.sourceChatRowIds, {2027, 2155, 2156});
+      expect(LogicalConversationViewPolicy.activeCertificate.sourceChatRowIds, isEmpty);
     });
 
     test('candidate ordering cannot change evidence-driven read enrollment', () {
@@ -283,11 +389,11 @@ void main() {
         explanation: 'Second independently proven candidate.',
       );
       final forward = LogicalConversationViewPolicy.reconcileCertificate(
-        LogicalConversationViewPolicy.comcastNodeUpdates,
+        LogicalConversationViewPolicy.activeCertificate,
         const [first, second],
       );
       final reverse = LogicalConversationViewPolicy.reconcileCertificate(
-        LogicalConversationViewPolicy.comcastNodeUpdates,
+        LogicalConversationViewPolicy.activeCertificate,
         const [second, first],
       );
       expect(forward.certificate.revision, reverse.certificate.revision);
@@ -311,10 +417,10 @@ void main() {
         explanation: 'Incomplete pairwise proof must fail closed.',
       );
       final result = LogicalConversationViewPolicy.reconcileCertificate(
-        LogicalConversationViewPolicy.comcastNodeUpdates,
+        LogicalConversationViewPolicy.activeCertificate,
         const [candidate],
       );
-      expect(result.certificate, same(LogicalConversationViewPolicy.comcastNodeUpdates));
+      expect(result.certificate, same(LogicalConversationViewPolicy.activeCertificate));
       expect(result.decisions.single.classification, LogicalConversationCandidateClassification.ambiguousNotEnrolled);
     });
 
@@ -335,10 +441,10 @@ void main() {
         explanation: 'A duplicated universe must not partially advance.',
       );
       final result = LogicalConversationViewPolicy.reconcileCertificate(
-        LogicalConversationViewPolicy.comcastNodeUpdates,
+        LogicalConversationViewPolicy.activeCertificate,
         const [candidate, candidate],
       );
-      expect(result.certificate, same(LogicalConversationViewPolicy.comcastNodeUpdates));
+      expect(result.certificate, same(LogicalConversationViewPolicy.activeCertificate));
       expect(result.decisions, hasLength(2));
       expect(result.decisions.map((decision) => decision.reason), everyElement('DUPLICATE_CANDIDATE_EVIDENCE'));
     });
@@ -360,7 +466,7 @@ void main() {
         explanation: 'Historical prior-participant-set identity.',
       );
       final result = LogicalConversationViewPolicy.reconcileCertificate(
-        LogicalConversationViewPolicy.comcastNodeUpdates,
+        LogicalConversationViewPolicy.activeCertificate,
         const [candidate],
       );
       expect(result.certificate.sourceChatRowIds, {2027, 2155, 2156});
@@ -370,13 +476,8 @@ void main() {
       );
     });
 
-    test('fourth candidate is independently historical and not enrolled', () {
-      final fourth = LogicalConversationViewPolicy.excludedCandidateProofFor(1674);
-      expect(fourth, isNotNull);
-      expect(
-        fourth!.classification,
-        LogicalConversationCandidateClassification.historicalRelatedButNotSameParticipantSet,
-      );
+    test('excluded historical rows are not granted identity by a global row constant', () {
+      expect(LogicalConversationViewPolicy.excludedCandidateProofFor(1674), isNull);
       expect(LogicalConversationViewPolicy.isApprovedSourceRowId(1674), isFalse);
       expect(LogicalConversationViewPolicy.membershipProofFor(1674), isNull);
     });

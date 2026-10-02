@@ -1,3 +1,4 @@
+import 'package:bluebubbles/app/layouts/conversation_details/widgets/attachments_loader.dart';
 import 'package:bluebubbles/database/models.dart';
 
 int _fieldMatchScore(String field, String query, int tierBase) {
@@ -39,9 +40,7 @@ List<Attachment> filterAndSortFiles(List<Attachment> attachments, String query) 
   scored.sort((a, b) {
     final scoreCompare = b.score.compareTo(a.score);
     if (scoreCompare != 0) return scoreCompare;
-    final aDate = a.attachment.message.target?.dateCreated?.millisecondsSinceEpoch ?? 0;
-    final bDate = b.attachment.message.target?.dateCreated?.millisecondsSinceEpoch ?? 0;
-    return bDate.compareTo(aDate);
+    return compareLogicalAttachmentsDescending(a.attachment, b.attachment);
   });
 
   return scored.map((e) => e.attachment).toList();

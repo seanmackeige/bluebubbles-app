@@ -74,15 +74,15 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
 
   List<Message> reactions = [];
   late double messageOffset = Get.height - widget.childPosition.dy - widget.size.height;
-  late double materialOffset = widget.childPosition.dy +
-      EdgeInsets.fromViewPadding(
-        View.of(context).viewInsets,
-        View.of(context).devicePixelRatio,
-      ).bottom;
+  late double materialOffset =
+      widget.childPosition.dy +
+      EdgeInsets.fromViewPadding(View.of(context).viewInsets, View.of(context).devicePixelRatio).bottom;
   late int numberToShow = 5;
-  late Chat? dmChat = ChatsSvc.allChats.firstWhereOrNull((chat) =>
-      !chat.isGroup &&
-      chat.handles.firstWhereOrNull((handle) => handle.address == message.handleRelation.target?.address) != null);
+  late Chat? dmChat = ChatsSvc.allChats.firstWhereOrNull(
+    (chat) =>
+        !chat.isGroup &&
+        chat.handles.firstWhereOrNull((handle) => handle.address == message.handleRelation.target?.address) != null,
+  );
   String? selfReaction;
   String? currentlySelectedReaction = "init";
   final GlobalKey _childKey = GlobalKey();
@@ -93,6 +93,10 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
   MessagesService get service => MessagesSvc(chat.guid);
 
   Chat get chat => widget.cvController.chat;
+
+  bool get isProtectedLogicalSource => ChatsSvc.isPotentialLogicalSource(chat);
+
+  bool get canWriteConversation => !isProtectedLogicalSource || ChatsSvc.hasBuild99WriterCapability(chat);
 
   MessagePart get part => widget.part;
 
@@ -113,7 +117,8 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
   bool get canOpenInImageViewer =>
       kIsDesktop && !kIsWeb && part.attachments.length == 1 && part.attachments.first.mimeStart == "image";
 
-  late bool isEmbeddedMedia = (message.balloonBundleId == "com.apple.Handwriting.HandwritingProvider" ||
+  late bool isEmbeddedMedia =
+      (message.balloonBundleId == "com.apple.Handwriting.HandwritingProvider" ||
           message.balloonBundleId == "com.apple.DigitalTouchBalloonProvider") &&
       File(message.interactiveMediaPath!).existsSync();
 
@@ -140,11 +145,16 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final measuredHeight = _childKey.currentContext?.size?.height;
       currentlySelectedReaction = null;
-      reactions = getUniqueReactionMessages(message.associatedMessages
-          .where((e) =>
-              ReactionTypes.toList().contains(e.associatedMessageType?.replaceAll("-", "")) &&
-              (e.associatedMessagePart ?? 0) == part.part)
-          .toList());
+      reactions = getUniqueReactionMessages(
+        message.associatedMessages
+            .where(
+              (e) =>
+                  ReactionTypes.toList().contains(e.associatedMessageType?.replaceAll("-", "")) &&
+                  (e.associatedMessagePart ?? 0) == part.part,
+            )
+            .toList(),
+        logical: ChatsSvc.isLogicalConversation(widget.cvController.chat),
+      );
       final self = reactions.firstWhereOrNull((e) => e.isFromMe!)?.associatedMessageType;
       if (!(self?.contains("-") ?? true)) {
         selfReaction = self;
@@ -199,198 +209,199 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
         ),
       ),
       child: TitleBarWrapper(
-          child: BBScaffold(
-              extendBodyBehindAppBar: true,
-              safeAreaLeft: false,
-              safeAreaRight: false,
-              // The popup opens over a still-collapsing keyboard. Keep the body
-              // full-screen and its bottom edge fixed so Positioned offsets are
-              // screen-anchored and don't ride the inset animation down.
-              resizeToAvoidBottomInset: false,
-              safeAreaMaintainBottomViewPadding: true,
-              backgroundColor: kIsDesktop && iOS && SettingsSvc.settings.windowEffect.value != WindowEffect.disabled
-                  ? context.theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.6)
-                  : Colors.transparent,
-              appBar: iOS
-                  ? null
-                  : BBAppBar(
-                      backgroundColor: context.theme.colorScheme.surface.oppositeLightenOrDarken(5),
-                      automaticallyImplyLeading: false,
-                      leadingWidth: 40,
-                      toolbarHeight: kIsDesktop ? 80 : 50,
-                      leading: Padding(
-                        padding: EdgeInsets.only(top: kIsDesktop ? 20 : 0, left: 10.0),
-                        child: BackButton(
-                          color: context.theme.colorScheme.onSurface,
-                          onPressed: () {
-                            popDetails();
-                            return true;
-                          },
-                        ),
-                      ),
-                      actions: buildMaterialDetailsMenu(context),
+        child: BBScaffold(
+          extendBodyBehindAppBar: true,
+          safeAreaLeft: false,
+          safeAreaRight: false,
+          // The popup opens over a still-collapsing keyboard. Keep the body
+          // full-screen and its bottom edge fixed so Positioned offsets are
+          // screen-anchored and don't ride the inset animation down.
+          resizeToAvoidBottomInset: false,
+          safeAreaMaintainBottomViewPadding: true,
+          backgroundColor: kIsDesktop && iOS && SettingsSvc.settings.windowEffect.value != WindowEffect.disabled
+              ? context.theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.6)
+              : Colors.transparent,
+          appBar: iOS
+              ? null
+              : BBAppBar(
+                  backgroundColor: context.theme.colorScheme.surface.oppositeLightenOrDarken(5),
+                  automaticallyImplyLeading: false,
+                  leadingWidth: 40,
+                  toolbarHeight: kIsDesktop ? 80 : 50,
+                  leading: Padding(
+                    padding: EdgeInsets.only(top: kIsDesktop ? 20 : 0, left: 10.0),
+                    child: BackButton(
+                      color: context.theme.colorScheme.onSurface,
+                      onPressed: () {
+                        popDetails();
+                        return true;
+                      },
                     ),
-              body: Stack(
-                fit: StackFit.expand,
-                children: [
-                  GestureDetector(
-                    onTap: popDetails,
-                    child: iOS
-                        ? (SettingsSvc.settings.highPerfMode.value
-                            ? Container(color: context.theme.colorScheme.surface.withValues(alpha: 0.5))
-                            : BackdropFilter(
-                                filter: ImageFilter.blur(
-                                    sigmaX:
-                                        kIsDesktop && SettingsSvc.settings.windowEffect.value != WindowEffect.disabled
-                                            ? 10
-                                            : 30,
-                                    sigmaY:
-                                        kIsDesktop && SettingsSvc.settings.windowEffect.value != WindowEffect.disabled
-                                            ? 10
-                                            : 30),
-                                child: Container(
-                                  color: Colors.transparent.withValues(alpha: 0.1),
-                                ),
-                              ))
-                        : null,
                   ),
-                  if (iOS)
-                    AnimatedPositioned(
-                      duration: const Duration(milliseconds: 250),
-                      curve: Curves.easeOutBack,
-                      left: widget.childPosition.dx,
-                      bottom: messageOffset,
-                      child: TweenAnimationBuilder<double>(
-                        tween: Tween<double>(begin: 0.8, end: 1),
-                        curve: Curves.easeOutBack,
-                        duration: const Duration(milliseconds: 500),
-                        child: NotificationListener<SizeChangedLayoutNotification>(
-                          onNotification: (_) {
-                            _remeasureChild();
-                            return false;
-                          },
-                          child: SizeChangedLayoutNotifier(
-                            child: ConstrainedBox(
-                              key: _childKey,
-                              constraints: BoxConstraints(maxWidth: widget.size.width),
-                              child: MessageStateScope(
-                                messageState: widget.controller,
-                                child: widget.child,
+                  actions: buildMaterialDetailsMenu(context),
+                ),
+          body: Stack(
+            fit: StackFit.expand,
+            children: [
+              GestureDetector(
+                onTap: popDetails,
+                child: iOS
+                    ? (SettingsSvc.settings.highPerfMode.value
+                          ? Container(color: context.theme.colorScheme.surface.withValues(alpha: 0.5))
+                          : BackdropFilter(
+                              filter: ImageFilter.blur(
+                                sigmaX: kIsDesktop && SettingsSvc.settings.windowEffect.value != WindowEffect.disabled
+                                    ? 10
+                                    : 30,
+                                sigmaY: kIsDesktop && SettingsSvc.settings.windowEffect.value != WindowEffect.disabled
+                                    ? 10
+                                    : 30,
                               ),
-                            ),
-                          ),
+                              child: Container(color: Colors.transparent.withValues(alpha: 0.1)),
+                            ))
+                    : null,
+              ),
+              if (iOS)
+                AnimatedPositioned(
+                  duration: const Duration(milliseconds: 250),
+                  curve: Curves.easeOutBack,
+                  left: widget.childPosition.dx,
+                  bottom: messageOffset,
+                  child: TweenAnimationBuilder<double>(
+                    tween: Tween<double>(begin: 0.8, end: 1),
+                    curve: Curves.easeOutBack,
+                    duration: const Duration(milliseconds: 500),
+                    child: NotificationListener<SizeChangedLayoutNotification>(
+                      onNotification: (_) {
+                        _remeasureChild();
+                        return false;
+                      },
+                      child: SizeChangedLayoutNotifier(
+                        child: ConstrainedBox(
+                          key: _childKey,
+                          constraints: BoxConstraints(maxWidth: widget.size.width),
+                          child: MessageStateScope(messageState: widget.controller, child: widget.child),
                         ),
-                        builder: (context, size, child) {
-                          return Transform.scale(
-                            scale: size.clamp(1, double.infinity),
-                            alignment: message.isFromMe! ? Alignment.centerRight : Alignment.centerLeft,
-                            child: child,
-                          );
-                        },
                       ),
                     ),
-                  if (iOS)
-                    Positioned(
-                      top: 40,
-                      left: 15,
-                      right: 15,
-                      child: AnimatedSize(
-                        duration: const Duration(milliseconds: 500),
-                        curve: Sprung.underDamped,
-                        alignment: Alignment.center,
-                        child: reactions.isNotEmpty ? ReactionDetails(reactions: reactions) : const SizedBox.shrink(),
-                      ),
-                    ),
-                  if (SettingsSvc.settings.enablePrivateAPI.value && isSent && minSierra && chat.isIMessage)
-                    Positioned(
-                      bottom: (iOS
+                    builder: (context, size, child) {
+                      return Transform.scale(
+                        scale: size.clamp(1, double.infinity),
+                        alignment: message.isFromMe! ? Alignment.centerRight : Alignment.centerLeft,
+                        child: child,
+                      );
+                    },
+                  ),
+                ),
+              if (iOS)
+                Positioned(
+                  top: 40,
+                  left: 15,
+                  right: 15,
+                  child: AnimatedSize(
+                    duration: const Duration(milliseconds: 500),
+                    curve: Sprung.underDamped,
+                    alignment: Alignment.center,
+                    child: reactions.isNotEmpty ? ReactionDetails(reactions: reactions) : const SizedBox.shrink(),
+                  ),
+                ),
+              if (canWriteConversation &&
+                  SettingsSvc.settings.enablePrivateAPI.value &&
+                  isSent &&
+                  minSierra &&
+                  chat.isIMessage)
+                Positioned(
+                  bottom:
+                      (iOS
                               ? itemHeight * numberToShow + 35 + (_measuredChildHeight ?? widget.size.height)
                               : context.height - materialOffset)
                           .clamp(0, context.height - (narrowScreen ? 200 : 125)),
-                      right: message.isFromMe! ? 15 : null,
-                      left: !message.isFromMe! ? widget.childPosition.dx + 10 : null,
-                      child: AnimatedSize(
-                        curve: Curves.easeInOut,
-                        alignment: message.isFromMe! ? Alignment.centerRight : Alignment.centerLeft,
-                        duration: const Duration(milliseconds: 250),
-                        child: currentlySelectedReaction == "init"
-                            ? const SizedBox(height: 80)
-                            : ClipShadowPath(
-                                shadow: iOS
-                                    ? BoxShadow(
-                                        color: context.theme.colorScheme.surfaceContainerHighest
-                                            .withAlpha(iOS ? 150 : 255)
-                                            .lightenOrDarken(iOS ? 0 : 10))
-                                    : BoxShadow(
-                                        color: context.theme.colorScheme.shadow,
-                                        blurRadius: 2,
-                                      ),
-                                clipper: ReactionPickerClipper(
-                                  messageSize: widget.size,
-                                  isFromMe: message.isFromMe!,
-                                ),
-                                child: BackdropFilter(
-                                  filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
-                                  child: Container(
-                                    padding: const EdgeInsets.all(5).add(const EdgeInsets.only(bottom: 15)),
+                  right: message.isFromMe! ? 15 : null,
+                  left: !message.isFromMe! ? widget.childPosition.dx + 10 : null,
+                  child: AnimatedSize(
+                    curve: Curves.easeInOut,
+                    alignment: message.isFromMe! ? Alignment.centerRight : Alignment.centerLeft,
+                    duration: const Duration(milliseconds: 250),
+                    child: currentlySelectedReaction == "init"
+                        ? const SizedBox(height: 80)
+                        : ClipShadowPath(
+                            shadow: iOS
+                                ? BoxShadow(
                                     color: context.theme.colorScheme.surfaceContainerHighest
                                         .withAlpha(iOS ? 150 : 255)
                                         .lightenOrDarken(iOS ? 0 : 10),
-                                    child: Column(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: List.generate(narrowScreen ? 2 : 1, (index) {
-                                          return Row(
-                                            mainAxisSize: MainAxisSize.min,
-                                            mainAxisAlignment: MainAxisAlignment.start,
-                                            children: ReactionTypes.toList()
-                                                .slice(narrowScreen && index == 1 ? 3 : 0,
-                                                    narrowScreen && index == 0 ? 3 : null)
-                                                .map((e) {
-                                              return Padding(
-                                                padding: iOS
-                                                    ? const EdgeInsets.all(5.0)
-                                                    : const EdgeInsets.symmetric(horizontal: 5),
-                                                child: Material(
-                                                  color: currentlySelectedReaction == e
-                                                      ? context.theme.colorScheme.primary
-                                                      : Colors.transparent,
-                                                  borderRadius: BorderRadius.circular(20),
-                                                  child: SizedBox(
-                                                    width: iOS ? 35 : null,
-                                                    height: iOS ? 35 : null,
-                                                    child: InkWell(
-                                                      borderRadius: BorderRadius.circular(20),
-                                                      onTap: () {
-                                                        if (currentlySelectedReaction == e) {
-                                                          currentlySelectedReaction = null;
-                                                        } else {
-                                                          currentlySelectedReaction = e;
-                                                        }
-                                                        setState(() {});
-                                                        HapticFeedback.lightImpact();
-                                                        widget.sendTapback(selfReaction == e ? "-$e" : e, part.part);
-                                                        popDetails();
-                                                      },
-                                                      child: Padding(
-                                                        padding: const EdgeInsets.all(6.5)
-                                                            .add(EdgeInsets.only(right: e == "emphasize" ? 2.5 : 0)),
-                                                        child: iOS
-                                                            ? SvgPicture.asset(
-                                                                'assets/reactions/$e-black.svg',
-                                                                colorFilter: ColorFilter.mode(
-                                                                    e == "love" && currentlySelectedReaction == e
-                                                                        ? Colors.pink
-                                                                        : (currentlySelectedReaction == e
-                                                                            ? context.theme.colorScheme.onPrimary
-                                                                            : context.theme.colorScheme.outline),
-                                                                    BlendMode.srcIn),
-                                                              )
-                                                            : Center(
-                                                                child: Builder(builder: (context) {
+                                  )
+                                : BoxShadow(color: context.theme.colorScheme.shadow, blurRadius: 2),
+                            clipper: ReactionPickerClipper(messageSize: widget.size, isFromMe: message.isFromMe!),
+                            child: BackdropFilter(
+                              filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+                              child: Container(
+                                padding: const EdgeInsets.all(5).add(const EdgeInsets.only(bottom: 15)),
+                                color: context.theme.colorScheme.surfaceContainerHighest
+                                    .withAlpha(iOS ? 150 : 255)
+                                    .lightenOrDarken(iOS ? 0 : 10),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: List.generate(narrowScreen ? 2 : 1, (index) {
+                                    return Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      mainAxisAlignment: MainAxisAlignment.start,
+                                      children: ReactionTypes.toList()
+                                          .slice(
+                                            narrowScreen && index == 1 ? 3 : 0,
+                                            narrowScreen && index == 0 ? 3 : null,
+                                          )
+                                          .map((e) {
+                                            return Padding(
+                                              padding: iOS
+                                                  ? const EdgeInsets.all(5.0)
+                                                  : const EdgeInsets.symmetric(horizontal: 5),
+                                              child: Material(
+                                                color: currentlySelectedReaction == e
+                                                    ? context.theme.colorScheme.primary
+                                                    : Colors.transparent,
+                                                borderRadius: BorderRadius.circular(20),
+                                                child: SizedBox(
+                                                  width: iOS ? 35 : null,
+                                                  height: iOS ? 35 : null,
+                                                  child: InkWell(
+                                                    borderRadius: BorderRadius.circular(20),
+                                                    onTap: () {
+                                                      if (currentlySelectedReaction == e) {
+                                                        currentlySelectedReaction = null;
+                                                      } else {
+                                                        currentlySelectedReaction = e;
+                                                      }
+                                                      setState(() {});
+                                                      HapticFeedback.lightImpact();
+                                                      widget.sendTapback(selfReaction == e ? "-$e" : e, part.part);
+                                                      popDetails();
+                                                    },
+                                                    child: Padding(
+                                                      padding: const EdgeInsets.all(
+                                                        6.5,
+                                                      ).add(EdgeInsets.only(right: e == "emphasize" ? 2.5 : 0)),
+                                                      child: iOS
+                                                          ? SvgPicture.asset(
+                                                              'assets/reactions/$e-black.svg',
+                                                              colorFilter: ColorFilter.mode(
+                                                                e == "love" && currentlySelectedReaction == e
+                                                                    ? Colors.pink
+                                                                    : (currentlySelectedReaction == e
+                                                                          ? context.theme.colorScheme.onPrimary
+                                                                          : context.theme.colorScheme.outline),
+                                                                BlendMode.srcIn,
+                                                              ),
+                                                            )
+                                                          : Center(
+                                                              child: Builder(
+                                                                builder: (context) {
                                                                   final text = Text(
                                                                     ReactionTypes.reactionToEmoji[e] ?? "X",
                                                                     style: const TextStyle(
-                                                                        fontSize: 18, fontFamily: 'Apple Color Emoji'),
+                                                                      fontSize: 18,
+                                                                      fontFamily: 'Apple Color Emoji',
+                                                                    ),
                                                                     textAlign: TextAlign.center,
                                                                   );
                                                                   // rotate thumbs down to match iOS
@@ -402,74 +413,78 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
                                                                     );
                                                                   }
                                                                   return text;
-                                                                }),
+                                                                },
                                                               ),
-                                                      ),
+                                                            ),
                                                     ),
                                                   ),
                                                 ),
-                                              );
-                                            }).toList(),
-                                          );
-                                        })),
-                                  ),
+                                              ),
+                                            );
+                                          })
+                                          .toList(),
+                                    );
+                                  }),
                                 ),
                               ),
+                            ),
+                          ),
+                  ),
+                ),
+              if (iOS)
+                Positioned(
+                  right: message.isFromMe! ? 15 : null,
+                  left: !message.isFromMe! ? widget.childPosition.dx + 10 : null,
+                  bottom: 30,
+                  child: TweenAnimationBuilder<double>(
+                    tween: Tween<double>(begin: 0.8, end: 1),
+                    curve: Curves.easeOutBack,
+                    duration: const Duration(milliseconds: 400),
+                    child: FadeTransition(
+                      opacity: CurvedAnimation(
+                        parent: controller,
+                        curve: const Interval(0.0, .9, curve: Curves.ease),
+                        reverseCurve: Curves.easeInCubic,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [const SizedBox(height: 5), buildDetailsMenu(context)],
                       ),
                     ),
-                  if (iOS)
-                    Positioned(
-                      right: message.isFromMe! ? 15 : null,
-                      left: !message.isFromMe! ? widget.childPosition.dx + 10 : null,
-                      bottom: 30,
-                      child: TweenAnimationBuilder<double>(
-                        tween: Tween<double>(begin: 0.8, end: 1),
-                        curve: Curves.easeOutBack,
-                        duration: const Duration(milliseconds: 400),
-                        child: FadeTransition(
-                          opacity: CurvedAnimation(
-                            parent: controller,
-                            curve: const Interval(0.0, .9, curve: Curves.ease),
-                            reverseCurve: Curves.easeInCubic,
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const SizedBox(height: 5),
-                              buildDetailsMenu(context),
-                            ],
-                          ),
-                        ),
-                        builder: (context, size, child) {
-                          return Transform.scale(
-                            scale: size,
-                            child: child,
-                          );
-                        },
-                      ),
-                    ),
-                  if (!iOS && SettingsSvc.settings.enablePrivateAPI.value && minBigSur && chat.isIMessage && isSent)
-                    Positioned(
-                      left: !message.isFromMe!
-                          ? widget.childPosition.dx + widget.size.width + (reactions.isNotEmpty ? 20 : 5)
-                          : widget.childPosition.dx - 55,
-                      top: materialOffset,
-                      child: Material(
-                        color: context.theme.colorScheme.primary,
+                    builder: (context, size, child) {
+                      return Transform.scale(scale: size, child: child);
+                    },
+                  ),
+                ),
+              if (canWriteConversation &&
+                  !iOS &&
+                  SettingsSvc.settings.enablePrivateAPI.value &&
+                  minBigSur &&
+                  chat.isIMessage &&
+                  isSent)
+                Positioned(
+                  left: !message.isFromMe!
+                      ? widget.childPosition.dx + widget.size.width + (reactions.isNotEmpty ? 20 : 5)
+                      : widget.childPosition.dx - 55,
+                  top: materialOffset,
+                  child: Material(
+                    color: context.theme.colorScheme.primary,
+                    borderRadius: BorderRadius.circular(20),
+                    child: SizedBox(
+                      width: 35,
+                      height: 35,
+                      child: InkWell(
                         borderRadius: BorderRadius.circular(20),
-                        child: SizedBox(
-                          width: 35,
-                          height: 35,
-                          child: InkWell(
-                            borderRadius: BorderRadius.circular(20),
-                            onTap: () => popup_navigation_actions.reply(_buildActionContext(DetailsMenuAction.Reply)),
-                            child: const Center(child: Icon(Icons.reply, size: 20)),
-                          ),
-                        ),
+                        onTap: () => popup_navigation_actions.reply(_buildActionContext(DetailsMenuAction.Reply)),
+                        child: const Center(child: Icon(Icons.reply, size: 20)),
                       ),
                     ),
-                ],
-              ))),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -495,8 +510,9 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
   List<DetailsMenuActionWidget> get _allActions {
     final canEdit = (message.dateCreated?.toUtc().isWithin(DateTime.now().toUtc(), minutes: 15) ?? false);
     final canUnsend = (message.dateCreated?.toUtc().isWithin(DateTime.now().toUtc(), minutes: 2) ?? false);
+    final protectedSource = isProtectedLogicalSource;
     return [
-      if (SettingsSvc.settings.enablePrivateAPI.value && minBigSur && chat.isIMessage && isSent)
+      if (canWriteConversation && SettingsSvc.settings.enablePrivateAPI.value && minBigSur && chat.isIMessage && isSent)
         DetailsMenuActionWidget(
           onTap: () => popup_navigation_actions.reply(_buildActionContext(DetailsMenuAction.Reply)),
           action: DetailsMenuAction.Reply,
@@ -534,12 +550,14 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
       if (showDownload &&
           supportsOriginalDownload &&
           part.attachments
-              .where((element) =>
-                  (element.uti?.contains("heic") ?? false) ||
-                  (element.uti?.contains("heif") ?? false) ||
-                  (element.uti?.contains("quicktime") ?? false) ||
-                  (element.uti?.contains("coreaudio") ?? false) ||
-                  (element.uti?.contains("tiff") ?? false))
+              .where(
+                (element) =>
+                    (element.uti?.contains("heic") ?? false) ||
+                    (element.uti?.contains("heif") ?? false) ||
+                    (element.uti?.contains("quicktime") ?? false) ||
+                    (element.uti?.contains("coreaudio") ?? false) ||
+                    (element.uti?.contains("tiff") ?? false),
+              )
               .isNotEmpty)
         DetailsMenuActionWidget(
           onTap: () =>
@@ -587,7 +605,8 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
           onTap: () => popup_message_actions.createContact(_buildActionContext(DetailsMenuAction.CreateContact)),
           action: DetailsMenuAction.CreateContact,
         ),
-      if (SettingsSvc.serverDetails.isMinVentura &&
+      if (!protectedSource &&
+          SettingsSvc.serverDetails.isMinVentura &&
           message.isFromMe! &&
           !widget.controller.isSending.value &&
           SettingsSvc.serverDetails.supportsEditAndUnsend)
@@ -602,7 +621,8 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
           onTap: () => popup_message_actions.cancelSend(_buildActionContext(DetailsMenuAction.CancelSend)),
           action: DetailsMenuAction.CancelSend,
         ),
-      if (SettingsSvc.serverDetails.isMinVentura &&
+      if (!protectedSource &&
+          SettingsSvc.serverDetails.isMinVentura &&
           message.isFromMe! &&
           !widget.controller.isSending.value &&
           SettingsSvc.serverDetails.supportsEditAndUnsend &&
@@ -628,15 +648,17 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
           onTap: () => popup_text_actions.copySelection(_buildActionContext(DetailsMenuAction.CopySelection)),
           action: DetailsMenuAction.CopySelection,
         ),
-      DetailsMenuActionWidget(
-        onTap: () => popup_message_actions.delete(_buildActionContext(DetailsMenuAction.Delete)),
-        action: DetailsMenuAction.Delete,
-      ),
-      DetailsMenuActionWidget(
-        onTap: () => popup_message_actions.toggleBookmark(_buildActionContext(DetailsMenuAction.Bookmark)),
-        action: DetailsMenuAction.Bookmark,
-        customTitle: message.isBookmarked ? "Remove Bookmark" : "Add Bookmark",
-      ),
+      if (!protectedSource)
+        DetailsMenuActionWidget(
+          onTap: () => popup_message_actions.delete(_buildActionContext(DetailsMenuAction.Delete)),
+          action: DetailsMenuAction.Delete,
+        ),
+      if (!protectedSource)
+        DetailsMenuActionWidget(
+          onTap: () => popup_message_actions.toggleBookmark(_buildActionContext(DetailsMenuAction.Bookmark)),
+          action: DetailsMenuAction.Bookmark,
+          customTitle: message.isBookmarked ? "Remove Bookmark" : "Add Bookmark",
+        ),
       DetailsMenuActionWidget(
         onTap: () => popup_message_actions.selectMultiple(_buildActionContext(DetailsMenuAction.SelectMultiple)),
         action: DetailsMenuAction.SelectMultiple,
@@ -645,14 +667,18 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
         onTap: () => popup_message_actions.messageInfo(_buildActionContext(DetailsMenuAction.MessageInfo)),
         action: DetailsMenuAction.MessageInfo,
       ),
-    ].sorted((a, b) => SettingsSvc.settings.detailsMenuActions
-        .indexOf(a.action)
-        .compareTo(SettingsSvc.settings.detailsMenuActions.indexOf(b.action)));
+    ].sorted(
+      (a, b) => SettingsSvc.settings.detailsMenuActions
+          .indexOf(a.action)
+          .compareTo(SettingsSvc.settings.detailsMenuActions.indexOf(b.action)),
+    );
   }
 
   Widget buildDetailsMenu(BuildContext context) {
-    double maxMenuWidth =
-        min(max(NavigationSvc.width(widthContext) * 3 / 5, 200), NavigationSvc.width(widthContext) * 4 / 5);
+    double maxMenuWidth = min(
+      max(NavigationSvc.width(widthContext) * 3 / 5, 200),
+      NavigationSvc.width(widthContext) * 4 / 5,
+    );
 
     List<DetailsMenuActionWidget> allActions = _allActions;
 
@@ -675,11 +701,7 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: allActions.sublist(numberToShow - 1),
                     );
-                    showBBDialog(
-                      useRootNavigator: false,
-                      context: context,
-                      content: content,
-                    );
+                    showBBDialog(useRootNavigator: false, context: context, content: content);
                   },
                   title: 'More...',
                   iosIcon: cupertino.CupertinoIcons.ellipsis,
@@ -706,36 +728,37 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
             ? context.theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5)
             : context.theme.colorScheme.onSurfaceVariant;
         return Padding(
-            padding: EdgeInsets.only(top: kIsDesktop ? 20 : 0),
-            child: IconButton(
-              icon: Icon(action.nonIosIcon, color: color),
-              onPressed: isDisabled ? null : action.onTap,
-              tooltip: action.title,
-            ));
+          padding: EdgeInsets.only(top: kIsDesktop ? 20 : 0),
+          child: IconButton(
+            icon: Icon(action.nonIosIcon, color: color),
+            onPressed: isDisabled ? null : action.onTap,
+            tooltip: action.title,
+          ),
+        );
       }),
       Padding(
-          padding: EdgeInsets.only(top: kIsDesktop ? 20 : 0),
-          child: PopupMenuButton<int>(
-              color: context.theme.colorScheme.surfaceContainerHighest,
-              shape: SettingsSvc.settings.skin.value != Skins.Material
-                  ? const RoundedRectangleBorder(
-                      borderRadius: BorderRadius.all(Radius.circular(20.0)),
-                    )
-                  : null,
-              onSelected: (int value) {
-                allActions[value + numberToShow - 1].onTap?.call();
-              },
-              itemBuilder: (context) {
-                return allActions.slice(numberToShow - 1).mapIndexed((index, action) {
-                  return PopupMenuItem(
-                    value: index,
-                    child: Text(
-                      action.title,
-                      style: context.textTheme.bodyLarge!.apply(color: context.theme.colorScheme.onSurfaceVariant),
-                    ),
-                  );
-                }).toList();
-              }))
+        padding: EdgeInsets.only(top: kIsDesktop ? 20 : 0),
+        child: PopupMenuButton<int>(
+          color: context.theme.colorScheme.surfaceContainerHighest,
+          shape: SettingsSvc.settings.skin.value != Skins.Material
+              ? const RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(20.0)))
+              : null,
+          onSelected: (int value) {
+            allActions[value + numberToShow - 1].onTap?.call();
+          },
+          itemBuilder: (context) {
+            return allActions.slice(numberToShow - 1).mapIndexed((index, action) {
+              return PopupMenuItem(
+                value: index,
+                child: Text(
+                  action.title,
+                  style: context.textTheme.bodyLarge!.apply(color: context.theme.colorScheme.onSurfaceVariant),
+                ),
+              );
+            }).toList();
+          },
+        ),
+      ),
     ];
   }
 }

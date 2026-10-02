@@ -40,21 +40,29 @@ class InternalIntentReceiver: BroadcastReceiver() {
             "MarkChatRead" -> {
                 val notificationId: Int = intent.getIntExtra("notificationId", 0)
                 val chatGuid: String? = intent.getStringExtra("chatGuid")
+                val conversationKey: String? = intent.getStringExtra("conversationKey") ?: chatGuid
+                val sourceChatGuid: String? = intent.getStringExtra("sourceChatGuid") ?: chatGuid
                 val tag: String? = intent.getStringExtra("tag")
-                DeleteNotificationHandler().deleteNotification(context, notificationId, tag)
-                DartWorkManager.createWorker(context, intent.type!!, hashMapOf("chatGuid" to chatGuid)) {}
+                DartWorkManager.createWorker(context, intent.type!!, hashMapOf("chatGuid" to chatGuid, "conversationKey" to conversationKey, "sourceChatGuid" to sourceChatGuid)) {
+                    DeleteNotificationHandler().deleteNotification(context, notificationId, tag)
+                }
             }
             "ReplyChat" -> {
                 val notificationId: Int = intent.getIntExtra("notificationId", 0)
                 val chatGuid: String? = intent.getStringExtra("chatGuid")
+                val conversationKey: String? = intent.getStringExtra("conversationKey") ?: chatGuid
+                val sourceChatGuid: String? = intent.getStringExtra("sourceChatGuid") ?: chatGuid
                 val messageGuid: String? = intent.getStringExtra("messageGuid")
+                val tag: String = intent.getStringExtra("tag") ?: Constants.newMessageNotificationTag
                 val replyText = RemoteInput.getResultsFromIntent(intent)?.getString("text_reply") ?: return
 
-                DartWorkManager.createWorker(context, intent.type!!, hashMapOf("chatGuid" to chatGuid, "messageGuid" to messageGuid, "text" to replyText)) {
+                DartWorkManager.createWorker(context, intent.type!!, hashMapOf("chatGuid" to chatGuid, "conversationKey" to conversationKey, "sourceChatGuid" to sourceChatGuid, "messageGuid" to messageGuid, "text" to replyText)) {
                     val notificationManager = context.getSystemService(NotificationManager::class.java)
                     // this is used to copy the style, since the notification already exists
                     PersistentLog.d(context, Constants.logTag, "Fetching existing notification values")
-                    val chatNotification = notificationManager.activeNotifications.lastOrNull { it.id == notificationId }
+                    val chatNotification = notificationManager.activeNotifications.lastOrNull {
+                        it.id == notificationId && it.tag == tag
+                    }
                     if (chatNotification == null) {
                         PersistentLog.e(context, Constants.logTag, "Could not find notification with ID $notificationId")
                         return@createWorker
@@ -109,21 +117,37 @@ class InternalIntentReceiver: BroadcastReceiver() {
                     oldBuilder.setStyle(messagingStyle)
                     oldBuilder.setOnlyAlertOnce(true)
                     oldBuilder.setGroupAlertBehavior(Notification.GROUP_ALERT_SUMMARY)
-                    notificationManager.notify(Constants.newMessageNotificationTag, notificationId, oldBuilder.build())
+                    notificationManager.notify(tag, notificationId, oldBuilder.build())
                 }
             }
             "LikeMessage" -> {
                 val notificationId: Int = intent.getIntExtra("notificationId", 0)
                 val chatGuid: String? = intent.getStringExtra("chatGuid")
+                val conversationKey: String? = intent.getStringExtra("conversationKey")
                 val messageGuid: String? = intent.getStringExtra("messageGuid")
                 val messageText: String? = intent.getStringExtra("messageText")
                 val reactionType: String = intent.getStringExtra("reactionType") ?: "like"
                 val tag: String? = intent.getStringExtra("tag")
                 val channelId: String? = intent.getStringExtra("channelId")
                 val reactionSent: Boolean = intent.getBooleanExtra("reactionSent", false)
+                val reactionActionContract: String? = intent.getStringExtra("reactionActionContract")
                 
                 if (chatGuid.isNullOrEmpty() || messageGuid.isNullOrEmpty() || messageText.isNullOrEmpty()) {
                     PersistentLog.e(context, Constants.logTag, "Missing required parameters for LikeMessage")
+                    return
+                }
+                val admittedSourceChatGuid = intent.getStringExtra("sourceChatGuid") ?: chatGuid
+                val admittedConversationKey = conversationKey ?: run {
+                    PersistentLog.w(context, Constants.logTag, "Blocking stale notification reaction without identity")
+                    return
+                }
+                if (!NotificationReactionActionPolicy.mayDispatch(
+                        reactionActionContract,
+                        intent.action,
+                        admittedConversationKey,
+                        chatGuid
+                    )) {
+                    PersistentLog.w(context, Constants.logTag, "Blocking notification reaction outside physical-only contract")
                     return
                 }
                 
@@ -136,6 +160,8 @@ class InternalIntentReceiver: BroadcastReceiver() {
                     messageText, 
                     reactionType, 
                     reactionSent,
+                    admittedConversationKey,
+                    admittedSourceChatGuid,
                     channelId,
                     tag,
                     buttonText = "Sending..."
@@ -163,6 +189,8 @@ class InternalIntentReceiver: BroadcastReceiver() {
                             messageText, 
                             reactionType, 
                             !reactionSent,
+                            admittedConversationKey,
+                            admittedSourceChatGuid,
                             channelId,
                             tag
                         )
@@ -179,6 +207,8 @@ class InternalIntentReceiver: BroadcastReceiver() {
                             messageText, 
                             reactionType, 
                             reactionSent,
+                            admittedConversationKey,
+                            admittedSourceChatGuid,
                             channelId,
                             tag,
                             buttonText = "Error - Retry"
@@ -197,6 +227,8 @@ class InternalIntentReceiver: BroadcastReceiver() {
         messageText: String,
         reactionType: String,
         reactionSent: Boolean,
+        conversationKey: String,
+        sourceChatGuid: String,
         channelId: String?,
         tag: String?,
         buttonText: String? = null
@@ -218,10 +250,13 @@ class InternalIntentReceiver: BroadcastReceiver() {
         // Create new extras with updated reaction state
         val extras = Bundle()
         extras.putString("chatGuid", chatGuid)
+        extras.putString("conversationKey", conversationKey)
+        extras.putString("sourceChatGuid", sourceChatGuid)
         extras.putString("messageGuid", messageGuid)
         extras.putString("channelId", channelId)
         extras.putString("tag", tag)
         extras.putBoolean("reactionSent", reactionSent)
+        extras.putString("reactionActionContract", NotificationReactionActionPolicy.CURRENT_CONTRACT)
         
         // Create the updated reaction intent
         val likeIntent = PendingIntent.getBroadcast(
@@ -233,8 +268,9 @@ class InternalIntentReceiver: BroadcastReceiver() {
                 .putExtra("messageText", messageText)
                 .putExtra("reactionType", reactionType)
                 .putExtra("reactionSent", reactionSent)
+                .setAction(NotificationReactionActionPolicy.CURRENT_INTENT_ACTION)
                 .setType("LikeMessage"),
-            PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         
         // Update button label based on state

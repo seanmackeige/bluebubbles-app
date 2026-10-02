@@ -8,29 +8,40 @@ import 'package:bluebubbles/helpers/types/constants.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/services/backend/interfaces/sync_interface.dart';
+import 'package:bluebubbles/services/ui/chat/logical_message_chronology.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
-import 'package:collection/collection.dart';
 import 'package:dio/dio.dart';
 import 'package:bluebubbles/models/models.dart' show AttachmentUploadProgress, MessageReceiptInfo;
-import 'package:bluebubbles/services/ui/chat/logical_conversation_route.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart' hide Response;
+import 'package:get_it/get_it.dart';
 
-MessagesService? maybeFindMessagesSvc(String chatGuid) =>
-    Get.isRegistered<MessagesService>(tag: chatGuid) ? Get.find<MessagesService>(tag: chatGuid) : null;
+String _messagesServiceConversationKey(String conversationOrChatKey) {
+  if (!GetIt.I.isRegistered<ChatsService>()) return conversationOrChatKey;
+  return ChatsSvc.conversationKeyForGuid(conversationOrChatKey);
+}
 
-MessagesService ensureMessagesSvc(String chatGuid) =>
-    maybeFindMessagesSvc(chatGuid) ?? Get.put(MessagesService(chatGuid), tag: chatGuid, permanent: true);
+MessagesService? maybeFindMessagesSvc(String conversationOrChatKey) {
+  final key = _messagesServiceConversationKey(conversationOrChatKey);
+  return Get.isRegistered<MessagesService>(tag: key) ? Get.find<MessagesService>(tag: key) : null;
+}
+
+MessagesService ensureMessagesSvc(String conversationOrChatKey) {
+  final key = _messagesServiceConversationKey(conversationOrChatKey);
+  return maybeFindMessagesSvc(key) ?? Get.put(MessagesService(key), tag: key, permanent: true);
+}
 
 MessagesService registerMessagesSvc(MessagesService service) =>
     maybeFindMessagesSvc(service.tag) ?? Get.put(service, tag: service.tag, permanent: true);
 
 // ignore: non_constant_identifier_names
-MessagesService MessagesSvc(String chatGuid) {
-  final service = maybeFindMessagesSvc(chatGuid);
+MessagesService MessagesSvc(String conversationOrChatKey) {
+  final service = maybeFindMessagesSvc(conversationOrChatKey);
   if (service == null) {
-    throw StateError('MessagesService for chat $chatGuid is not registered. Only UI owner code should create it.');
+    throw StateError(
+      'MessagesService for conversation $conversationOrChatKey is not registered. Only UI owner code should create it.',
+    );
   }
   return service;
 }
@@ -56,7 +67,10 @@ class MessagesService extends GetxController {
   late List<Message> messagesRef;
 
   final String tag;
-  MessagesService(this.tag);
+  MessagesService(String conversationOrChatKey) : tag = _messagesServiceConversationKey(conversationOrChatKey);
+
+  int _messageRecencyCompare(Message left, Message right) =>
+      compareApplicationMessagesDescending(left, right, logical: ChatsSvc.isLogicalConversation(chat));
 
   bool _init = false;
   bool messagesLoaded = false;
@@ -94,12 +108,18 @@ class MessagesService extends GetxController {
 
   // ========== End Delivered Indicator Tracking ==========
 
-  Message? get mostRecentSent => (struct.messages.where((e) => e.isFromMe!).toList()..sort(Message.sort)).firstOrNull;
+  Message? get mostRecentSent => mostRecentApplicationMessage(
+    struct.messages.where((message) => message.isFromMe == true),
+    logical: ChatsSvc.isLogicalConversation(chat),
+  );
 
-  Message? get mostRecent => (struct.messages.toList()..sort(Message.sort)).firstOrNull;
+  Message? get mostRecent =>
+      mostRecentApplicationMessage(struct.messages, logical: ChatsSvc.isLogicalConversation(chat));
 
-  Message? get mostRecentReceived =>
-      (struct.messages.where((e) => !e.isFromMe!).toList()..sort(Message.sort)).firstOrNull;
+  Message? get mostRecentReceived => mostRecentApplicationMessage(
+    struct.messages.where((message) => message.isFromMe == false),
+    logical: ChatsSvc.isLogicalConversation(chat),
+  );
 
   // ========== MessageState Management ==========
 
@@ -740,6 +760,28 @@ class MessagesService extends GetxController {
     messageStates.clear();
   }
 
+  /// Drops only reconstructible logical projection state after certified
+  /// membership advances. The returned depth preserves the open viewport's
+  /// bounded history while forcing every certified source through hydration.
+  int resetLogicalProjectionForMembershipChange() {
+    if (!ChatsSvc.isLogicalConversation(chat)) return 0;
+    final reloadDepth = struct.messages.length < 25 ? 25 : struct.messages.length;
+    struct.flush();
+    _logicalRetryInFlight = false;
+    _logicalPaginationBoundaryDateCreated = null;
+    _logicalPaginationBoundaryGuid = null;
+    _logicalFallbackBoundaryDateCreated = null;
+    _logicalFallbackBoundaryGuid = null;
+    _logicalHydrationDepth = 0;
+    messagesLoaded = false;
+    messageUpdateTrigger.clear();
+    for (final state in messageStates.values) {
+      state.onClose();
+    }
+    messageStates.clear();
+    return reloadDepth;
+  }
+
   void reload() {
     messagesLoaded = false;
     Get.put<String>(tag, tag: 'lastReloadedChat');
@@ -1143,7 +1185,7 @@ class MessagesService extends GetxController {
   /// when the removed message may have been an indicator owner.  Prefer
   /// [_updateIndicatorsForMessage] for add/update events.
   void _recomputeDeliveredIndicators() {
-    final outgoing = struct.messages.where((e) => e.isFromMe == true).toList()..sort(Message.sort);
+    final outgoing = struct.messages.where((e) => e.isFromMe == true).toList()..sort(_messageRecencyCompare);
 
     // ---- Read tier: find message with newest dateRead ----
     Message? newLastRead;
@@ -1194,17 +1236,22 @@ class MessagesService extends GetxController {
 
   /// Generates new temp GUID, clears error state, and updates both DB and MessageState
   Future<void> retryFailedMessage(Message message, {String? oldGuid}) async {
-    final guardedLogicalRetry = ChatsSvc.isApprovedLogicalSource(chat);
+    final guardedLogicalRetry = ChatsSvc.isPotentialLogicalSource(chat);
     if (guardedLogicalRetry && _logicalRetryInFlight) return;
     if (guardedLogicalRetry) _logicalRetryInFlight = true;
     try {
+      // Another certified read conversation cannot inspect the banked
+      // ambiguity ledger merely because a retry surface was opened.
+      if (guardedLogicalRetry && !ChatsSvc.hasBuild99WriterCapability(chat)) {
+        return;
+      }
       final guidToDelete = oldGuid ?? message.guid!;
       final logicalLedger = LogicalAdmissionLedger.fromEntries(PrefsSvc.messaging.loadLogicalAdmissionLedger());
       final previouslyAdmitted = logicalLedger.containsTransportTempGuid(guidToDelete);
       if (previouslyAdmitted || guardedLogicalRetry) {
-        ChatsSvc.logicalRouteRuntimeStatus.value = LogicalRouteRuntimeStatus(
-          stage: LogicalRouteRuntimeStage.routeNotProven,
-          reason: previouslyAdmitted
+        ChatsSvc.publishBuild99WriterBlocked(
+          chat,
+          previouslyAdmitted
               ? 'LOGICAL_RETRY_ALREADY_ADMITTED_OR_OUTCOME_UNKNOWN'
               : 'LOGICAL_RETRY_LEGACY_OR_UNTRACKED_OUTCOME',
         );
@@ -1354,7 +1401,7 @@ class MessagesService extends GetxController {
   /// If the deleted message was the chat's latest, updates the chat's latest message
   /// in both the database and reactive state.
   Future<void> deleteMessage(Message message) async {
-    if (ChatsSvc.isApprovedLogicalSource(chat)) return;
+    if (ChatsSvc.isPotentialLogicalSource(chat)) return;
     final deletedGuid = message.guid!;
     await Message.delete(deletedGuid);
     removeMessage(message);
@@ -1365,7 +1412,7 @@ class MessagesService extends GetxController {
   /// If the deleted message was the chat's latest, updates the chat's latest message
   /// in both the database and reactive state.
   Future<void> softDeleteMessage(Message message) async {
-    if (ChatsSvc.isApprovedLogicalSource(chat)) return;
+    if (ChatsSvc.isPotentialLogicalSource(chat)) return;
     final deletedGuid = message.guid!;
     await Message.softDelete(deletedGuid);
     removeMessage(message);
@@ -1391,6 +1438,7 @@ class MessagesService extends GetxController {
   /// Toggle bookmark status on a message
   /// Updates DB and MessageState
   void toggleBookmark(Message message) {
+    if (ChatsSvc.isPotentialLogicalSource(chat)) return;
     message.isBookmarked = !message.isBookmarked;
     message.save(updateIsBookmarked: true);
 
@@ -1416,7 +1464,7 @@ class MessagesService extends GetxController {
   ///   4. On failure: if [MessageState] still exists, revert the optimistic
   ///      text and set [ClientMessageError.editFailed] (10006).
   Future<void> editMessage(Message message, int partIndex, String newText) async {
-    if (ChatsSvc.isApprovedLogicalSource(chat)) return;
+    if (ChatsSvc.isPotentialLogicalSource(chat)) return;
     final messageGuid = message.guid;
     if (messageGuid == null) return;
 
@@ -1496,7 +1544,7 @@ class MessagesService extends GetxController {
   ///   4. On failure: if [MessageState] still exists, revert the optimistic
   ///      changes and set [ClientMessageError.unsendFailed] (10007).
   Future<void> unsendMessage(Message message, int partIndex) async {
-    if (ChatsSvc.isApprovedLogicalSource(chat)) return;
+    if (ChatsSvc.isPotentialLogicalSource(chat)) return;
     final messageGuid = message.guid;
     if (messageGuid == null) return;
 
@@ -1773,25 +1821,41 @@ class MessagesService extends GetxController {
         sourceChats: ChatsSvc.logicalSourceChatsFor(chat),
       );
       _messages.add(around);
-      _messages.sort(Message.sort);
+      _messages.sort(_messageRecencyCompare);
       struct.addMessages(_messages);
       // Create MessageStates for loaded messages
       _ensureMessageStates(_messages);
     } else {
-      final beforeResponse = await ChatsSvc.getMessages(
-        chat.guid,
-        limit: 25,
-        before: around.dateCreated!.millisecondsSinceEpoch,
-      );
-      final afterResponse = await ChatsSvc.getMessages(
-        chat.guid,
-        limit: 25,
-        sort: "ASC",
-        after: around.dateCreated!.millisecondsSinceEpoch,
-      );
-      beforeResponse.addAll(afterResponse);
-      _messages = beforeResponse.map((e) => Message.fromMap(e)).toList();
-      _messages.sort(Message.sort);
+      final byIdentity = <String, Message>{};
+      final unkeyed = <Message>[];
+      for (final sourceChat in ChatsSvc.logicalSourceChatsFor(chat)) {
+        final beforeResponse = await ChatsSvc.getMessages(
+          sourceChat.guid,
+          limit: 25,
+          before: around.dateCreated!.millisecondsSinceEpoch,
+        );
+        final afterResponse = await ChatsSvc.getMessages(
+          sourceChat.guid,
+          limit: 25,
+          sort: "ASC",
+          after: around.dateCreated!.millisecondsSinceEpoch,
+        );
+        for (final raw in <dynamic>[...beforeResponse, ...afterResponse]) {
+          if (raw is! Map) continue;
+          final message = Message.fromMap(raw.cast<String, dynamic>())..chat.target = sourceChat;
+          final guid = message.guid;
+          if (guid == null) {
+            unkeyed.add(message);
+          } else {
+            byIdentity.putIfAbsent(guid, () => message);
+          }
+        }
+      }
+      _messages = <Message>[...byIdentity.values, ...unkeyed];
+      if (around.guid == null || !_messages.any((message) => message.guid == around.guid)) {
+        _messages.add(around);
+      }
+      _messages.sort(_messageRecencyCompare);
       struct.addMessages(_messages);
       // Create MessageStates for loaded messages
       _ensureMessageStates(_messages);

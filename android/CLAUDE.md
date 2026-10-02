@@ -32,3 +32,40 @@ Flutter side: `lib/services/backend/java_dart_interop/`
   marker. `verifySeanStaleAotRegression` is the retained Build 92
   route negative control; `verifySeanPreNMemberAotRegression` is the retained
   Build 93 pair-certificate negative control.
+- The daily-driver gate also requires the application snapshot, candidate
+  quarantine, candidate-reconciliation context, deferred-notification,
+  registry, multi-certificate ledger, authoritative GUID-bound V2 runtime
+  certificate, certified-write-unavailable, settings, unread, search/media,
+  and frozen new-group contracts in every packaged Dart `libapp.so`. The
+  certificate-ledger/runtime-binding and unavailable-write markers ensure a
+  certified logical conversation cannot silently fall back to an unbound
+  physical writer. The gate also requires the worker-result, worker-completion,
+  share-target-cleanup, physical-only notification-reaction, and bounded exact
+  notification-event-history contracts in packaged `classes*.dex`.
+- The next candidate is immutable Android `versionCode 20002101`, derived from
+  base `20002000` plus Flutter build number `101`. Keep `pubspec.yaml` unchanged
+  during qualification; the eventual one authorized candidate build must pass
+  `--build-number=101`. The release task rejects both a mismatched configured
+  build number before assembly and mismatched AGP `output-metadata.json` after
+  assembly. `verifySeanReleaseGateDefinitions` is the zero-package source and
+  version-mapping preflight. `verifySeanReleaseGateRegression` independently
+  removes each required AOT/native marker and exercises adjacent version codes
+  to prove every gate fails closed.
+
+## Logical Notification Contract
+
+- New payloads group, deduplicate, and create conversation shortcuts by
+  `conversation_key`; the exact `message_guid` remains the duplicate discriminator.
+- `chat_guid` is retained for compatible navigation and `source_chat_guid` records
+  physical provenance. Missing new fields must fall back to `chat_guid`.
+- Mark-read/reply intents must carry all identities into background Dart work. Native
+  code does not choose a new physical route for a logical conversation.
+- The native Like/Love shortcut is physical-only. It is eligible only when the
+  current contract token and versioned intent action are both present, the physical
+  chat GUID is non-empty, and `conversation_key == chat_guid`. Certified logical
+  conversations must use Dart's revision-bound reaction admission path, so their
+  native notifications must not expose this shortcut.
+- Missing, legacy, or mismatched reaction identity fails closed before notification
+  mutation or network dispatch. Keep the reaction `PendingIntent` immutable and
+  change its versioned intent action whenever this contract changes; extras are not
+  part of Android `PendingIntent` identity and cannot distinguish a stale token.

@@ -24,16 +24,11 @@ class _SamsungCustomGroupsPanelState extends State<SamsungCustomGroupsPanel> {
     final name = await showCreateGroupDialog(context);
     if (name == null || name.isEmpty) return;
     if (!mounted) return;
-    final chats = await Navigator.of(context).push<List<Chat>>(
-      MaterialPageRoute(
-        builder: (_) => ChatSelectorView(
-          multiSelect: true,
-          onMultiSelect: (_) {},
-        ),
-      ),
-    );
+    final chats = await Navigator.of(
+      context,
+    ).push<List<Chat>>(MaterialPageRoute(builder: (_) => ChatSelectorView(multiSelect: true, onMultiSelect: (_) {})));
     if (chats == null) return;
-    await controller.createGroup(name, chats.map((c) => c.guid).toList());
+    await controller.createGroup(name, chats);
   }
 
   Future<void> _onEditChats(CustomGroup group) async {
@@ -41,13 +36,13 @@ class _SamsungCustomGroupsPanelState extends State<SamsungCustomGroupsPanel> {
       MaterialPageRoute(
         builder: (_) => ChatSelectorView(
           multiSelect: true,
-          initialSelection: group.chats.map((c) => c.guid).toList(),
+          initialSelection: controller.initialSelectionForGroup(group),
           onMultiSelect: (_) {},
         ),
       ),
     );
     if (chats == null) return;
-    await controller.updateGroupChats(group, chats.map((c) => c.guid).toList());
+    await controller.updateGroupChats(group, chats);
   }
 
   Future<void> _onRename(CustomGroup group) async {
@@ -72,7 +67,7 @@ class _SamsungCustomGroupsPanelState extends State<SamsungCustomGroupsPanel> {
   List<Handle> _groupHandles(CustomGroup group) {
     final seen = <String>{};
     final handles = <Handle>[];
-    for (final chat in group.chats) {
+    for (final chat in controller.chatsForGroup(group)) {
       for (final handle in chat.handles) {
         if (seen.add(handle.address)) handles.add(handle);
       }
@@ -110,14 +105,8 @@ class _SamsungCustomGroupsPanelState extends State<SamsungCustomGroupsPanel> {
   Widget build(BuildContext context) {
     return BBScaffold(
       extendBodyBehindAppBar: false,
-      appBar: BBAppBar(
-        titleText: "Custom Groups",
-        leading: buildBackButton(context),
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _onCreate,
-        child: const Icon(Icons.add),
-      ),
+      appBar: BBAppBar(titleText: "Custom Groups", leading: buildBackButton(context)),
+      floatingActionButton: FloatingActionButton(onPressed: _onCreate, child: const Icon(Icons.add)),
       body: Obx(() {
         if (controller.loading.value) return Center(child: buildProgressIndicator(context));
         if (controller.groups.isEmpty) {
@@ -149,13 +138,9 @@ class _SamsungCustomGroupsPanelState extends State<SamsungCustomGroupsPanel> {
               confirmDismiss: (_) => _confirmDelete(group),
               onDismissed: (_) => controller.deleteGroup(group),
               child: ListTile(
-                leading: ContactAvatarGroupWidget(
-                  handles: _groupHandles(group),
-                  size: 40,
-                  editable: false,
-                ),
+                leading: ContactAvatarGroupWidget(handles: _groupHandles(group), size: 40, editable: false),
                 title: Text(group.name),
-                subtitle: Text("${group.chats.length} chats"),
+                subtitle: Text("${controller.chatsForGroup(group).length} chats"),
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -175,10 +160,7 @@ class _SamsungCustomGroupsPanelState extends State<SamsungCustomGroupsPanel> {
                     ),
                     ReorderableDragStartListener(
                       index: index,
-                      child: Icon(
-                        Icons.drag_handle,
-                        color: context.theme.colorScheme.outline,
-                      ),
+                      child: Icon(Icons.drag_handle, color: context.theme.colorScheme.outline),
                     ),
                   ],
                 ),

@@ -1,4 +1,5 @@
 import 'package:bluebubbles/database/models.dart';
+import 'package:bluebubbles/services/ui/chat/logical_message_chronology.dart';
 
 class ChatMessages {
   final Map<String, Message> _messages = {};
@@ -117,8 +118,9 @@ class ChatMessages {
     }
   }
 
-  Message? getPreviousReply(String threadGuid, int threadPart, String messageGuid) {
-    final thread = threads(threadGuid, threadPart)..sort((a, b) => Message.sort(a, b, descending: false));
+  Message? getPreviousReply(String threadGuid, int threadPart, String messageGuid, {bool logical = false}) {
+    final thread = threads(threadGuid, threadPart)
+      ..sort((left, right) => compareApplicationMessagesAscending(left, right, logical: logical));
     final index = thread.indexWhere((element) => element.guid == messageGuid);
     if (index > 0) {
       return thread[index - 1];

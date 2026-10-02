@@ -17,6 +17,7 @@ import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/models/models.dart' show MessageReplyContext;
 import 'package:bluebubbles/services/services.dart';
+import 'package:bluebubbles/services/backend/typing_indicator_routing.dart';
 import 'package:bluebubbles/services/ui/chat/send_data.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:collection/collection.dart';
@@ -54,8 +55,13 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
   int _logicalUiGeneration = 0;
   Future<void>? _sendInFlight;
   LogicalReplyIntent? _retainedLogicalReplyIntent;
+  final RxBool _logicalReplyResolutionPending = false.obs;
 
   Chat get chat => controller.chat;
+  bool get _hasLogicalWriterCapability => ChatsSvc.hasBuild99WriterCapability(chat);
+  bool get _hasLogicalDraftIdentity => ChatsSvc.isLogicalConversation(chat);
+  bool get _isProtectedLogicalSource => ChatsSvc.isPotentialLogicalSource(chat);
+  bool get _canMutateComposer => !_isProtectedLogicalSource || _hasLogicalWriterCapability;
 
   String get chatGuid => chat.guid;
 
@@ -100,7 +106,7 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
     List<PlatformFile>? frozenAttachments,
     LogicalReplyIntent? frozenReply,
   }) async {
-    if (!ChatsSvc.isLogicalConversation(chat)) return null;
+    if (!_hasLogicalDraftIdentity) return null;
     if (_logicalDraftConsumed) return null;
     final expectedDraftGeneration = ChatsSvc.logicalDraftGenerationFor(chat);
     final selectedAttachments = useFrozenIntent ? frozenAttachments! : controller.pickedAttachments.toList();
@@ -120,6 +126,7 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
     _logicalIntentEpoch += 1;
     _logicalUiGeneration += 1;
     _retainedLogicalReplyIntent = null;
+    _logicalReplyResolutionPending.value = false;
     localController.debounceDraftSave?.cancel();
   }
 
@@ -132,7 +139,7 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
     // Load the initial chat drafts
     unawaited(getDrafts());
 
-    if (ChatsSvc.isLogicalConversation(chat) && !_logicalDraftConsumed) {
+    if (_canMutateComposer && _hasLogicalDraftIdentity && !_logicalDraftConsumed) {
       _logicalAttachmentDraftWorker = ever(controller.pickedAttachments, (_) {
         if (_restoringLogicalDraft) return;
         if (_logicalDraftConsumed && controller.pickedAttachments.isEmpty) return;
@@ -150,6 +157,7 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
         _logicalDraftConsumed = false;
         if (context == null) {
           _retainedLogicalReplyIntent = null;
+          _logicalReplyResolutionPending.value = false;
         } else {
           final selected = context.message;
           final source = selected.chat.target;
@@ -162,6 +170,7 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
               part: context.partIndex,
             );
           }
+          _logicalReplyResolutionPending.value = false;
         }
         unawaited(_saveLogicalDraft());
       });
@@ -172,9 +181,9 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
     // Save state
     localController.oldTextFieldSelection.value = controller.textController.selection;
 
-    if (controller.fromChatCreator) {
+    if (_canMutateComposer && controller.fromChatCreator) {
       controller.focusNode.requestFocus();
-    } else if (SettingsSvc.settings.autoOpenKeyboard.value && !controller.fromSearchResult) {
+    } else if (_canMutateComposer && SettingsSvc.settings.autoOpenKeyboard.value && !controller.fromSearchResult) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         controller.focusNode.requestFocus();
       });
@@ -188,6 +197,7 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
 
     if (kIsDesktop || kIsWeb) {
       proxyController.addListener(() {
+        if (!_canMutateComposer) return;
         if (proxyController.text.isEmpty) return;
         String emoji = proxyController.text;
         proxyController.clear();
@@ -205,7 +215,7 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
   }
 
   Future<void> getDrafts() async {
-    if (ChatsSvc.isLogicalConversation(chat)) {
+    if (_hasLogicalDraftIdentity) {
       final generation = _logicalUiGeneration;
       bool isCurrent() => mounted && !_logicalDraftConsumed && generation == _logicalUiGeneration;
       _restoringLogicalDraft = true;
@@ -224,6 +234,7 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
         );
         if (!isCurrent()) return;
         final reply = draft.reply;
+        _logicalReplyResolutionPending.value = false;
         if (reply != null) {
           _retainedLogicalReplyIntent = reply;
           final message = Message.findOne(guid: reply.messageGuid);
@@ -232,6 +243,8 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
               source?.originalROWID == reply.sourceChatRowId &&
               source?.guid == reply.sourceChatGuid) {
             controller.replyToMessage = MessageReplyContext(message, reply.part);
+          } else {
+            _logicalReplyResolutionPending.value = true;
           }
         }
       } finally {
@@ -239,6 +252,7 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
       }
       return;
     }
+    if (_isProtectedLogicalSource) return;
     getTextDraft();
     await getAttachmentDrafts();
   }
@@ -281,6 +295,7 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
   }
 
   void focusListener(bool subject) async {
+    if (!_canMutateComposer) return;
     final _focusNode = subject ? controller.subjectFocusNode : controller.focusNode;
     // OPTIMIZATION: Only update if state actually needs to change
     if (_focusNode.hasFocus && controller.showAttachmentPicker.value) {
@@ -289,7 +304,12 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
   }
 
   void textListener(bool subject) {
-    if (ChatsSvc.isLogicalConversation(chat) && !_logicalDraftConsumed) {
+    if (!_canMutateComposer) {
+      localController.debounceDraftSave?.cancel();
+      localController.debounceTyping?.cancel();
+      return;
+    }
+    if (_hasLogicalDraftIdentity && !_logicalDraftConsumed) {
       _logicalIntentEpoch += 1;
     }
     if (_logicalDraftConsumed) {
@@ -301,7 +321,7 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
       _logicalDraftConsumed = false;
     }
     // OPTIMIZATION: Debounce draft saving to avoid database writes on every keystroke
-    if (ChatsSvc.isLogicalConversation(chat) && !_logicalDraftConsumed) {
+    if (_hasLogicalDraftIdentity && !_logicalDraftConsumed) {
       localController.debounceDraftSave?.cancel();
       localController.debounceDraftSave = Timer(const Duration(milliseconds: 500), () {
         unawaited(_saveLogicalDraft());
@@ -422,7 +442,7 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
     localController.debounceTyping?.cancel();
     localController.oldText.value = newText;
     // don't send a bunch of duplicate events for every typing change
-    if (!ChatsSvc.isLogicalConversation(chat) &&
+    if (canDispatchOutboundTyping(isProtectedLogicalSource: _isProtectedLogicalSource) &&
         SettingsSvc.settings.enablePrivateAPI.value &&
         (chat.autoSendTypingIndicators ?? SettingsSvc.settings.privateSendTypingIndicators.value)) {
       if (localController.debounceTyping == null) {
@@ -468,20 +488,22 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
     controller.logicalDraftConsumedFunc = null;
     final draftText = controller.textController.text.trim().isNotEmpty ? controller.textController.text : '';
     final draftAttachments = controller.pickedAttachments.where((e) => e.path != null).map((e) => e.path!).toList();
-    if (ChatsSvc.isLogicalConversation(chat) && !_logicalDraftConsumed) {
-      final logicalReply = _logicalReplyIntent();
-      final subject = controller.subjectTextController.text;
-      unawaited(
-        ChatsSvc.saveLogicalSendIntent(
-          chat,
-          text: draftText,
-          subject: subject,
-          attachments: controller.pickedAttachments.toList(),
-          reply: logicalReply,
-          expectedDraftGeneration: ChatsSvc.logicalDraftGenerationFor(chat),
-        ),
-      );
-    } else {
+    if (_canMutateComposer && _hasLogicalDraftIdentity) {
+      if (!_logicalDraftConsumed) {
+        final logicalReply = _logicalReplyIntent();
+        final subject = controller.subjectTextController.text;
+        unawaited(
+          ChatsSvc.saveLogicalSendIntent(
+            chat,
+            text: draftText,
+            subject: subject,
+            attachments: controller.pickedAttachments.toList(),
+            reply: logicalReply,
+            expectedDraftGeneration: ChatsSvc.logicalDraftGenerationFor(chat),
+          ),
+        );
+      }
+    } else if (!_isProtectedLogicalSource) {
       // Update ChatState synchronously and fire DB save in the background.
       unawaited(ChatsSvc.setChatTextFieldText(chat, draftText));
       unawaited(ChatsSvc.setChatTextFieldAttachments(chat, draftAttachments));
@@ -498,7 +520,7 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
     controller.showAttachmentPicker.value = false;
     localController.cancelAllTimers();
     Get.delete<ConversationTextFieldLocalController>();
-    if (!ChatsSvc.isLogicalConversation(chat) &&
+    if (canDispatchOutboundTyping(isProtectedLogicalSource: _isProtectedLogicalSource) &&
         (chat.autoSendTypingIndicators ?? SettingsSvc.settings.privateSendTypingIndicators.value)) {
       unawaited(TypingIndicatorSvc.stopTyping(chatGuid));
     }
@@ -518,7 +540,19 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
   }
 
   Future<void> _sendMessageOnce({String? effect}) async {
+    if (_isProtectedLogicalSource && !_hasLogicalWriterCapability) {
+      showSnackbar('Send unavailable', 'This conversation is read-only while its identity is being verified.');
+      return;
+    }
     final text = controller.textController.text;
+    if (_logicalReplyResolutionPending.value ||
+        !logicalReplyExecutionReady(
+          intent: _retainedLogicalReplyIntent,
+          exactTargetVisible: controller.replyToMessage != null,
+        )) {
+      showSnackbar('Reply unavailable', 'The reply target is still loading. Your draft was preserved.');
+      return;
+    }
     final subject = controller.subjectTextController.text;
     final replyIntent = _logicalReplyIntent();
     final replyGuid =
@@ -530,8 +564,8 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
     final intentEpoch = _logicalIntentEpoch;
     localController.debounceDraftSave?.cancel();
     if (controller.scheduledDate.value != null) {
-      if (ChatsSvc.isLogicalConversation(chat)) {
-        return showSnackbar('ROUTE_NOT_PROVEN', 'Scheduled logical mutations are not certified');
+      if (_isProtectedLogicalSource) {
+        return showSnackbar('Scheduling unavailable', 'Scheduling is unavailable for this protected conversation.');
       }
       final date = controller.scheduledDate.value!;
       if (date.isBefore(DateTime.now())) return showSnackbar("Error", "Pick a date in the future!");
@@ -556,6 +590,13 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
           );
         },
       );
+      // Revalidate at the last synchronous boundary. The conversation may
+      // have entered quarantine (or the certificate ledger may have failed)
+      // after the scheduling UI was admitted.
+      if (_isProtectedLogicalSource) {
+        if (mounted) Navigator.of(context).pop();
+        return showSnackbar('Scheduling unavailable', 'Scheduling is unavailable for this protected conversation.');
+      }
       final response = await HttpSvc.message.createScheduled(chat.guid, text, date.toUtc(), {"type": "once"});
       if (!mounted) return;
       Navigator.of(context).pop();
@@ -609,7 +650,7 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
         return;
       }
       if (logicalDraft?.attachments.any((attachment) => !attachment.isRestorable) == true) {
-        showSnackbar('Send blocked', 'SEND_BLOCKED_ATTACHMENT_INTENT_UNAVAILABLE');
+        showSnackbar('Send blocked', 'One or more attachments are no longer available. Your draft was preserved.');
         return;
       }
       try {
@@ -645,7 +686,7 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
     controller.replyToMessage = null;
     controller.scheduledDate.value = null;
     localController.debounceTyping = null;
-    if (!ChatsSvc.isLogicalConversation(chat)) {
+    if (!_isProtectedLogicalSource) {
       // Clear the ordinary physical-chat draft after queue custody.
       unawaited(ChatsSvc.setChatTextFieldText(chat, ''));
       unawaited(ChatsSvc.setChatTextFieldAttachments(chat, []));
@@ -688,88 +729,110 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
 
   @override
   Widget build(BuildContext context) {
-    return Obx(
-      () => Padding(
-        padding: EdgeInsets.only(bottom: showAttachmentPicker ? 0 : 10.0, top: 10.0),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                TextFieldIconBar(controller: controller, localController: localController),
-                Expanded(
-                  child: Stack(
-                    alignment: Alignment.centerLeft,
-                    clipBehavior: Clip.none,
-                    children: [
-                      TextFieldComponent(
-                        key: controller.textFieldKey,
+    return IgnorePointer(
+      ignoring: !_canMutateComposer,
+      child: Obx(
+        () => Padding(
+          padding: EdgeInsets.only(bottom: showAttachmentPicker ? 0 : 10.0, top: 10.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (_logicalReplyResolutionPending.value)
+                ListTile(
+                  dense: true,
+                  leading: const Icon(Icons.reply_all_outlined, size: 18),
+                  title: const Text(
+                    'Reply target unavailable — draft preserved',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  trailing: TextButton(
+                    onPressed: () {
+                      _retainedLogicalReplyIntent = null;
+                      _logicalReplyResolutionPending.value = false;
+                      _logicalIntentEpoch += 1;
+                      unawaited(_saveLogicalDraft());
+                    },
+                    child: const Text('Remove reply'),
+                  ),
+                ),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  TextFieldIconBar(controller: controller, localController: localController),
+                  Expanded(
+                    child: Stack(
+                      alignment: Alignment.centerLeft,
+                      clipBehavior: Clip.none,
+                      children: [
+                        TextFieldComponent(
+                          key: controller.textFieldKey,
+                          subjectTextController: controller.subjectTextController,
+                          textController: controller.textController,
+                          controller: controller,
+                          recorderController: recorderController,
+                          sendMessage: sendMessage,
+                        ),
+                        if (!kIsWeb)
+                          Positioned(
+                            top: 0,
+                            bottom: 0,
+                            child: TextFieldRecordingOverlay(
+                              controller: controller,
+                              recorderController: recorderController,
+                            ),
+                          ),
+                        SendAnimation(parentController: controller),
+                      ],
+                    ),
+                  ),
+                  if (iOS || material) const SizedBox(width: 10),
+                  if (samsung)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 5.0),
+                      child: TextFieldSuffix(
                         subjectTextController: controller.subjectTextController,
                         textController: controller.textController,
                         controller: controller,
                         recorderController: recorderController,
                         sendMessage: sendMessage,
                       ),
-                      if (!kIsWeb)
-                        Positioned(
-                          top: 0,
-                          bottom: 0,
-                          child: TextFieldRecordingOverlay(
-                            controller: controller,
-                            recorderController: recorderController,
-                          ),
-                        ),
-                      SendAnimation(parentController: controller),
-                    ],
-                  ),
-                ),
-                if (iOS || material) const SizedBox(width: 10),
-                if (samsung)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 5.0),
-                    child: TextFieldSuffix(
-                      subjectTextController: controller.subjectTextController,
-                      textController: controller.textController,
-                      controller: controller,
-                      recorderController: recorderController,
-                      sendMessage: sendMessage,
                     ),
-                  ),
-              ],
-            ),
-            Builder(
-              builder: (context) {
-                // Capture width outside the Obx lambda so the reactive builder does not
-                // register a MediaQuery.of dependency and rebuild on keyboard animation frames.
-                // sizeOf only notifies on actual display-size changes (rotation / resize).
-                final pickerWidth = MediaQuery.sizeOf(context).width;
-                return Obx(
-                  () => AnimatedSize(
-                    duration: const Duration(milliseconds: 250),
-                    curve: Curves.easeIn,
-                    alignment: Alignment.bottomCenter,
-                    child: !showAttachmentPicker
-                        ? SizedBox(width: pickerWidth)
-                        : Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const SizedBox(height: 8),
-                              AttachmentPicker(controller: controller),
-                            ],
-                          ),
-                  ),
-                );
-              },
-            ),
-            TextFieldEmojiPickerSection(
-              controller: controller,
-              proxyController: proxyController,
-              emojiScrollController: _emojiScrollController,
-              emojiPickerHeight: emojiPickerHeight,
-              emojiColumns: emojiColumns,
-            ),
-          ],
+                ],
+              ),
+              Builder(
+                builder: (context) {
+                  // Capture width outside the Obx lambda so the reactive builder does not
+                  // register a MediaQuery.of dependency and rebuild on keyboard animation frames.
+                  // sizeOf only notifies on actual display-size changes (rotation / resize).
+                  final pickerWidth = MediaQuery.sizeOf(context).width;
+                  return Obx(
+                    () => AnimatedSize(
+                      duration: const Duration(milliseconds: 250),
+                      curve: Curves.easeIn,
+                      alignment: Alignment.bottomCenter,
+                      child: !showAttachmentPicker
+                          ? SizedBox(width: pickerWidth)
+                          : Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const SizedBox(height: 8),
+                                AttachmentPicker(controller: controller),
+                              ],
+                            ),
+                    ),
+                  );
+                },
+              ),
+              TextFieldEmojiPickerSection(
+                controller: controller,
+                proxyController: proxyController,
+                emojiScrollController: _emojiScrollController,
+                emojiPickerHeight: emojiPickerHeight,
+                emojiColumns: emojiColumns,
+              ),
+            ],
+          ),
         ),
       ),
     );

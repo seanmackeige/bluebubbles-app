@@ -27,10 +27,44 @@ import 'package:universal_io/io.dart';
 import 'package:bluebubbles/database/database.dart';
 import 'package:get_it/get_it.dart';
 import 'package:bluebubbles/services/ui/chat/logical_conversation_view.dart';
+import 'package:bluebubbles/services/ui/chat/logical_conversation_identity.dart';
+import 'package:bluebubbles/services/ui/chat/logical_candidate_quarantine.dart';
+import 'package:bluebubbles/services/ui/chat/logical_certificate_advancement_transaction.dart';
+import 'package:bluebubbles/services/ui/chat/logical_candidate_reconciliation_context.dart';
+import 'package:bluebubbles/services/ui/chat/logical_mutation_protection.dart';
+import 'package:bluebubbles/services/ui/chat/logical_conversation_certificate_binding.dart';
+import 'package:bluebubbles/services/ui/chat/logical_conversation_registry.dart';
+import 'package:bluebubbles/services/ui/chat/logical_conversation_registry_binding.dart';
 import 'package:bluebubbles/services/ui/chat/logical_conversation_route.dart';
+import 'package:bluebubbles/services/ui/chat/logical_conversation_settings.dart';
+import 'package:bluebubbles/services/ui/chat/logical_notification_route.dart';
+import 'package:bluebubbles/services/ui/chat/logical_platform_cleanup.dart';
+import 'package:bluebubbles/services/ui/chat/logical_membership_refresh.dart';
+
+import 'package:bluebubbles/services/ui/chat/logical_message_chronology.dart';
 
 // ignore: non_constant_identifier_names
 ChatsService get ChatsSvc => GetIt.I<ChatsService>();
+
+/// Write capability is deliberately narrower than certified read identity.
+/// Only the banked Build 99 conversation may consume Comcast writer state.
+enum LogicalWriterCapability { ordinary, build99Writer, certifiedReadOnly }
+
+LogicalWriterCapability classifyLogicalWriterCapability({
+  required bool isCertified,
+  required bool hasBuild99WriterBinding,
+}) {
+  if (!isCertified) return LogicalWriterCapability.ordinary;
+  return hasBuild99WriterBinding ? LogicalWriterCapability.build99Writer : LogicalWriterCapability.certifiedReadOnly;
+}
+
+class NotificationConversationRoute {
+  const NotificationConversationRoute({required this.source, required this.presentation, required this.isLogical});
+
+  final Chat source;
+  final Chat presentation;
+  final bool isLogical;
+}
 
 class _LogicalRouteMessageSnapshot {
   const _LogicalRouteMessageSnapshot({required this.messages, required this.complete});
@@ -111,9 +145,20 @@ class ChatsService {
   final LogicalEvidenceObservationEpochTracker _logicalEvidenceObservationEpochTracker =
       LogicalEvidenceObservationEpochTracker();
   final LogicalAuthorityRevisionTracker _logicalAuthorityRevisionTracker = LogicalAuthorityRevisionTracker();
-  Completer<void>? _logicalDraftMutex;
+  final LogicalDraftSaveTransactionQueue _logicalDraftTransactions = LogicalDraftSaveTransactionQueue();
   Completer<void>? _logicalDraftAttachmentStagingMutex;
   final Map<String, int> _logicalDraftGenerations = <String, int>{};
+  final RxMap<String, int> _logicalDraftPreviewRevisions = <String, int>{}.obs;
+  final LogicalUnreadConversationStore _logicalUnreadStates = LogicalUnreadConversationStore();
+  final LogicalOperationCoalescer<LogicalRouteDecision> _logicalMarkReadOperations =
+      LogicalOperationCoalescer<LogicalRouteDecision>();
+  final LogicalKeyedSerialExecutor _logicalUnreadPersistence = LogicalKeyedSerialExecutor();
+  final LogicalMembershipAvailabilityTracker _logicalMembershipAvailability = LogicalMembershipAvailabilityTracker();
+
+  /// Compatibility projections for legacy consumers. Per-conversation state
+  /// in [_logicalUnreadStates] is the only source of truth.
+  final Rxn<LogicalMarkReadOutcome> logicalMarkReadOutcome = Rxn<LogicalMarkReadOutcome>();
+  final RxBool logicalReadSyncPending = false.obs;
   Completer<void>? _logicalHydrationMutex;
   final Map<String, _LogicalSourceHydrationCursor> _logicalHydrationCursors = <String, _LogicalSourceHydrationCursor>{};
   final Map<String, int> _logicalSourceEventWatermarks = <String, int>{};
@@ -129,19 +174,7 @@ class ChatsService {
 
   bool isLogicalEvidenceObservationCurrent(int epoch) => _logicalEvidenceObservationEpochTracker.isCurrent(epoch);
 
-  Future<T> _withLogicalDraftLock<T>(Future<T> Function() operation) async {
-    while (_logicalDraftMutex != null) {
-      await _logicalDraftMutex!.future;
-    }
-    final mutex = Completer<void>();
-    _logicalDraftMutex = mutex;
-    try {
-      return await operation();
-    } finally {
-      if (identical(_logicalDraftMutex, mutex)) _logicalDraftMutex = null;
-      if (!mutex.isCompleted) mutex.complete();
-    }
-  }
+  Future<T> _withLogicalDraftLock<T>(Future<T> Function() operation) => _logicalDraftTransactions.run(operation);
 
   /// Map of chat states for granular reactivity
   /// Key is the chat GUID, value is the ChatState
@@ -152,13 +185,17 @@ class ChatsService {
   ChatState? get activeChat => _activeChat;
   set activeChat(ChatState? value) {
     _activeChat = value;
-    final guid = value?.chat.guid;
-    if (activeChatGuid.value != guid) activeChatGuid.value = guid;
+    final key = value == null ? null : conversationKeyFor(value.chat);
+    if (activeChatGuid.value != key) activeChatGuid.value = key;
   }
 
-  /// Reactive guid of the active chat. Tiles observe this for highlighting instead
-  /// of a ChatState instance — it survives chatStates being cleared/rebuilt (reset,
-  /// reload) and never diverges from a permanent tile controller's captured state.
+  /// Reactive application conversation key of the active chat. For an ordinary
+  /// conversation this remains the physical GUID, preserving existing behavior.
+  /// A certified logical conversation uses its stable logical ID so a presentation
+  /// member change cannot lose active-row highlighting.
+  ///
+  /// The historical field name is retained for source compatibility. Callers must
+  /// treat the value as an opaque conversation key, never as provider provenance.
   final RxnString activeChatGuid = RxnString();
 
   /// Sorted list of chats maintained for efficient access
@@ -169,6 +206,21 @@ class ChatsService {
   /// Reactive counter that increments when chat list order changes
   /// Used to trigger UI rebuilds when chats are repositioned
   final RxInt chatListVersion = 0.obs;
+
+  LogicalConversationSettingsLedger _logicalSettings = LogicalConversationSettingsLedger.empty();
+  final LogicalConversationSettingsTransactionQueue _logicalSettingsTransactions =
+      LogicalConversationSettingsTransactionQueue();
+
+  static const int _logicalCandidateQuarantineDurationMs = 15 * Duration.millisecondsPerMinute;
+  LogicalCandidateQuarantineLedger _logicalCandidateQuarantine = LogicalCandidateQuarantineLedger.empty();
+  Completer<void>? _logicalCandidateQuarantineMutex;
+  String? _logicalCandidateQuarantinePersistedFingerprint;
+  LogicalCandidateReconciliationContextLedger _logicalCandidateContexts =
+      LogicalCandidateReconciliationContextLedger.empty();
+  String? _logicalCandidateContextsPersistedRevision;
+  Completer<void>? _logicalCandidateReconciliationMutex;
+  Timer? _logicalCandidateReconciliationTimer;
+  int _logicalCandidateReconciliationGeneration = 0;
 
   /// Currently selected conversation-list filter dimensions. Persisted to
   /// [Settings] only via an explicit "Save as Default" action in the filter
@@ -211,31 +263,53 @@ class ChatsService {
   List<ChatState> get presentationChatStates =>
       allChats.map((chat) => chatStates[chat.guid]).whereType<ChatState>().toList();
 
-  List<Chat> _logicalCandidateChats() {
+  LogicalConversationId? _registeredLogicalIdForChat(Chat chat) =>
+      LogicalConversationViewPolicy.trustedLogicalIdForSourceBinding(
+        sourceChatRowId: chat.originalROWID,
+        sourceChatGuid: chat.guid,
+      );
+  LogicalConversationReadCertificate? _registeredCertificateForChat(Chat chat) {
+    final logicalId = _registeredLogicalIdForChat(chat);
+    return logicalId == null ? null : LogicalConversationViewPolicy.certificateForLogicalId(logicalId);
+  }
+
+  List<Chat> _registeredLogicalChats() {
+    if (LogicalConversationViewPolicy.activeAuthorities.isEmpty) return const <Chat>[];
+    final registeredRows = LogicalConversationViewPolicy.approvedSourceRowIds;
+    if (registeredRows.isEmpty) return const <Chat>[];
     final byGuid = <String, Chat>{
       for (final state in chatStates.values)
-        if (LogicalConversationViewPolicy.isApprovedSourceRowId(state.chat.originalROWID)) state.chat.guid: state.chat,
+        if (_registeredLogicalIdForChat(state.chat) != null) state.chat.guid: state.chat,
     };
-    if (LogicalConversationViewPolicy.resolve(byGuid.values.map((chat) => chat.originalROWID)) != null) {
-      return byGuid.values.toList();
-    }
     if (!kIsWeb) {
-      final query = Database.chats
-          .query(Chat_.originalROWID.oneOf(LogicalConversationViewPolicy.activeCertificate.sourceChatRowIds.toList()))
-          .build();
+      final query = Database.chats.query(Chat_.originalROWID.oneOf(registeredRows.toList())).build();
       for (final chat in query.find()) {
-        byGuid.putIfAbsent(chat.guid, () => chat);
+        if (_registeredLogicalIdForChat(chat) != null) {
+          byGuid.putIfAbsent(chat.guid, () => chat);
+        }
       }
       query.close();
     }
-    return byGuid.values.toList();
+    final chats = byGuid.values.toList(growable: false)
+      ..sort((left, right) => left.originalROWID!.compareTo(right.originalROWID!));
+    return chats;
+  }
+
+  List<Chat> _logicalCandidateChats() {
+    final certificate = LogicalConversationViewPolicy.certificateForLogicalId(
+      LogicalConversationId.certified(LogicalConversationViewPolicy.bankedLogicalConversationId),
+    );
+    if (certificate == null) return const <Chat>[];
+    return _registeredLogicalChats()
+        .where((chat) => certificate.containsSourceRowId(chat.originalROWID))
+        .toList(growable: false);
   }
 
   LogicalConversationReadCertificate? get _logicalDefinition =>
       LogicalConversationViewPolicy.resolve(_logicalCandidateChats().map((chat) => chat.originalROWID));
 
   List<Chat> _logicalSourceChats(LogicalConversationReadCertificate definition) {
-    final sources = _logicalCandidateChats()
+    final sources = _registeredLogicalChats()
         .where((chat) => definition.containsSourceRowId(chat.originalROWID))
         .map((chat) => findChatByGuid(chat.guid) ?? chat)
         .toList();
@@ -243,16 +317,153 @@ class ChatsService {
     return sources;
   }
 
+  LogicalConversationRegistry get _logicalRegistry {
+    final chats = _registeredLogicalChats();
+    final bindings = <LogicalConversationPhysicalChatBinding>[
+      for (final chat in chats)
+        if (chat.originalROWID != null)
+          LogicalConversationPhysicalChatBinding.fromProviderGuid(
+            sourceChatRowId: chat.originalROWID!,
+            sourceChatGuid: chat.guid,
+          ),
+    ];
+    try {
+      return LogicalConversationRegistryBinding.bindAuthorities(
+        authorities: LogicalConversationViewPolicy.activeAuthorities,
+        physicalChats: bindings,
+      );
+    } catch (_) {
+      return LogicalConversationRegistry.empty();
+    }
+  }
+
+  /// Immutable, fail-closed application registry for certified read identity.
+  LogicalConversationRegistry get logicalConversationRegistry => _logicalRegistry;
+
+  Map<String, String> _logicalRuntimeBindingSnapshot() {
+    final snapshot = <String, String>{};
+    for (final entry in _logicalRegistry.entries) {
+      final certificate = LogicalConversationViewPolicy.certificateForLogicalId(entry.logicalId);
+      if (certificate == null) continue;
+      final material = <String>[
+        'members:${entry.members.length}',
+        ...entry.certifiedMemberRefs.map((ref) => 'certified:${ref.fingerprint}'),
+        ...entry.runtimePhysicalRefs.map((ref) => 'available:${ref.fingerprint}'),
+      ]..sort();
+      snapshot[certificate.id] = sha256.convert(utf8.encode(jsonEncode(material))).toString();
+    }
+    return snapshot;
+  }
+
+  void _observeLogicalInventoryTransitions({required bool reportChanges}) {
+    final changed = _logicalMembershipAvailability.observe(
+      _logicalRuntimeBindingSnapshot(),
+      reportChanges: reportChanges,
+    );
+    if (!GetIt.I.isRegistered<EventDispatcher>()) return;
+    for (final logicalId in changed) {
+      _resetLogicalProjectionCursors(logicalId);
+      EventDispatcherSvc.emit(logicalMembershipAdvancedEvent, <String, dynamic>{'logicalId': logicalId});
+    }
+  }
+
+  bool _matchesCertifiedProviderProof(Chat chat) {
+    final rowId = chat.originalROWID;
+    if (rowId == null || rowId <= 0 || chat.guid.isEmpty) return false;
+    final arriving = LogicalConversationPhysicalChatBinding.fromProviderGuid(
+      sourceChatRowId: rowId,
+      sourceChatGuid: chat.guid,
+    );
+    return LogicalConversationViewPolicy.activeAuthorities.any(
+      (authority) => authority.certificate.sourceChatGuidSha256.contains(arriving.sourceChatGuidSha256),
+    );
+  }
+
+  LogicalConversationRegistryEntry? _registryEntryForChat(Chat chat) {
+    final rowId = chat.originalROWID;
+    if (rowId == null || _registeredLogicalIdForChat(chat) == null) return null;
+    return _logicalRegistry.entryForRuntimeBinding(
+      physicalRef: PhysicalConversationRef.fromStablePhysicalGuid(chat.guid),
+      sourceChatRowId: rowId,
+    );
+  }
+
+  LogicalConversationReadCertificate? _logicalDefinitionForChat(Chat chat) {
+    final entry = _registryEntryForChat(chat);
+    return entry == null ? null : LogicalConversationViewPolicy.certificateForLogicalId(entry.logicalId);
+  }
+
+  List<Chat> _logicalSourceChatsForEntry(LogicalConversationRegistryEntry entry) {
+    final sources = _registeredLogicalChats()
+        .where((chat) {
+          final rowId = chat.originalROWID;
+          return rowId != null &&
+              entry.containsRuntimeBinding(
+                physicalRef: PhysicalConversationRef.fromStablePhysicalGuid(chat.guid),
+                sourceChatRowId: rowId,
+              );
+        })
+        .map((chat) => findChatByGuid(chat.guid) ?? chat)
+        .toList(growable: false);
+    sources.sort((left, right) => left.originalROWID!.compareTo(right.originalROWID!));
+    return sources;
+  }
+
+  Chat? _presentationChatForEntry(LogicalConversationRegistryEntry entry) {
+    final sources = _logicalSourceChatsForEntry(entry);
+    if (sources.isEmpty) return null;
+    final orderedMembers = <LogicalConversationRegistryMember>[
+      entry.presentationMember,
+      ...entry.members.where((member) => !member.isPresentation),
+    ];
+    return orderedMembers
+        .map((member) => sources.firstWhereOrNull((candidate) => candidate.originalROWID == member.sourceChatRowId))
+        .firstWhereOrNull((source) => source != null);
+  }
+
+  Chat? _presentationChatForDefinition(LogicalConversationReadCertificate definition) {
+    final entry = _logicalRegistry.entryForLogicalId(LogicalConversationId.certified(definition.id));
+    return entry == null ? null : _presentationChatForEntry(entry);
+  }
+
   /// True for either protected source ROWID even while the second source is
   /// absent. Write guards intentionally fail closed before projection activates.
-  bool isApprovedLogicalSource(Chat chat) => LogicalConversationViewPolicy.isApprovedSourceRowId(chat.originalROWID);
+  bool isApprovedLogicalSource(Chat chat) => _registeredLogicalIdForChat(chat) != null;
 
-  /// True for an admitted source or for a not-yet-admitted physical chat whose
-  /// normalized participant universe could be the certified Comcast set.
-  /// Potential sources are protected from ordinary-chat sends but gain no read
-  /// membership or write authority until provider reconciliation admits them.
-  bool isPotentialLogicalSource(Chat chat) {
-    if (isApprovedLogicalSource(chat)) return true;
+  LogicalCandidateQuarantineRecord? _logicalCandidateRecordForChat(Chat chat, {required int nowEpochMs}) {
+    final record = _logicalCandidateQuarantine.recordFor(
+      PhysicalConversationRef.fromStablePhysicalGuid(chat.guid),
+      nowEpochMs: nowEpochMs,
+    );
+    _scheduleLogicalCandidateQuarantinePersistence(nowEpochMs);
+    return record;
+  }
+
+  List<LogicalAddressEvidence> _logicalCandidateAddresses(Chat chat) {
+    final handles = chat.handles.isNotEmpty ? chat.handles.toList() : chat.participants;
+    return handles
+        .map((handle) => LogicalAddressEvidence(address: handle.address, country: handle.country))
+        .toList(growable: false);
+  }
+
+  LogicalCandidateContextMatch _logicalCandidateContextMatchForChat(Chat chat) {
+    if (isApprovedLogicalSource(chat)) return const LogicalCandidateContextMatch.none();
+    final service = _logicalChatService(chat.guid);
+    if (service.isEmpty) return const LogicalCandidateContextMatch.none();
+    return _logicalCandidateContexts
+        .retainTargets(LogicalConversationViewPolicy.certificateLedgerLogicalIds)
+        .matchCandidate(service: service, participants: _logicalCandidateAddresses(chat));
+  }
+
+  LogicalCandidateReconciliationContext? _currentLogicalCandidateContext(LogicalConversationId logicalId) {
+    final context = _logicalCandidateContexts.contextFor(logicalId);
+    final certificate = LogicalConversationViewPolicy.certificateForLogicalId(logicalId);
+    return context != null && certificate != null && context.certificateRevision == certificate.revision
+        ? context
+        : null;
+  }
+
+  bool _matchesBuild99PotentialPredicate(Chat chat) {
     if (chat.style != 43) return false;
     final handles = chat.handles.isNotEmpty ? chat.handles.toList() : chat.participants;
     const generation = LogicalConversationOutboundRoutePolicy.comcastNodeUpdatesGeneration;
@@ -263,22 +474,687 @@ class ChatsService {
     );
   }
 
-  bool isLogicalConversation(Chat chat) {
-    final definition = _logicalDefinition;
-    return definition != null && definition.containsSourceRowId(chat.originalROWID);
+  /// A nominated candidate remains protected from ordinary-chat mutation even
+  /// after bounded quarantine expires. Visibility and mutation protection are
+  /// separate: rejected/expired candidates become visible, but never silently
+  /// fall back to ordinary-chat semantics.
+  LogicalMutationProtection logicalMutationProtectionFor(Chat chat) {
+    if (LogicalConversationViewPolicy.certificateLedgerCorrupt) {
+      return classifyLogicalMutationProtection(
+        authoritativeCertificateLedgerCorrupt: true,
+        certifiedSource: false,
+        quarantinedCandidate: false,
+        bankedGenerationCandidate: false,
+      );
+    }
+
+    final certified = isApprovedLogicalSource(chat);
+    final quarantined =
+        !certified && _logicalCandidateRecordForChat(chat, nowEpochMs: DateTime.now().millisecondsSinceEpoch) != null;
+
+    final genericContextCandidate =
+        !certified &&
+        !quarantined &&
+        _logicalCandidateContextMatchForChat(chat).kind != LogicalCandidateContextMatchKind.none;
+    return classifyLogicalMutationProtection(
+      authoritativeCertificateLedgerCorrupt: false,
+      certifiedSource: certified,
+      quarantinedCandidate: quarantined,
+      bankedGenerationCandidate: genericContextCandidate || _matchesBuild99PotentialPredicate(chat),
+    );
+  }
+
+  bool isPotentialLogicalSource(Chat chat) => logicalMutationProtectionFor(chat).isProtected;
+
+  /// Read-only notification/presentation classification. Lookup materializes
+  /// a bounded quarantine expiry through the existing durable state machine;
+  /// it does not weaken candidate mutation protection.
+  LogicalCandidateQuarantinePhase? logicalCandidateQuarantinePhaseFor(Chat chat) =>
+      _logicalCandidateRecordForChat(chat, nowEpochMs: DateTime.now().millisecondsSinceEpoch)?.phase;
+
+  /// Certified conversations may mutate their local logical settings ledger.
+  /// Candidates and corrupt-authority state must not fall through to physical
+  /// chat settings merely because no complete certificate is currently bound.
+  bool canApplyConversationLocalStateMutation(Chat chat) =>
+      !isPotentialLogicalSource(chat) || isApprovedLogicalSource(chat);
+
+  bool _isLogicalCandidateTemporarilySuppressed(
+    Chat chat,
+    LogicalConversationRegistry registry, {
+    required int nowEpochMs,
+  }) {
+    if (isApprovedLogicalSource(chat)) return false;
+    final record = _logicalCandidateRecordForChat(chat, nowEpochMs: nowEpochMs);
+    final contextMatch = _logicalCandidateContextMatchForChat(chat);
+    final targetLogicalId =
+        contextMatch.uniqueTarget ??
+        (contextMatch.kind == LogicalCandidateContextMatchKind.none && _matchesBuild99PotentialPredicate(chat)
+            ? LogicalConversationViewPolicy.bankedApplicationLogicalId
+            : null);
+    if (shouldSuppressFirstFramePotentialCandidate(
+      hasCandidateRecord: record != null,
+      // Ambiguous cross-conversation matches stay visible and read-only. They
+      // are never hidden under an arbitrarily selected logical projection.
+      provenPotentialPredicate: targetLogicalId != null,
+      targetProjectionAvailable: targetLogicalId != null && registry.entryForLogicalId(targetLogicalId) != null,
+    )) {
+      return true;
+    }
+    return shouldTemporarilySuppressLogicalCandidate(
+      record: record,
+      nowEpochMs: nowEpochMs,
+      targetProjectionAvailable: record != null && registry.entryForLogicalId(record.targetLogicalId) != null,
+      admittedToActiveCertificate: false,
+    );
+  }
+
+  Future<T> _withLogicalCandidateQuarantineLock<T>(Future<T> Function() operation) async {
+    while (_logicalCandidateQuarantineMutex != null) {
+      await _logicalCandidateQuarantineMutex!.future;
+    }
+    final mutex = Completer<void>();
+    _logicalCandidateQuarantineMutex = mutex;
+    try {
+      return await operation();
+    } finally {
+      if (identical(_logicalCandidateQuarantineMutex, mutex)) _logicalCandidateQuarantineMutex = null;
+      if (!mutex.isCompleted) mutex.complete();
+    }
+  }
+
+  Future<void> _persistLogicalCandidateQuarantineUnlocked({required int nowEpochMs}) async {
+    final fingerprint = _logicalCandidateQuarantine.stableFingerprintAt(nowEpochMs: nowEpochMs);
+    if (fingerprint == _logicalCandidateQuarantinePersistedFingerprint) return;
+    await PrefsSvc.messaging.saveLogicalCandidateQuarantineJson(
+      jsonEncode(_logicalCandidateQuarantine.toJson(nowEpochMs: nowEpochMs)),
+    );
+    _logicalCandidateQuarantinePersistedFingerprint = fingerprint;
+  }
+
+  Future<void> _persistLogicalCandidateQuarantine({required int nowEpochMs}) =>
+      _withLogicalCandidateQuarantineLock(() => _persistLogicalCandidateQuarantineUnlocked(nowEpochMs: nowEpochMs));
+
+  Future<void> _reconcileDeferredLogicalNotifications() async {
+    if (!GetIt.I.isRegistered<NotificationsService>()) return;
+    try {
+      await GetIt.I.isReady<NotificationsService>();
+      await NotificationsSvc.reconcileDeferredLogicalNotifications();
+    } catch (error, trace) {
+      Logger.warn(
+        'Deferred logical notifications remain pending after candidate transition',
+        error: error,
+        trace: trace,
+        tag: 'LogicalCandidate',
+      );
+    }
+  }
+
+  void _publishLogicalCandidateTransitionSideEffects() {
+    _scheduleListVersionUpdate(immediate: true);
+    unawaited(updateShareTargets());
+    unawaited(_reconcileDeferredLogicalNotifications());
+  }
+
+  void _scheduleLogicalCandidateQuarantinePersistence(int nowEpochMs) {
+    final fingerprint = _logicalCandidateQuarantine.stableFingerprintAt(nowEpochMs: nowEpochMs);
+    if (fingerprint == _logicalCandidateQuarantinePersistedFingerprint) return;
+    unawaited(
+      _persistLogicalCandidateQuarantine(
+        nowEpochMs: nowEpochMs,
+      ).then((_) => _publishLogicalCandidateTransitionSideEffects()).catchError((Object error, StackTrace trace) {
+        Logger.warn(
+          'Logical candidate visibility state could not be persisted',
+          error: error,
+          trace: trace,
+          tag: 'LogicalCandidate',
+        );
+      }),
+    );
+  }
+
+  Future<void> _restoreLogicalCandidateQuarantine() async {
+    final nowEpochMs = DateTime.now().millisecondsSinceEpoch;
+    final raw = PrefsSvc.messaging.loadLogicalCandidateQuarantineJson();
+    if (raw == null) {
+      _logicalCandidateQuarantine = LogicalCandidateQuarantineLedger.empty();
+      _logicalCandidateQuarantinePersistedFingerprint = _logicalCandidateQuarantine.stableFingerprintAt(
+        nowEpochMs: nowEpochMs,
+      );
+      return;
+    }
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) throw const FormatException('Invalid logical candidate quarantine envelope');
+      final restored = LogicalCandidateQuarantineLedger.fromJson(
+        decoded.cast<String, dynamic>(),
+        nowEpochMs: nowEpochMs,
+      );
+      _logicalCandidateQuarantine = restored;
+      final canonical = jsonEncode(restored.toJson(nowEpochMs: nowEpochMs));
+      final fingerprint = restored.stableFingerprintAt(nowEpochMs: nowEpochMs);
+      if (canonical != raw) {
+        try {
+          await PrefsSvc.messaging.saveLogicalCandidateQuarantineJson(canonical);
+          _logicalCandidateQuarantinePersistedFingerprint = fingerprint;
+        } catch (error, trace) {
+          _logicalCandidateQuarantinePersistedFingerprint = null;
+          Logger.warn(
+            'Materialized logical candidate visibility could not be persisted',
+            error: error,
+            trace: trace,
+            tag: 'LogicalCandidate',
+          );
+        }
+      } else {
+        _logicalCandidateQuarantinePersistedFingerprint = fingerprint;
+      }
+    } catch (error, trace) {
+      Logger.warn(
+        'Discarding invalid logical candidate quarantine; physical chats remain visible',
+        error: error,
+        trace: trace,
+        tag: 'LogicalCandidate',
+      );
+      _logicalCandidateQuarantine = LogicalCandidateQuarantineLedger.empty();
+      _logicalCandidateQuarantinePersistedFingerprint = null;
+      _scheduleLogicalCandidateQuarantinePersistence(nowEpochMs);
+    }
+  }
+
+  Future<void> _restoreLogicalCandidateContexts() async {
+    final raw = PrefsSvc.messaging.loadLogicalCandidateReconciliationContextsJson();
+    if (raw == null) {
+      _logicalCandidateContexts = LogicalCandidateReconciliationContextLedger.empty();
+      _logicalCandidateContextsPersistedRevision = _logicalCandidateContexts.revision;
+      return;
+    }
+    try {
+      final restored = LogicalCandidateReconciliationContextLedger.decode(
+        raw,
+      ).retainTargets(LogicalConversationViewPolicy.certificateLedgerLogicalIds);
+      _logicalCandidateContexts = restored;
+      _logicalCandidateContextsPersistedRevision = restored.revision;
+      if (restored.encode() != raw) {
+        await PrefsSvc.messaging.saveLogicalCandidateReconciliationContextsJson(restored.encode());
+      }
+    } catch (error, trace) {
+      Logger.warn(
+        'Invalid logical candidate contexts discarded; provider reconstruction required',
+        error: error,
+        trace: trace,
+        tag: 'LogicalCandidate',
+      );
+      _logicalCandidateContexts = LogicalCandidateReconciliationContextLedger.empty();
+      _logicalCandidateContextsPersistedRevision = null;
+    }
+  }
+
+  Future<void> _persistLogicalCandidateContexts(LogicalCandidateReconciliationContextLedger ledger) async {
+    if (ledger.revision == _logicalCandidateContextsPersistedRevision) {
+      _logicalCandidateContexts = ledger;
+      return;
+    }
+    final encoded = ledger.encode();
+    LogicalCandidateReconciliationContextLedger.decode(encoded);
+    await PrefsSvc.messaging.saveLogicalCandidateReconciliationContextsJson(encoded);
+    _logicalCandidateContexts = ledger;
+    _logicalCandidateContextsPersistedRevision = ledger.revision;
+    _scheduleListVersionUpdate(immediate: true);
+  }
+
+  Future<LogicalCandidateTransition> _commitLogicalCandidateTransition(
+    LogicalCandidateTransition Function(LogicalCandidateQuarantineLedger working) transition, {
+    required int nowEpochMs,
+  }) => _withLogicalCandidateQuarantineLock(() async {
+    final working = LogicalCandidateQuarantineLedger.fromJson(
+      _logicalCandidateQuarantine.toJson(nowEpochMs: nowEpochMs),
+      nowEpochMs: nowEpochMs,
+    );
+    final result = transition(working);
+    if (!result.changed) {
+      await _persistLogicalCandidateQuarantineUnlocked(nowEpochMs: nowEpochMs);
+      return result;
+    }
+    final encoded = jsonEncode(working.toJson(nowEpochMs: nowEpochMs));
+    final fingerprint = working.stableFingerprintAt(nowEpochMs: nowEpochMs);
+    await PrefsSvc.messaging.saveLogicalCandidateQuarantineJson(encoded);
+    _logicalCandidateQuarantine = working;
+    _logicalCandidateQuarantinePersistedFingerprint = fingerprint;
+    _publishLogicalCandidateTransitionSideEffects();
+    return result;
+  });
+
+  String _logicalCandidateFingerprint(String namespace, Iterable<String> components) => sha256
+      .convert(
+        utf8.encode(
+          jsonEncode(<String, dynamic>{
+            'schema': logicalCandidateQuarantineSchema,
+            'namespace': namespace,
+            'components': components.toList(growable: false),
+          }),
+        ),
+      )
+      .toString();
+
+  bool isLogicalConversation(Chat chat) => isApprovedLogicalSource(chat);
+
+  bool _isBuild99WriterConversation(Chat chat) {
+    final certificate = _registeredCertificateForChat(chat);
+    return certificate?.id == LogicalConversationViewPolicy.bankedLogicalConversationId &&
+        _logicalDefinition?.containsSourceRowId(chat.originalROWID) == true;
+  }
+
+  /// Public capability boundary for every UI and transport caller. Certified
+  /// read membership alone never grants access to the banked writer route.
+  LogicalWriterCapability logicalWriterCapabilityFor(Chat chat) => classifyLogicalWriterCapability(
+    isCertified: isApprovedLogicalSource(chat),
+    hasBuild99WriterBinding: _isBuild99WriterConversation(chat),
+  );
+
+  bool hasBuild99WriterCapability(Chat chat) =>
+      logicalWriterCapabilityFor(chat) == LogicalWriterCapability.build99Writer;
+
+  LogicalAuthorityRevision? logicalWriterAuthorityRevisionFor(Chat chat) =>
+      hasBuild99WriterCapability(chat) ? currentLogicalAuthorityRevision : null;
+
+  String logicalProjectionAuthorityRevisionFor(Chat chat) {
+    final revision = logicalWriterAuthorityRevisionFor(chat);
+    if (revision != null) return revision.authorityRevision;
+    return hasBuild99WriterCapability(chat)
+        ? 'UNOBSERVED_BUILD99_WRITER_AUTHORITY'
+        : 'CERTIFIED_READ_ONLY_NO_WRITER_AUTHORITY';
+  }
+
+  LogicalRouteRuntimeStatus logicalRouteRuntimeStatusFor(Chat chat) {
+    if (hasBuild99WriterCapability(chat)) return logicalRouteRuntimeStatus.value;
+    return LogicalRouteRuntimeStatus(
+      stage: LogicalRouteRuntimeStage.routeNotProven,
+      reason: isApprovedLogicalSource(chat)
+          ? 'CERTIFIED_LOGICAL_WRITE_UNAVAILABLE'
+          : 'NOT_A_CERTIFIED_LOGICAL_CONVERSATION',
+    );
+  }
+
+  bool publishBuild99WriterBlocked(Chat chat, String reason) {
+    if (!hasBuild99WriterCapability(chat)) return false;
+    final revision = logicalWriterAuthorityRevisionFor(chat);
+    logicalRouteRuntimeStatus.value = LogicalRouteRuntimeStatus(
+      stage: LogicalRouteRuntimeStage.routeNotProven,
+      reason: reason,
+      certificateRevision: revision?.certificateRevision,
+      authorityRevision: revision?.authorityRevision,
+      authorityEpoch: revision?.epoch,
+    );
+    return true;
+  }
+
+  bool _canAffectBuild99WriterAuthority(Chat chat) {
+    final certificate = _registeredCertificateForChat(chat);
+    if (certificate != null) {
+      return certificate.id == LogicalConversationViewPolicy.bankedLogicalConversationId;
+    }
+    final record = _logicalCandidateRecordForChat(chat, nowEpochMs: DateTime.now().millisecondsSinceEpoch);
+    if (record != null) {
+      return logicalCandidateTargets(record, LogicalConversationViewPolicy.bankedApplicationLogicalId);
+    }
+    final contextMatch = _logicalCandidateContextMatchForChat(chat);
+    if (contextMatch.targets.contains(LogicalConversationViewPolicy.bankedApplicationLogicalId)) {
+      return true;
+    }
+    if (chat.style != 43) return false;
+    final handles = chat.handles.isNotEmpty ? chat.handles.toList() : chat.participants;
+    const generation = LogicalConversationOutboundRoutePolicy.comcastNodeUpdatesGeneration;
+    return LogicalConversationOutboundRoutePolicy.canMatchCertifiedExternalParticipantSet(
+      handles.map((handle) => LogicalAddressEvidence(address: handle.address, country: handle.country)),
+      expectedExternalParticipantCount: generation.expectedExternalParticipantCount,
+      expectedExternalParticipantSetSha256: generation.expectedExternalParticipantSetSha256,
+    );
   }
 
   String? logicalConversationIdFor(Chat chat) {
-    final definition = _logicalDefinition;
-    return definition != null && definition.containsSourceRowId(chat.originalROWID) ? definition.id : null;
+    final logicalId = _registeredLogicalIdForChat(chat);
+    return logicalId == null ? null : LogicalConversationViewPolicy.authorityForLogicalId(logicalId)?.certificate.id;
+  }
+
+  /// Stable application identity for presentation, controller ownership,
+  /// notifications and navigation. Physical GUIDs remain attached to source
+  /// messages and provider mutations; they are never returned for a certified
+  /// aggregate merely because one member is the current presentation row.
+  LogicalConversationId conversationIdentityFor(Chat chat) {
+    final certifiedId = _registeredLogicalIdForChat(chat);
+    return certifiedId ?? LogicalConversationId.ordinarySingleton(chat.guid);
+  }
+
+  String conversationKeyFor(Chat chat) {
+    final certifiedId = _registeredLogicalIdForChat(chat);
+    return certifiedId?.value ?? chat.guid;
+  }
+
+  /// Compatibility resolver for legacy entry points that still carry a
+  /// physical provider GUID. Unknown values are returned unchanged so ordinary
+  /// chats preserve their historical identity.
+  String conversationKeyForGuid(String guid) {
+    final chat = findChatByGuid(guid);
+    return chat == null ? guid : conversationKeyFor(chat);
+  }
+
+  /// Resolves both the new stable application key and the legacy physical
+  /// GUID persisted by Build 99. The selected object is presentation-only;
+  /// provider mutations still resolve exact source provenance independently.
+  Chat? presentationChatForConversationKey(String key) {
+    for (final chat in allChats) {
+      if (conversationKeyFor(chat) == key || chat.guid == key) {
+        return presentationChatFor(chat);
+      }
+    }
+    try {
+      final logicalId = LogicalConversationId.parse(key);
+      final entry = _logicalRegistry.entryForLogicalId(logicalId);
+      if (entry != null) {
+        final presentation = _presentationChatForEntry(entry);
+        if (presentation != null) return presentation;
+      }
+    } on FormatException {
+      // Legacy physical GUID compatibility continues below.
+    }
+    if (!kIsWeb) {
+      final legacyPhysical = Chat.findOne(guid: key);
+      if (legacyPhysical != null) return presentationChatFor(legacyPhysical);
+    }
+    return null;
+  }
+
+  /// Revalidates the immutable notification envelope against current source
+  /// membership. Logical envelopes never fall back to ordinary physical
+  /// routing if their certificate is unavailable, stale, or revoked.
+  NotificationConversationRoute? admitNotificationConversation({
+    required String? conversationKey,
+    required String? sourceChatGuid,
+  }) {
+    if (conversationKey == null || sourceChatGuid == null) return null;
+    final source = findChatByGuid(sourceChatGuid) ?? (!kIsWeb ? Chat.findOne(guid: sourceChatGuid) : null);
+    if (source == null) return null;
+
+    final currentKey = conversationKeyFor(source);
+    final presentation = presentationChatForConversationKey(conversationKey);
+    final presentationMatches = presentation != null && conversationKeyFor(presentation) == conversationKey;
+    final isLogical = isApprovedLogicalSource(source);
+    final admitted = LogicalNotificationRoutePolicy.admits(
+      admittedConversationKey: conversationKey,
+      admittedSourceChatGuid: sourceChatGuid,
+      currentSourceChatGuid: source.guid,
+      currentConversationKey: currentKey,
+      currentSourceIsCertified: isLogical,
+      presentationResolvesToConversationKey: presentationMatches,
+    );
+    if (!admitted || presentation == null) return null;
+
+    if (isLogical && !logicalSourceChatsFor(presentation).any((member) => member.guid == source.guid)) {
+      return null;
+    }
+    return NotificationConversationRoute(source: source, presentation: presentation, isLogical: isLogical);
+  }
+
+  LogicalConversationSettings? logicalSettingsFor(Chat chat) {
+    final logicalId = logicalConversationIdFor(chat);
+    if (logicalId == null) return null;
+    return _logicalSettings.forId(LogicalConversationId.certified(logicalId));
+  }
+
+  bool isConversationPinned(Chat chat) => logicalSettingsFor(chat)?.isPinned ?? (chat.isPinned ?? false);
+
+  int? conversationPinIndex(Chat chat) => logicalSettingsFor(chat)?.pinIndex ?? chat.pinIndex;
+
+  bool isConversationArchived(Chat chat) => logicalSettingsFor(chat)?.isArchived ?? (chat.isArchived ?? false);
+
+  bool isConversationMuted(Chat chat) => logicalSettingsFor(chat)?.isMuted ?? chat.muteType == 'mute';
+
+  LogicalUnreadConversationState? _logicalUnreadStateFor(Chat chat) {
+    final logicalId = logicalConversationIdFor(chat);
+    return logicalId == null ? null : _logicalUnreadStates.stateFor(LogicalConversationId.certified(logicalId));
+  }
+
+  /// Returns the retained exact-source ledger used by runtime read routing.
+  /// Diagnostics receive a defensive copy and cannot mutate source truth.
+  LogicalUnreadLedger? logicalUnreadLedgerFor(Chat chat) {
+    final entry = _registryEntryForChat(chat);
+    if (entry == null) return null;
+    final sources = _logicalSourceChatsForEntry(entry);
+    final synchronized = _synchronizeLogicalUnreadState(logicalId: entry.logicalId, sourceSnapshot: sources);
+    final state = synchronized ?? _logicalUnreadStates.stateFor(entry.logicalId);
+    return state == null ? null : LogicalUnreadLedger.fromJson(state.ledger.toJson());
+  }
+
+  LogicalMarkReadOutcome? logicalMarkReadOutcomeFor(Chat chat) => _logicalUnreadStateFor(chat)?.lastOutcome;
+
+  bool logicalReadSyncPendingFor(Chat chat) {
+    final entry = _registryEntryForChat(chat);
+    final partiallyBound = entry != null && entry.runtimePhysicalRefs.length != entry.members.length;
+    return partiallyBound || (_logicalUnreadStateFor(chat)?.syncPending ?? false);
+  }
+
+  void _refreshLogicalUnreadCompatibility({LogicalUnreadConversationState? latest}) {
+    if (latest?.lastOutcome != null) {
+      logicalMarkReadOutcome.value = latest!.lastOutcome;
+    }
+    logicalReadSyncPending.value = _logicalUnreadStates.anySyncPending;
+  }
+
+  /// Captures an immutable snapshot at mutation time and persists snapshots in
+  /// FIFO order for each logical conversation. Dart's main isolate makes each
+  /// in-memory ledger mutation synchronous; this queue closes the asynchronous
+  /// SharedPreferences completion race without blocking unrelated conversations.
+  Future<void> _persistLogicalUnreadState(LogicalUnreadConversationState state) {
+    final logicalId = state.logicalId.value;
+    final ledgerJson = jsonEncode(state.ledger.toJson());
+    final syncPending = state.syncPending;
+    return _logicalUnreadPersistence.run<void>(logicalId, () async {
+      if (!identical(_logicalUnreadStates.stateFor(state.logicalId), state)) return;
+      await PrefsSvc.messaging.saveLogicalUnreadLedgerJson(logicalId, ledgerJson);
+      await PrefsSvc.messaging.saveLogicalReadSyncPending(logicalId, syncPending);
+    });
+  }
+
+  void _scheduleLogicalUnreadPersistence(LogicalUnreadConversationState state) {
+    unawaited(
+      _persistLogicalUnreadState(state).catchError((Object error, StackTrace trace) {
+        Logger.warn('Logical unread snapshot persistence failed', error: error, trace: trace, tag: 'LogicalUnread');
+      }),
+    );
+  }
+
+  bool isConversationUnread(Chat chat) {
+    if (!isApprovedLogicalSource(chat)) {
+      return getChatState(chat.guid)?.hasUnreadMessage.value ?? (chat.hasUnreadMessage ?? false);
+    }
+    final sources = logicalSourceChatsFor(chat);
+    final logicalIdValue = logicalConversationIdFor(chat);
+    if (logicalIdValue == null) return sources.any((source) => source.hasUnreadMessage == true);
+    final logicalId = LogicalConversationId.certified(logicalIdValue);
+    final synchronized = _synchronizeLogicalUnreadState(logicalId: logicalId, sourceSnapshot: sources);
+    final cached = synchronized ?? _logicalUnreadStates.stateFor(logicalId);
+    return (cached?.ledger.hasUnread ?? false) || sources.any((source) => source.hasUnreadMessage == true);
+  }
+
+  Future<void> toggleConversationUnreadFromUi(Chat chat, {bool force = false}) async {
+    final isUnread = isConversationUnread(chat);
+    if (isApprovedLogicalSource(chat)) {
+      if (!isUnread) {
+        showToast('Marking a certified conversation unread is unavailable.');
+        return;
+      }
+      final decision = await markLogicalConversationRead(chat);
+      if (!decision.isQualified) showToast('Failed to mark the certified conversation read.');
+      return;
+    }
+    if (isPotentialLogicalSource(chat)) {
+      showToast('Conversation state change unavailable while identity is being verified.');
+      return;
+    }
+    final state = getChatState(chat.guid);
+    if (state != null) {
+      await setChatHasUnread(state.chat, !isUnread, force: force);
+    } else {
+      await chat.toggleHasUnreadAsync(!isUnread, force: force);
+    }
+  }
+
+  bool shouldMuteConversationNotification(Chat chat, Message? message) {
+    final logical = logicalSettingsFor(chat);
+    if (logical == null) return chat.shouldMuteNotification(message);
+    if (shouldPreserveSpecializedPhysicalMute(chat.muteType)) return chat.shouldMuteNotification(message);
+    return shouldMuteLogicalConversationNotification(
+      logicalAllMuted: logical.isMuted,
+      unknownSenderFiltered:
+          SettingsSvc.settings.filterUnknownSenders.value &&
+          chat.handles.length == 1 &&
+          chat.handles.first.contactsV2.isEmpty,
+      globalTextDetection: SettingsSvc.settings.globalTextDetection.value,
+      messageText: message?.text,
+      notifyReactions: SettingsSvc.settings.notifyReactions.value,
+      isReaction: ReactionTypes.toList().contains(message?.associatedMessageType ?? ''),
+    );
+  }
+
+  bool isConversationInCustomGroup(Chat chat, int groupId) {
+    final logical = logicalSettingsFor(chat);
+    if (logical != null) return logical.customGroupIds.contains(groupId);
+    return CustomGroupsSvc.groups.any(
+      (group) => group.id == groupId && group.chats.any((member) => member.guid == chat.guid),
+    );
+  }
+
+  List<Chat> chatsForCustomGroup(int groupId) =>
+      allChats.where((chat) => isConversationInCustomGroup(chat, groupId)).toList();
+
+  Future<bool> _mutateLogicalSettings(
+    Chat chat, {
+    required String kind,
+    required Object? value,
+    bool? isPinned,
+    int? pinIndex,
+    bool clearPinIndex = false,
+    bool? isArchived,
+    bool? isMuted,
+    Set<int>? customGroupIds,
+    int? customGroupDeltaId,
+    bool? customGroupDeltaIncluded,
+  }) => _logicalSettingsTransactions.run(() async {
+    final certifiedId = logicalConversationIdFor(chat);
+    if (certifiedId == null || _logicalSettings.isCorrupt) return false;
+    final logicalId = LogicalConversationId.certified(certifiedId);
+    var resolvedCustomGroupIds = customGroupIds;
+    var resolvedValue = value;
+    if (customGroupDeltaId != null && customGroupDeltaIncluded != null) {
+      resolvedCustomGroupIds = applyLogicalCustomGroupDelta(
+        current: _logicalSettings.forId(logicalId)?.customGroupIds ?? const <int>{},
+        groupId: customGroupDeltaId,
+        included: customGroupDeltaIncluded,
+      );
+      resolvedValue = resolvedCustomGroupIds.toList()..sort();
+    }
+    final revision = _logicalSettings.forId(logicalId)?.revision ?? 0;
+    final operationId = _logicalSettings.operationId(
+      logicalId: logicalId,
+      expectedRevision: revision,
+      kind: kind,
+      value: resolvedValue,
+    );
+    final transaction = await commitLogicalConversationSettingsMutation(
+      current: _logicalSettings,
+      logicalId: logicalId,
+      mutation: LogicalConversationSettingsMutation(
+        operationId: operationId,
+        expectedRevision: revision,
+        isPinned: isPinned,
+        pinIndex: pinIndex,
+        clearPinIndex: clearPinIndex,
+        isArchived: isArchived,
+        isMuted: isMuted,
+        customGroupIds: resolvedCustomGroupIds,
+      ),
+      persist: PrefsSvc.messaging.saveLogicalConversationSettingsJson,
+    );
+    if (!transaction.committed) {
+      if (transaction.failure != null) {
+        Logger.warn(
+          'Logical conversation settings persistence failed; mutation was not published',
+          error: transaction.failure,
+          trace: transaction.failureTrace,
+          tag: 'LogicalConversationSettings',
+        );
+      }
+      return false;
+    }
+    if (transaction.applyResult.applied) _logicalSettings = transaction.ledger;
+    final presentation = presentationChatFor(chat);
+    _repositionChat(presentation, immediate: true);
+    _scheduleListVersionUpdate(immediate: true);
+    return true;
+  });
+
+  Future<void> setConversationCustomGroupMembership(Chat chat, int groupId, bool included) async {
+    if (!isApprovedLogicalSource(chat)) return;
+    await _mutateLogicalSettings(
+      chat,
+      kind: 'custom-groups',
+      value: <String, Object>{'group': groupId, 'included': included},
+      customGroupDeltaId: groupId,
+      customGroupDeltaIncluded: included,
+    );
+  }
+
+  Future<void> _restoreLogicalSettings() async {
+    _logicalSettings = LogicalConversationSettingsLedger.decode(
+      PrefsSvc.messaging.loadLogicalConversationSettingsJson(),
+    );
+    if (_logicalSettings.isCorrupt) return;
+    final migrations = <LogicalConversationSettings>[];
+    for (final entry in _logicalRegistry.entries) {
+      final definition = LogicalConversationViewPolicy.certificateForLogicalId(entry.logicalId);
+      if (definition == null) continue;
+      final presentation = exactLogicalSettingsMigrationPresentation(
+        _logicalSourceChats(definition),
+        presentationSourceRowId: definition.presentationSourceChatRowId,
+        sourceRowIdOf: (source) => source.originalROWID,
+      );
+      if (presentation == null) continue;
+      migrations.add(
+        LogicalConversationSettings(
+          logicalId: entry.logicalId,
+          isPinned: presentation.isPinned ?? false,
+          pinIndex: presentation.isPinned == true ? presentation.pinIndex : null,
+          isArchived: presentation.isArchived ?? false,
+          isMuted: migrateLogicalAllMuteFromPhysicalProvenance(presentation.muteType),
+          customGroupIds: presentation.customGroups.map((group) => group.id).whereType<int>().toSet(),
+          migratedFromPhysicalProvenance: true,
+        ),
+      );
+    }
+    final transaction = await commitLogicalConversationSettingsMigrations(
+      current: _logicalSettings,
+      migrations: migrations,
+      persist: PrefsSvc.messaging.saveLogicalConversationSettingsJson,
+    );
+    if (!transaction.committed) {
+      if (transaction.failure != null) {
+        Logger.warn(
+          'Logical conversation settings migration persistence failed; physical provenance was not published',
+          error: transaction.failure,
+          trace: transaction.failureTrace,
+          tag: 'LogicalConversationSettings',
+        );
+      }
+      return;
+    }
+    if (transaction.changed) _logicalSettings = transaction.ledger;
   }
 
   List<Chat> logicalSourceChatsFor(Chat chat) {
-    final definition = _logicalDefinition;
-    if (definition == null || !definition.containsSourceRowId(chat.originalROWID)) {
-      return <Chat>[chat];
-    }
-    return _logicalSourceChats(definition);
+    final entry = _registryEntryForChat(chat);
+    if (entry == null) return <Chat>[chat];
+    final sources = _logicalSourceChatsForEntry(entry);
+    return sources.isEmpty ? <Chat>[chat] : sources;
   }
 
   /// Advances reconstructible pagination metadata whenever a source event is
@@ -289,17 +1165,40 @@ class ChatsService {
   /// move the execution frontier. Other participants' messages, reactions and
   /// read activity can at most corroborate an existing execution, so they never
   /// invalidate a qualified authority; they only drop the cached snapshot.
-  void noteLogicalSourceEvent(String physicalChatGuid, {bool authorityRelevant = true}) {
-    final definition = _logicalDefinition;
+  void noteLogicalSourceEvent(
+    String physicalChatGuid, {
+    bool authorityRelevant = true,
+    bool unreadRelevant = false,
+    int? unreadEventWatermark,
+  }) {
     final source =
         findChatByGuid(physicalChatGuid) ??
-        (definition == null
-            ? null
-            : _logicalSourceChats(definition).firstWhereOrNull((candidate) => candidate.guid == physicalChatGuid));
-    if (source == null || !isApprovedLogicalSource(source)) return;
+        _registeredLogicalChats().firstWhereOrNull((candidate) => candidate.guid == physicalChatGuid);
+    final entry = source == null ? null : _registryEntryForChat(source);
+    final definition = entry == null ? null : LogicalConversationViewPolicy.certificateForLogicalId(entry.logicalId);
+    if (source == null || entry == null || definition == null) return;
     _logicalSourceEventWatermarks.update(physicalChatGuid, (value) => value + 1, ifAbsent: () => 1);
+
+    if (unreadRelevant) {
+      final sources = _logicalSourceChats(definition);
+      final state = _synchronizeLogicalUnreadState(logicalId: entry.logicalId, sourceSnapshot: sources);
+      if (state != null) {
+        final ref = _certifiedLogicalRefForSource(entry, source);
+        if (ref != null) {
+          final result = state.observeUnreadEvent(source: ref, observedWatermark: unreadEventWatermark);
+          if (result == LogicalUnreadObservationResult.advanced) {
+            _scheduleLogicalUnreadPersistence(state);
+            _refreshLogicalUnreadCompatibility(latest: state);
+          }
+        }
+      }
+    }
+
+    // Build 99's execution authority remains scoped to its banked logical ID.
+    // Read-side events for another certified conversation cannot invalidate it.
+    if (definition.id != LogicalConversationViewPolicy.bankedLogicalConversationId) return;
     if (authorityRelevant) {
-      invalidateLogicalAuthority('LOGICAL_SOURCE_EXECUTION_EVENT_OBSERVED');
+      _invalidateBuild99LogicalAuthority('LOGICAL_SOURCE_EXECUTION_EVENT_OBSERVED');
       return;
     }
     _logicalRouteEvidence = null;
@@ -310,13 +1209,8 @@ class ChatsService {
   }
 
   Chat presentationChatFor(Chat chat) {
-    final definition = _logicalDefinition;
-    if (definition == null || !definition.containsSourceRowId(chat.originalROWID)) {
-      return chat;
-    }
-    return _logicalSourceChats(
-      definition,
-    ).firstWhere((source) => source.originalROWID == definition.presentationSourceChatRowId);
+    final entry = _registryEntryForChat(chat);
+    return entry == null ? chat : (_presentationChatForEntry(entry) ?? chat);
   }
 
   /// Reads every message needed by route qualification without allowing an
@@ -446,6 +1340,266 @@ class ChatsService {
       complete: true,
       fingerprint: _logicalRouteChatScopeFingerprint(chats),
     );
+  }
+
+  List<LogicalAddressEvidence>? _logicalProviderParticipants(Map<String, dynamic> chat) {
+    final rawParticipants = chat['participants'];
+    if (rawParticipants is! List) return null;
+    final participants = <LogicalAddressEvidence>[];
+    for (final raw in rawParticipants) {
+      if (raw is! Map) return null;
+      final address = raw['address'];
+      final country = raw['country'];
+      if (address is! String || address.isEmpty || (country != null && country is! String)) return null;
+      participants.add(LogicalAddressEvidence(address: address, country: country as String?));
+    }
+    return participants;
+  }
+
+  LogicalCandidateReconciliationContextLedger? _deriveLogicalCandidateContexts({
+    required List<Map<String, dynamic>> scope,
+    required List<LogicalAddressEvidence> vettedAliases,
+    required String providerAccountFingerprint,
+  }) {
+    if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(providerAccountFingerprint)) return null;
+    final contexts = <LogicalCandidateReconciliationContext>[];
+    for (final certificate in LogicalConversationViewPolicy.activeCertificates) {
+      final sources = <LogicalCandidateContextSource>[];
+      final orderedMembers = certificate.members.toList(growable: false)
+        ..sort((left, right) => left.sourceChatRowId.compareTo(right.sourceChatRowId));
+      for (final member in orderedMembers) {
+        final matches = scope
+            .where((chat) {
+              final rowId = (chat['originalROWID'] as num?)?.toInt();
+              final guid = chat['guid']?.toString() ?? '';
+              return rowId == member.sourceChatRowId &&
+                  guid.isNotEmpty &&
+                  LogicalConversationRegistryBinding.sourceMatchesCertificate(
+                    certificate,
+                    sourceChatRowId: rowId,
+                    providerGuid: guid,
+                  );
+            })
+            .toList(growable: false);
+        if (matches.length != 1) return null;
+        final guid = matches.single['guid']!.toString();
+        final service = _logicalChatService(guid);
+        final participants = _logicalProviderParticipants(matches.single);
+        if (service.isEmpty || participants == null) return null;
+        sources.add(LogicalCandidateContextSource(service: service, participants: participants));
+      }
+      final context = LogicalCandidateReconciliationContext.derive(
+        targetLogicalId: LogicalConversationId.certified(certificate.id),
+        certificateRevision: certificate.revision,
+        certifiedSources: sources,
+        vettedAliases: vettedAliases,
+        providerAccountFingerprint: providerAccountFingerprint,
+      );
+      if (context == null) return null;
+      contexts.add(context);
+    }
+    final activeIds = contexts.map((context) => context.targetLogicalId).toSet();
+    for (final existing in _logicalCandidateContexts.contexts) {
+      if (LogicalConversationViewPolicy.certificateLedgerLogicalIds.contains(existing.targetLogicalId) &&
+          !activeIds.contains(existing.targetLogicalId)) {
+        contexts.add(existing);
+      }
+    }
+    return LogicalCandidateReconciliationContextLedger(contexts);
+  }
+
+  Future<List<LogicalRouteCandidateEvidence>?> _collectGenericCertifiedReadEvidence(
+    LogicalConversationReadCertificate definition,
+    List<Map<String, dynamic>> scope,
+  ) async {
+    final evidence = <LogicalRouteCandidateEvidence>[];
+    final members = definition.members.toList(growable: false)
+      ..sort((left, right) => left.sourceChatRowId.compareTo(right.sourceChatRowId));
+    for (final member in members) {
+      final scoped = scope
+          .where((chat) {
+            final rowId = (chat['originalROWID'] as num?)?.toInt();
+            final guid = chat['guid']?.toString() ?? '';
+            return rowId == member.sourceChatRowId &&
+                guid.isNotEmpty &&
+                LogicalConversationRegistryBinding.sourceMatchesCertificate(
+                  definition,
+                  sourceChatRowId: rowId,
+                  providerGuid: guid,
+                );
+          })
+          .toList(growable: false);
+      if (scoped.length != 1) return null;
+      final guid = scoped.single['guid']!.toString();
+      final responses = await Future.wait(<Future<dynamic>>[
+        HttpSvc.chat.fetchOne(guid, withQuery: 'participants'),
+        HttpSvc.chat.fetchOne(guid, withQuery: 'participants'),
+      ]);
+      final firstRaw = responses.first.data?['data'];
+      final secondRaw = responses.last.data?['data'];
+      if (firstRaw is! Map || secondRaw is! Map) return null;
+      final first = Map<String, dynamic>.from(firstRaw.cast<String, dynamic>());
+      final second = Map<String, dynamic>.from(secondRaw.cast<String, dynamic>());
+      final participants = _logicalProviderParticipants(first);
+      final snapshot = await _collectLogicalRouteMessageSnapshot(guid);
+      final properties = _logicalChatGenerationProperties(first);
+      final verificationProperties = _logicalChatGenerationProperties(second);
+      final identityStable =
+          snapshot.complete &&
+          participants != null &&
+          (first['originalROWID'] as num?)?.toInt() == member.sourceChatRowId &&
+          first['guid']?.toString() == guid &&
+          second['guid']?.toString() == guid &&
+          first['groupId']?.toString() == scoped.single['groupId']?.toString() &&
+          properties.complete &&
+          verificationProperties.complete &&
+          _logicalChatRouteFingerprint(first) == _logicalChatRouteFingerprint(second);
+      if (!identityStable) return null;
+
+      final messages = <LogicalRouteMessageEvidence>[];
+      for (final raw in snapshot.messages) {
+        final rowId = (raw['originalROWID'] as num?)?.toInt();
+        final messageGuid = raw['guid']?.toString();
+        final createdAt = (raw['dateCreated'] as num?)?.toInt();
+        final error = (raw['error'] as num?)?.toInt();
+        final itemType = (raw['itemType'] as num?)?.toInt();
+        final isFromMe = raw['isFromMe'];
+        if (rowId == null ||
+            rowId <= 0 ||
+            messageGuid == null ||
+            messageGuid.isEmpty ||
+            createdAt == null ||
+            createdAt <= 0 ||
+            error == null ||
+            itemType == null ||
+            isFromMe is! bool) {
+          return null;
+        }
+        messages.add(
+          LogicalRouteMessageEvidence(
+            messageGuid: messageGuid,
+            messageRowId: rowId,
+            createdAtEpoch: createdAt,
+            isFromMe: isFromMe,
+            error: error,
+            itemType: itemType,
+            associatedMessageGuid: raw['associatedMessageGuid']?.toString(),
+            replyToGuid:
+                raw['threadOriginatorGuid']?.toString() ??
+                raw['threadOriginatorGUID']?.toString() ??
+                raw['replyToGuid']?.toString(),
+            account: raw['account']?.toString() ?? '',
+          ),
+        );
+      }
+      evidence.add(
+        LogicalRouteCandidateEvidence(
+          sourceChatRowId: member.sourceChatRowId,
+          sourceChatGuid: guid,
+          sourceService: _logicalChatService(guid),
+          sourceAccount: '',
+          chatIdentifier: first['chatIdentifier']?.toString() ?? '',
+          style: (first['style'] as num?)?.toInt() ?? -1,
+          lastAddressedHandle: LogicalAddressEvidence(address: first['lastAddressedHandle']?.toString() ?? ''),
+          participants: participants,
+          chatSnapshotComplete: true,
+          messageSnapshotComplete: true,
+          lastKnownHybridState: properties.lastKnownHybridState,
+          shouldForceToSms: properties.shouldForceToSms,
+          lastSeenMessageGuid: properties.lastSeenMessageGuid,
+          groupPhotoGuid: properties.groupPhotoGuid,
+          groupIdentifier: first['groupId']?.toString(),
+          messages: messages,
+          successfulOutbounds: const <LogicalSuccessfulOutboundEvidence>[],
+        ),
+      );
+    }
+    return evidence;
+  }
+
+  void _scheduleLogicalCandidateReconciliation({Duration delay = const Duration(seconds: 2)}) {
+    _logicalCandidateReconciliationTimer?.cancel();
+    _logicalCandidateReconciliationTimer = Timer(delay, () {
+      unawaited(_reconcileLogicalCandidatesAcrossRegistry());
+    });
+  }
+
+  Future<void> _reconcileLogicalCandidatesAcrossRegistry() async {
+    if (_logicalCandidateReconciliationMutex != null || LogicalConversationViewPolicy.activeCertificates.isEmpty) {
+      return;
+    }
+    final mutex = Completer<void>();
+    final generation = _logicalCandidateReconciliationGeneration;
+    _logicalCandidateReconciliationMutex = mutex;
+    try {
+      final accountBefore = _logicalAccountProjection((await HttpSvc.icloud.getAccountInfo()).data['data']);
+      final scopeBefore = await _collectLogicalRouteChatScope();
+      final scopeAfter = await _collectLogicalRouteChatScope();
+      final accountAfter = _logicalAccountProjection((await HttpSvc.icloud.getAccountInfo()).data['data']);
+      if (!scopeBefore.complete ||
+          !scopeAfter.complete ||
+          scopeBefore.fingerprint != scopeAfter.fingerprint ||
+          accountBefore.fingerprint.isEmpty ||
+          accountBefore.fingerprint != accountAfter.fingerprint) {
+        return;
+      }
+      final aliases = accountAfter.vettedAliases
+          .map((alias) => LogicalAddressEvidence(address: alias))
+          .toList(growable: false);
+      final contexts = _deriveLogicalCandidateContexts(
+        scope: scopeAfter.chats,
+        vettedAliases: aliases,
+        providerAccountFingerprint: accountAfter.fingerprint,
+      );
+      if (contexts == null || generation != _logicalCandidateReconciliationGeneration) return;
+      await _persistLogicalCandidateContexts(contexts);
+
+      final certifiedRows = LogicalConversationViewPolicy.approvedSourceRowIds;
+      final candidatesByTarget = <LogicalConversationId, Map<int, String>>{};
+      for (final chat in scopeAfter.chats) {
+        final rowId = (chat['originalROWID'] as num?)?.toInt();
+        final guid = chat['guid']?.toString() ?? '';
+        final service = _logicalChatService(guid);
+        final participants = _logicalProviderParticipants(chat);
+        if (rowId == null || rowId <= 0 || certifiedRows.contains(rowId) || service.isEmpty || participants == null) {
+          continue;
+        }
+        final match = contexts.matchCandidate(service: service, participants: participants);
+        final target = match.uniqueTarget;
+        if (target == null || _currentLogicalCandidateContext(target) == null) continue;
+        candidatesByTarget.putIfAbsent(target, () => <int, String>{})[rowId] = guid;
+      }
+
+      final orderedTargets = candidatesByTarget.keys.toList(growable: false)..sort();
+      for (final target in orderedTargets) {
+        if (generation != _logicalCandidateReconciliationGeneration) return;
+        final definition = LogicalConversationViewPolicy.certificateForLogicalId(target);
+        final context = _currentLogicalCandidateContext(target);
+        if (definition == null || context == null || context.providerAccountFingerprint != accountAfter.fingerprint) {
+          continue;
+        }
+        final certifiedEvidence = await _collectGenericCertifiedReadEvidence(definition, scopeAfter.chats);
+        if (certifiedEvidence == null || certifiedEvidence.isEmpty) continue;
+        await _advanceLogicalReadCertificate(
+          definition,
+          scopeAfter.chats,
+          certifiedEvidence,
+          candidatesByTarget[target]!,
+          aliases,
+          accountContextFingerprint: accountAfter.fingerprint,
+        );
+      }
+    } catch (error, trace) {
+      Logger.warn(
+        'Generic logical candidate reconciliation remains pending',
+        error: error,
+        trace: trace,
+        tag: 'LogicalCandidate',
+      );
+    } finally {
+      if (identical(_logicalCandidateReconciliationMutex, mutex)) _logicalCandidateReconciliationMutex = null;
+      if (!mutex.isCompleted) mutex.complete();
+    }
   }
 
   Future<LogicalRouteEvidence> _collectLogicalRouteEvidence(Chat chat) async {
@@ -669,6 +1823,10 @@ class ChatsService {
         candidateScopeBefore.complete &&
         candidateScopeAfter.complete &&
         candidateScopeBefore.fingerprint == candidateScopeAfter.fingerprint;
+    final candidateAccountContextFingerprint =
+        accountBefore.fingerprint.isNotEmpty && accountBefore.fingerprint == accountAfter.fingerprint
+        ? accountBefore.fingerprint
+        : '';
     final unadmittedPotentialSources = candidateScopeSnapshotComplete
         ? _logicalUnadmittedPotentialSources(
             candidateScopeAfter.chats,
@@ -683,6 +1841,7 @@ class ChatsService {
           candidates,
           unadmittedPotentialSources,
           accountBefore.vettedAliases.map((alias) => LogicalAddressEvidence(address: alias)).toList(),
+          accountContextFingerprint: candidateAccountContextFingerprint,
         )) {
       return _collectLogicalRouteEvidence(chat);
     }
@@ -848,9 +2007,17 @@ class ChatsService {
     List<Map<String, dynamic>> scope,
     List<LogicalRouteCandidateEvidence> certified,
     Map<int, String> unadmitted,
-    List<LogicalAddressEvidence> vettedAliases,
-  ) async {
-    if (definition.revision != LogicalConversationViewPolicy.activeCertificate.revision || certified.isEmpty) {
+    List<LogicalAddressEvidence> vettedAliases, {
+    required String accountContextFingerprint,
+  }) async {
+    final targetLogicalId = LogicalConversationId.certified(definition.id);
+    final currentDefinition = LogicalConversationViewPolicy.certificateForLogicalId(targetLogicalId);
+    final context = _currentLogicalCandidateContext(targetLogicalId);
+    if (certified.isEmpty ||
+        currentDefinition?.revision != definition.revision ||
+        context == null ||
+        context.certificateRevision != definition.revision ||
+        context.providerAccountFingerprint != accountContextFingerprint) {
       return false;
     }
     final vetted = vettedAliases
@@ -865,6 +2032,74 @@ class ChatsService {
         return false;
       }
     }
+    if (certified.any(
+      (candidate) => !context.matchesCandidate(service: candidate.sourceService, participants: candidate.participants),
+    )) {
+      return false;
+    }
+    if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(accountContextFingerprint)) return false;
+    final certifiedServices = certified
+        .map((candidate) => candidate.sourceService)
+        .where((service) => service.isNotEmpty)
+        .toSet();
+    if (certifiedServices.isEmpty) return false;
+
+    final exactParticipantSetFingerprint = _logicalCandidateFingerprint(
+      'exact-normalized-external-participant-set',
+      acceptedExternal.toList()..sort(),
+    );
+    final accountFingerprint = _logicalCandidateFingerprint('provider-account-context', <String>[
+      accountContextFingerprint,
+    ]);
+    final nominatorFingerprint = _logicalCandidateFingerprint('candidate-nominator-authority', <String>[
+      targetLogicalId.value,
+      'complete-provider-scope-v1',
+    ]);
+    final ordered = unadmitted.entries.toList()..sort((left, right) => left.key.compareTo(right.key));
+    final nominations = <int, LogicalCandidateNomination>{};
+    for (final entry in ordered) {
+      final scoped = scope
+          .where(
+            (item) => (item['originalROWID'] as num?)?.toInt() == entry.key && item['guid']?.toString() == entry.value,
+          )
+          .toList(growable: false);
+      final service = _logicalChatService(entry.value);
+      if (scoped.length != 1 || service.isEmpty || !certifiedServices.contains(service)) continue;
+      final candidate = PhysicalConversationRef.fromStablePhysicalGuid(entry.value);
+      final serviceFingerprint = _logicalCandidateFingerprint('provider-service', <String>[service]);
+      final nomination = LogicalCandidateNomination(
+        candidate: candidate,
+        targetLogicalId: targetLogicalId,
+        exactParticipantSetFingerprint: exactParticipantSetFingerprint,
+        serviceFingerprint: serviceFingerprint,
+        accountFingerprint: accountFingerprint,
+        nominationEvidenceFingerprint: _logicalCandidateFingerprint('candidate-nomination-evidence', <String>[
+          candidate.fingerprint,
+          targetLogicalId.value,
+          exactParticipantSetFingerprint,
+          serviceFingerprint,
+          accountFingerprint,
+          definition.revision,
+        ]),
+        nominatorFingerprint: nominatorFingerprint,
+      );
+      final nowEpochMs = DateTime.now().millisecondsSinceEpoch;
+      final transition = await _commitLogicalCandidateTransition(
+        (working) => working.nominate(
+          nomination,
+          nowEpochMs: nowEpochMs,
+          quarantineDurationMs: _logicalCandidateQuarantineDurationMs,
+        ),
+        nowEpochMs: nowEpochMs,
+      );
+      final phase = transition.record?.phase;
+      if (phase != LogicalCandidateQuarantinePhase.rejected &&
+          phase != LogicalCandidateQuarantinePhase.expiredVisible &&
+          transition.record != null) {
+        nominations[entry.key] = nomination;
+      }
+    }
+    if (nominations.isEmpty) return false;
 
     final certifiedRows = definition.sourceChatRowIds;
     final certifiedScope = scope.where((item) => certifiedRows.contains((item['originalROWID'] as num?)?.toInt()));
@@ -891,9 +2126,9 @@ class ChatsService {
     }
 
     final evidence = <LogicalConversationCandidateEvidence>[];
-    final ordered = unadmitted.entries.toList()..sort((left, right) => left.key.compareTo(right.key));
     final rawChatsToSync = <Map<String, dynamic>>[];
     for (final entry in ordered) {
+      if (!nominations.containsKey(entry.key)) continue;
       final scoped = scope
           .where(
             (item) => (item['originalROWID'] as num?)?.toInt() == entry.key && item['guid']?.toString() == entry.value,
@@ -1043,33 +2278,173 @@ class ChatsService {
     }
     if (evidence.isEmpty) return false;
 
-    final reconciliation = LogicalConversationViewPolicy.reconcileCertificate(definition, evidence);
-    if (reconciliation.certificate.revision == definition.revision) {
+    final reconciliationAuthorityFingerprint = _logicalCandidateFingerprint(
+      'candidate-reconciliation-authority',
+      <String>[targetLogicalId.value, logicalConversationEvidenceReconciliationSchema],
+    );
+    final independentlyReconciled = <LogicalConversationCandidateEvidence>[];
+    for (final candidateEvidence in evidence) {
+      final nomination = nominations[candidateEvidence.sourceChatRowId];
+      if (nomination == null) continue;
+      final nowEpochMs = DateTime.now().millisecondsSinceEpoch;
+      final transition = await _commitLogicalCandidateTransition(
+        (working) => working.applyEvidence(
+          LogicalCandidateEvidence.reconciliation(
+            candidate: nomination.candidate,
+            targetLogicalId: nomination.targetLogicalId,
+            sequence: 1,
+            exactParticipantSetFingerprint: nomination.exactParticipantSetFingerprint,
+            serviceFingerprint: nomination.serviceFingerprint,
+            accountFingerprint: nomination.accountFingerprint,
+            evidenceFingerprint: _logicalCandidateFingerprint('candidate-reconciliation-evidence', <String>[
+              candidateEvidence.admissionEvidenceSha256,
+              nomination.stableFingerprint,
+            ]),
+            authorityFingerprint: reconciliationAuthorityFingerprint,
+          ),
+          nowEpochMs: nowEpochMs,
+        ),
+        nowEpochMs: nowEpochMs,
+      );
+      if (transition.record?.phase == LogicalCandidateQuarantinePhase.reconciling ||
+          transition.record?.phase == LogicalCandidateQuarantinePhase.certified) {
+        independentlyReconciled.add(candidateEvidence);
+      }
+    }
+    if (independentlyReconciled.isEmpty) return false;
+
+    // Re-read the provider identity and complete chat scope immediately before
+    // changing a certificate. Evidence collected under a prior account/scope
+    // snapshot is never allowed to cross this local admission boundary.
+    final accountRevalidation = _logicalAccountProjection((await HttpSvc.icloud.getAccountInfo()).data['data']);
+    final scopeRevalidation = await _collectLogicalRouteChatScope();
+    final currentRevalidationDefinition = LogicalConversationViewPolicy.certificateForLogicalId(targetLogicalId);
+    final currentRevalidationContext = _currentLogicalCandidateContext(targetLogicalId);
+    if (!scopeRevalidation.complete ||
+        scopeRevalidation.fingerprint != _logicalRouteChatScopeFingerprint(scope) ||
+        accountRevalidation.fingerprint != accountContextFingerprint ||
+        currentRevalidationDefinition?.revision != definition.revision ||
+        currentRevalidationContext?.certificateRevision != definition.revision ||
+        currentRevalidationContext?.providerAccountFingerprint != accountContextFingerprint) {
       return false;
     }
-    final encodedCertificate = LogicalConversationViewPolicy.encodeRuntimeCertificate(reconciliation.certificate);
-    // Stop every receipt minted under the predecessor certificate before the
-    // first durable/isolate await. Certificate advancement is monotonic, so
-    // row/GUID membership alone cannot detect a stale in-flight receipt.
-    invalidateLogicalAuthority('LOGICAL_READ_CERTIFICATE_ADVANCING', scheduleRecheck: false);
-    await PrefsSvc.messaging.saveLogicalReadCertificateJson(encodedCertificate);
-    if (!LogicalConversationViewPolicy.activateReconciledCertificate(
-      reconciliation,
-      expectedRevision: definition.revision,
-    )) {
-      return false;
+
+    final reconciliation = LogicalConversationViewPolicy.reconcileCertificate(definition, independentlyReconciled);
+    final certificateAdvanced = reconciliation.certificate.revision != definition.revision;
+    final encodedCertificate = certificateAdvanced
+        ? LogicalConversationViewPolicy.encodeReconciledRuntimeCertificate(reconciliation.certificate)
+        : null;
+    final certificateFingerprint = encodedCertificate == null
+        ? null
+        : _logicalCandidateFingerprint('independent-read-certificate', <String>[encodedCertificate]);
+    final certificateAuthorityFingerprint = _logicalCandidateFingerprint('independent-certificate-authority', <String>[
+      targetLogicalId.value,
+      logicalConversationReadCertificateSchema,
+    ]);
+    final decisionsByRow = <int, LogicalConversationCandidateDecision>{
+      for (final decision in reconciliation.decisions) decision.sourceChatRowId: decision,
+    };
+    var admittedCandidateStateReady = true;
+    for (final candidateEvidence in independentlyReconciled) {
+      final nomination = nominations[candidateEvidence.sourceChatRowId]!;
+      final decision = decisionsByRow[candidateEvidence.sourceChatRowId];
+      final admitted =
+          certificateFingerprint != null &&
+          decision?.classification ==
+              LogicalConversationCandidateClassification.certifiedCurrentOrHistoricalReadMember &&
+          reconciliation.certificate.containsSourceRowId(candidateEvidence.sourceChatRowId);
+      final nowEpochMs = DateTime.now().millisecondsSinceEpoch;
+      final transition = await _commitLogicalCandidateTransition(
+        (working) => working.applyEvidence(
+          admitted
+              ? LogicalCandidateEvidence.independentCertificate(
+                  candidate: nomination.candidate,
+                  targetLogicalId: nomination.targetLogicalId,
+                  sequence: 2,
+                  exactParticipantSetFingerprint: nomination.exactParticipantSetFingerprint,
+                  serviceFingerprint: nomination.serviceFingerprint,
+                  accountFingerprint: nomination.accountFingerprint,
+                  evidenceFingerprint: _logicalCandidateFingerprint('candidate-certificate-evidence', <String>[
+                    candidateEvidence.admissionEvidenceSha256,
+                    certificateFingerprint,
+                    decision!.reason,
+                  ]),
+                  authorityFingerprint: certificateAuthorityFingerprint,
+                  certificateFingerprint: certificateFingerprint,
+                )
+              : LogicalCandidateEvidence.rejection(
+                  candidate: nomination.candidate,
+                  targetLogicalId: nomination.targetLogicalId,
+                  sequence: 2,
+                  exactParticipantSetFingerprint: nomination.exactParticipantSetFingerprint,
+                  serviceFingerprint: nomination.serviceFingerprint,
+                  accountFingerprint: nomination.accountFingerprint,
+                  evidenceFingerprint: _logicalCandidateFingerprint('candidate-rejection-evidence', <String>[
+                    candidateEvidence.admissionEvidenceSha256,
+                    decision?.classification.name ?? 'missing-decision',
+                    decision?.reason ?? 'MISSING_CANDIDATE_DECISION',
+                  ]),
+                  authorityFingerprint: certificateAuthorityFingerprint,
+                ),
+          nowEpochMs: nowEpochMs,
+        ),
+        nowEpochMs: nowEpochMs,
+      );
+      if (admitted &&
+          (transition.record?.canJoinLogicalProjection != true ||
+              transition.record?.certificateFingerprint != certificateFingerprint)) {
+        admittedCandidateStateReady = false;
+      }
     }
-    if (!await ChatInterface.activateLogicalReadCertificate(certificate: encodedCertificate)) {
-      throw StateError('LOGICAL_READ_CERTIFICATE_ISOLATE_SYNC_FAILED');
-    }
+    if (!certificateAdvanced || encodedCertificate == null || !admittedCandidateStateReady) return false;
     final admittedRows = reconciliation.certificate.sourceChatRowIds.difference(definition.sourceChatRowIds);
+    if (admittedRows.isEmpty || admittedRows.any((rowId) => !nominations.containsKey(rowId))) return false;
+
+    // The background isolate binds the durable certificate against its own
+    // database inventory. Mirror the already provider-proven source before
+    // activation so it cannot reject a valid exact target merely because the
+    // UI discovered the source ahead of the local ObjectBox observer.
     final admittedChats = rawChatsToSync
         .where((item) => admittedRows.contains((item['originalROWID'] as num?)?.toInt()))
         .toList(growable: false);
-    if (admittedChats.isNotEmpty) {
-      await ChatInterface.bulkSyncChats(chatsData: admittedChats);
+    if (admittedChats.isNotEmpty) await ChatInterface.bulkSyncChats(chatsData: admittedChats);
+
+    // Stop every receipt minted under the predecessor certificate before the
+    // first durable/isolate await. Certificate advancement is monotonic, so
+    // row/GUID membership alone cannot detect a stale in-flight receipt.
+    if (definition.id == LogicalConversationViewPolicy.bankedLogicalConversationId) {
+      _invalidateBuild99LogicalAuthority('LOGICAL_READ_CERTIFICATE_ADVANCING', scheduleRecheck: false);
     }
-    _scheduleListVersionUpdate(immediate: true);
+    final transaction = await PrefsSvc.messaging.commitLogicalReadCertificateAdvancement(
+      runtimeCertificateJson: encodedCertificate,
+      expectedPersistedCertificateRevision: LogicalConversationViewPolicy.persistedRevisionForBoundCertificate(
+        definition,
+      ),
+      activateAuthority: (_) async {
+        if (!LogicalConversationViewPolicy.activateReconciledCertificate(
+          reconciliation,
+          expectedRevision: definition.revision,
+        )) {
+          return false;
+        }
+        return ChatInterface.activateLogicalReadCertificate(certificate: encodedCertificate);
+      },
+    );
+    if (transaction.disposition == LogicalCertificateAdvancementDisposition.staleRevision) {
+      return false;
+    }
+    if (!transaction.committed) {
+      throw StateError('LOGICAL_READ_CERTIFICATE_ACTIVATION_FAILED');
+    }
+    _observeLogicalInventoryTransitions(reportChanges: false);
+    _resetLogicalProjectionCursors(reconciliation.certificate.id);
+    if (GetIt.I.isRegistered<EventDispatcher>()) {
+      EventDispatcherSvc.emit(logicalMembershipAdvancedEvent, <String, dynamic>{
+        'logicalId': reconciliation.certificate.id,
+      });
+    }
+    _publishLogicalCandidateTransitionSideEffects();
+    _scheduleLogicalCandidateReconciliation(delay: const Duration(milliseconds: 500));
     return true;
   }
 
@@ -1210,7 +2585,9 @@ class ChatsService {
       (!evidence.candidateScopeSnapshotComplete ||
           evidence.accountSnapshotBeforeSha256 != evidence.accountSnapshotAfterSha256 ||
           evidence.backendComputerId.isEmpty ||
-          evidence.candidates.any((candidate) => !candidate.chatSnapshotComplete || !candidate.messageSnapshotComplete));
+          evidence.candidates.any(
+            (candidate) => !candidate.chatSnapshotComplete || !candidate.messageSnapshotComplete,
+          ));
 
   /// Resolves a batch from one complete evidence snapshot. Every decision and
   /// its revision therefore describe the same point-in-time provider truth.
@@ -1238,17 +2615,12 @@ class ChatsService {
       reason: reason,
       observedAtEpochMilliseconds: observedAt,
     );
-    if (!isLogicalConversation(chat)) {
-      if (isApprovedLogicalSource(chat)) {
-        logicalRouteRuntimeStatus.value = const LogicalRouteRuntimeStatus(
-          stage: LogicalRouteRuntimeStage.routeNotProven,
-          reason: 'MISSING_OR_AMBIGUOUS_LOGICAL_SOURCE_BINDING',
-        );
-      }
+    if (!hasBuild99WriterCapability(chat)) {
+      final reason = isApprovedLogicalSource(chat)
+          ? 'CERTIFIED_LOGICAL_WRITE_UNAVAILABLE'
+          : 'NOT_A_CERTIFIED_LOGICAL_CONVERSATION';
       return (
-        decisions: [
-          for (final _ in requests) const LogicalRouteDecision.notProven('NOT_A_CERTIFIED_LOGICAL_CONVERSATION'),
-        ],
+        decisions: [for (final _ in requests) LogicalRouteDecision.notProven(reason)],
         transportReadiness: [for (final _ in requests) unavailableEvidence('TRANSPORT_ROUTE_NOT_QUALIFIED')],
         revision: null,
         observationEpoch: null,
@@ -1416,7 +2788,7 @@ class ChatsService {
   /// presentation stays visible while one debounced passive re-check
   /// re-derives authority, so an invalidation that proves nothing changed never
   /// flashes the composer; execution boundaries always force fresh evidence.
-  void invalidateLogicalAuthority(String reason, {bool scheduleRecheck = true}) {
+  void _invalidateBuild99LogicalAuthority(String reason, {bool scheduleRecheck = true}) {
     _logicalRouteEvidence = null;
     _logicalRouteEvidenceAt = null;
     _logicalTransportReadinessBySourceRow.clear();
@@ -1434,14 +2806,23 @@ class ChatsService {
     if (scheduleRecheck) _scheduleLogicalAuthorityRecheck();
   }
 
+  /// Invalidates Comcast writer state only when [chat] belongs to, or is an
+  /// evidence-backed candidate for, the banked Build 99 conversation.
+  bool invalidateBuild99LogicalAuthority(Chat chat, String reason, {bool scheduleRecheck = true}) {
+    if (!_canAffectBuild99WriterAuthority(chat)) return false;
+    _invalidateBuild99LogicalAuthority(reason, scheduleRecheck: scheduleRecheck);
+    return true;
+  }
+
   /// Re-derives presentation authority after a blocked admission so a banner
   /// never outlives the evidence that produced it.
-  void requestLogicalAuthorityRecheck() => _scheduleLogicalAuthorityRecheck(delay: const Duration(seconds: 3));
+  bool requestLogicalAuthorityRecheck(Chat chat) {
+    if (!_canAffectBuild99WriterAuthority(chat)) return false;
+    _scheduleLogicalAuthorityRecheck(delay: const Duration(seconds: 3));
+    return true;
+  }
 
-  void _scheduleLogicalAuthorityRecheck({
-    Duration delay = const Duration(seconds: 2),
-    bool deferToSooner = false,
-  }) {
+  void _scheduleLogicalAuthorityRecheck({Duration delay = const Duration(seconds: 2), bool deferToSooner = false}) {
     final dueAt = DateTime.now().add(delay);
     final pendingDueAt = _logicalAuthorityRecheckDueAt;
     if (deferToSooner &&
@@ -1454,22 +2835,52 @@ class ChatsService {
     _logicalAuthorityRecheckDueAt = dueAt;
     _logicalAuthorityRecheckTimer = Timer(delay, () {
       _logicalAuthorityRecheckDueAt = null;
-      final chat = activeChat?.chat;
-      if (chat == null || !isApprovedLogicalSource(chat)) return;
+      final active = activeChat?.chat;
+      Chat? chat = active != null && hasBuild99WriterCapability(active) ? active : null;
+      if (chat == null) {
+        final definition = _logicalDefinition;
+        if (definition != null && definition.id == LogicalConversationViewPolicy.bankedLogicalConversationId) {
+          final presentation = _presentationChatForDefinition(definition);
+          if (presentation != null && hasBuild99WriterCapability(presentation)) chat = presentation;
+        }
+      }
+      if (chat == null) return;
       unawaited(prepareLogicalRoute(chat, force: true, passive: true));
     });
   }
 
+  int logicalDraftRevisionFor(Chat chat) {
+    final logicalId = logicalConversationIdFor(chat);
+    if (logicalId == null) return 0;
+    return _logicalDraftPreviewRevisions[logicalId] ?? 0;
+  }
+
+  LogicalDraftPreview? logicalDraftPreviewFor(Chat chat) {
+    if (!isLogicalConversation(chat)) return null;
+    logicalDraftRevisionFor(chat);
+    return LogicalDraftPreview.fromDraft(loadLogicalDraft(chat));
+  }
+
+  void _bumpLogicalDraftPreviewRevision(String logicalId) {
+    _logicalDraftPreviewRevisions[logicalId] = (_logicalDraftPreviewRevisions[logicalId] ?? 0) + 1;
+  }
+
+  void _invalidateKnownLogicalDraftPreviews() {
+    for (final logicalId in _logicalDraftPreviewRevisions.keys.toList(growable: false)) {
+      _bumpLogicalDraftPreviewRevision(logicalId);
+    }
+  }
+
   LogicalDraft? loadLogicalDraft(Chat chat) {
-    final definition = _logicalDefinition;
-    if (definition == null || !definition.containsSourceRowId(chat.originalROWID)) return null;
-    final raw = PrefsSvc.messaging.loadLogicalDraftJson(definition.id);
+    final logicalId = logicalConversationIdFor(chat);
+    if (logicalId == null) return null;
+    final raw = PrefsSvc.messaging.loadLogicalDraftJson(logicalId);
     if (raw == null || raw.isEmpty) return null;
     try {
       final decoded = jsonDecode(raw);
       if (decoded is! Map) return null;
       final draft = LogicalDraft.fromJson(decoded.cast<String, dynamic>());
-      return draft.logicalId == definition.id ? draft : null;
+      return draft.logicalId == logicalId ? draft : null;
     } catch (error, stack) {
       Logger.warn('Logical draft is unreadable and remains untouched', error: error, trace: stack, tag: 'LogicalDraft');
       return null;
@@ -1489,35 +2900,57 @@ class ChatsService {
     required LogicalReplyIntent? reply,
     String? effectId,
     int? expectedDraftGeneration,
-  }) {
-    return _withLogicalDraftLock(() async {
-      final definition = _logicalDefinition;
-      if (definition == null || !definition.containsSourceRowId(chat.originalROWID)) {
-        throw StateError('NOT_A_CERTIFIED_LOGICAL_CONVERSATION');
-      }
-      if (expectedDraftGeneration != null &&
-          (_logicalDraftGenerations[definition.id] ?? 0) != expectedDraftGeneration) {
-        return null;
-      }
-      final now = DateTime.now().millisecondsSinceEpoch;
-      final existing =
-          loadLogicalDraft(chat) ??
-          LogicalDraft.create(
-            logicalId: definition.id,
-            nowEpochMilliseconds: now,
-            observedRevision: _logicalAuthorityRevisionTracker.lastObserved ?? currentLogicalAuthorityRevision,
-          );
-      final updated = existing.mergeUserIntent(
-        text: text,
-        subject: subject,
-        attachments: attachments,
-        reply: reply,
-        effectId: effectId,
-        updatedAtEpochMilliseconds: now,
-      );
-      await PrefsSvc.messaging.saveLogicalDraftJson(definition.id, jsonEncode(updated.toJson()));
-      return updated;
-    });
+  }) => _withLogicalDraftLock(
+    () => _saveLogicalDraftLocked(
+      chat,
+      text: text,
+      subject: subject,
+      attachments: attachments,
+      reply: reply,
+      effectId: effectId,
+      expectedDraftGeneration: expectedDraftGeneration,
+    ),
+  );
+
+  Future<LogicalDraft?> _saveLogicalDraftLocked(
+    Chat chat, {
+    required String text,
+    required String subject,
+    required List<LogicalAttachmentIntent> attachments,
+    required LogicalReplyIntent? reply,
+    String? effectId,
+    int? expectedDraftGeneration,
+  }) async {
+    final entry = _registryEntryForChat(chat);
+    final sourceRowId = chat.originalROWID;
+    if (entry == null || sourceRowId == null || !entry.sourceChatRowIds.contains(sourceRowId)) {
+      throw StateError('NOT_A_CERTIFIED_LOGICAL_CONVERSATION');
+    }
+    final logicalId = entry.logicalId.value;
+    if (expectedDraftGeneration != null && (_logicalDraftGenerations[logicalId] ?? 0) != expectedDraftGeneration) {
+      return null;
+    }
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final existing =
+        loadLogicalDraft(chat) ??
+        LogicalDraft.create(
+          logicalId: logicalId,
+          nowEpochMilliseconds: now,
+          observedRevision: hasBuild99WriterCapability(chat)
+              ? _logicalAuthorityRevisionTracker.lastObserved ?? logicalWriterAuthorityRevisionFor(chat)
+              : null,
+        );
+    final updated = existing.mergeUserIntent(
+      text: text,
+      subject: subject,
+      attachments: attachments,
+      reply: reply,
+      effectId: effectId,
+      updatedAtEpochMilliseconds: now,
+    );
+    await PrefsSvc.messaging.saveLogicalDraftJson(logicalId, jsonEncode(updated.toJson()));
+    _bumpLogicalDraftPreviewRevision(logicalId);
+    return updated;
   }
 
   /// Freezes a route-neutral logical send intent before any physical route is
@@ -1534,43 +2967,45 @@ class ChatsService {
     int? expectedDraftGeneration,
   }) async {
     if (!isLogicalConversation(chat)) return null;
-    await _stageLogicalDraftAttachments(chat, attachments);
-    final currentAttachments = <LogicalAttachmentIntent>[
-      for (var index = 0; index < attachments.length; index++)
-        LogicalAttachmentIntent(
-          intentId: sha256
-              .convert(
-                utf8.encode(
-                  '${attachments[index].path ?? 'EPHEMERAL'}\u0000'
-                  '${attachments[index].name}\u0000'
-                  '${attachments[index].size}\u0000$index',
-                ),
-              )
-              .toString(),
-          name: attachments[index].name,
-          size: attachments[index].size,
-          isRestorable: attachments[index].path != null,
-          path: attachments[index].path,
-          mimeType: mime(attachments[index].path) ?? mime(attachments[index].name),
-        ),
-    ];
-    final existing = loadLogicalDraft(chat);
-    final unavailable =
-        existing?.attachments.where(
-          (prior) =>
-              !prior.isRestorable &&
-              !currentAttachments.any((current) => current.name == prior.name && current.size == prior.size),
-        ) ??
-        const <LogicalAttachmentIntent>[];
-    return saveLogicalDraft(
-      chat,
-      text: text,
-      subject: subject,
-      attachments: <LogicalAttachmentIntent>[...unavailable, ...currentAttachments],
-      reply: reply,
-      effectId: effectId,
-      expectedDraftGeneration: expectedDraftGeneration,
-    );
+    return _withLogicalDraftLock(() async {
+      await _stageLogicalDraftAttachments(chat, attachments);
+      final currentAttachments = <LogicalAttachmentIntent>[
+        for (var index = 0; index < attachments.length; index++)
+          LogicalAttachmentIntent(
+            intentId: sha256
+                .convert(
+                  utf8.encode(
+                    '${attachments[index].path ?? 'EPHEMERAL'}\u0000'
+                    '${attachments[index].name}\u0000'
+                    '${attachments[index].size}\u0000$index',
+                  ),
+                )
+                .toString(),
+            name: attachments[index].name,
+            size: attachments[index].size,
+            isRestorable: attachments[index].path != null,
+            path: attachments[index].path,
+            mimeType: mime(attachments[index].path) ?? mime(attachments[index].name),
+          ),
+      ];
+      final existing = loadLogicalDraft(chat);
+      final unavailable =
+          existing?.attachments.where(
+            (prior) =>
+                !prior.isRestorable &&
+                !currentAttachments.any((current) => current.name == prior.name && current.size == prior.size),
+          ) ??
+          const <LogicalAttachmentIntent>[];
+      return _saveLogicalDraftLocked(
+        chat,
+        text: text,
+        subject: subject,
+        attachments: <LogicalAttachmentIntent>[...unavailable, ...currentAttachments],
+        reply: reply,
+        effectId: effectId,
+        expectedDraftGeneration: expectedDraftGeneration,
+      );
+    });
   }
 
   Future<void> _stageLogicalDraftAttachments(Chat chat, List<PlatformFile> attachments) async {
@@ -1628,13 +3063,17 @@ class ChatsService {
         }
       }
       await PrefsSvc.messaging.saveLogicalDraftJson(draft.logicalId, jsonEncode(draft.toJson()));
+      _bumpLogicalDraftPreviewRevision(draft.logicalId);
     });
   }
 
   Future<bool> clearLogicalDraftIfCurrent(LogicalDraft admittedDraft) {
     return _withLogicalDraftLock(() async {
       final currentRaw = PrefsSvc.messaging.loadLogicalDraftJson(admittedDraft.logicalId);
-      if (currentRaw == null) return true;
+      if (currentRaw == null) {
+        _bumpLogicalDraftPreviewRevision(admittedDraft.logicalId);
+        return true;
+      }
       try {
         final current = LogicalDraft.fromJson((jsonDecode(currentRaw) as Map).cast<String, dynamic>());
         if (current.contentRevision != admittedDraft.contentRevision ||
@@ -1649,6 +3088,7 @@ class ChatsService {
       }
       _logicalDraftGenerations.update(admittedDraft.logicalId, (value) => value + 1, ifAbsent: () => 1);
       await PrefsSvc.messaging.clearLogicalDraft(admittedDraft.logicalId);
+      _bumpLogicalDraftPreviewRevision(admittedDraft.logicalId);
       return true;
     });
   }
@@ -1661,74 +3101,436 @@ class ChatsService {
         passive: passive,
       );
 
-  /// Marks only currently unread certified source chats as read. A logical
-  /// read operation may intentionally have more than one physical target.
-  Future<LogicalRouteDecision> markLogicalConversationRead(Chat chat) async {
-    final sources = logicalSourceChatsFor(chat);
-    final unreadRows = sources
-        .where((source) => source.hasUnreadMessage == true)
-        .map((source) => source.originalROWID)
+  bool _logicalSourcesMatchAvailableRegistryEntry(LogicalConversationRegistryEntry entry, List<Chat> sources) {
+    if (sources.length != entry.runtimePhysicalRefs.length || sources.length != entry.sourceChatRowIds.length) {
+      return false;
+    }
+    final refs = <PhysicalConversationRef>{};
+    final rows = <int>{};
+    for (final source in sources) {
+      final rowId = source.originalROWID;
+      if (rowId == null) return false;
+      final ref = PhysicalConversationRef.fromStablePhysicalGuid(source.guid);
+      if (!entry.containsRuntimeBinding(physicalRef: ref, sourceChatRowId: rowId)) return false;
+      if (!refs.add(ref) || !rows.add(rowId)) return false;
+    }
+    return refs.length == entry.runtimePhysicalRefs.length &&
+        refs.containsAll(entry.runtimePhysicalRefs) &&
+        rows.length == entry.sourceChatRowIds.length &&
+        rows.containsAll(entry.sourceChatRowIds);
+  }
+
+  bool _logicalSourcesExactlyMatchRegistryEntry(LogicalConversationRegistryEntry entry, List<Chat> sources) {
+    return entry.runtimePhysicalRefs.length == entry.members.length &&
+        entry.sourceChatRowIds.length == entry.members.length &&
+        _logicalSourcesMatchAvailableRegistryEntry(entry, sources);
+  }
+
+  PhysicalConversationRef? _certifiedLogicalRefForSource(LogicalConversationRegistryEntry entry, Chat source) {
+    final rowId = source.originalROWID;
+    if (rowId == null) return null;
+    return entry.certifiedRefForRuntimeBinding(
+      physicalRef: PhysicalConversationRef.fromStablePhysicalGuid(source.guid),
+      sourceChatRowId: rowId,
+    );
+  }
+
+  LogicalUnreadConversationState? _synchronizeLogicalUnreadState({
+    required LogicalConversationId logicalId,
+    List<Chat>? sourceSnapshot,
+  }) {
+    final entry = _logicalRegistry.entryForLogicalId(logicalId);
+    if (entry == null) return null;
+    final sources = sourceSnapshot ?? _logicalSourceChatsForEntry(entry);
+    final cached = _logicalUnreadStates.stateFor(logicalId);
+    if (!_logicalSourcesMatchAvailableRegistryEntry(entry, sources)) {
+      if (cached != null && cached.markReadOperationsInFlight > 0) {
+        cached.syncPending = true;
+        _refreshLogicalUnreadCompatibility(latest: cached);
+      }
+      return null;
+    }
+
+    final refsByGuid = <String, PhysicalConversationRef>{};
+    for (final source in sources) {
+      final ref = _certifiedLogicalRefForSource(entry, source);
+      if (ref == null || refsByGuid.putIfAbsent(source.guid, () => ref) != ref) return null;
+    }
+    final cacheMatches = cached?.hasExactCertifiedSources(entry.certifiedMemberRefs) == true;
+    if (!cacheMatches && cached != null && cached.markReadOperationsInFlight > 0) {
+      cached.syncPending = true;
+      _refreshLogicalUnreadCompatibility(latest: cached);
+      return null;
+    }
+
+    var state = cached;
+    var changed = false;
+    if (!cacheMatches) {
+      final expectedFingerprints = entry.certifiedMemberRefs.map((ref) => ref.fingerprint).toSet();
+      final retained = <LogicalUnreadObservation>[];
+      try {
+        final raw = PrefsSvc.messaging.loadLogicalUnreadLedgerJson(logicalId.value);
+        if (raw != null) {
+          final restored = LogicalUnreadLedger.fromJson((jsonDecode(raw) as Map).cast<String, dynamic>());
+          retained.addAll(
+            restored.observations.where((observation) => expectedFingerprints.contains(observation.source.fingerprint)),
+          );
+        }
+      } catch (error, trace) {
+        Logger.warn(
+          'Discarding invalid reconstructible logical unread cache',
+          error: error,
+          trace: trace,
+          tag: 'LogicalUnread',
+        );
+      }
+      state = LogicalUnreadConversationState(
+        logicalId: logicalId,
+        ledger: LogicalUnreadLedger(certifiedSources: entry.certifiedMemberRefs, observations: retained),
+        syncPending:
+            PrefsSvc.messaging.loadLogicalReadSyncPending(logicalId.value) ||
+            entry.runtimePhysicalRefs.length != entry.members.length,
+      );
+      _logicalUnreadStates.put(state);
+      changed = true;
+    }
+
+    final activeState = state!;
+    final ledger = activeState.ledger;
+    final physicalSnapshot = <PhysicalConversationRef, bool>{
+      for (final source in sources)
+        refsByGuid[source.guid]!:
+            activeState.hasPendingWatermark(refsByGuid[source.guid]!) || source.hasUnreadMessage == true,
+    };
+    final eventWatermarks = <PhysicalConversationRef, int>{
+      for (final source in sources) refsByGuid[source.guid]!: activeState.messageWatermarkFor(refsByGuid[source.guid]!),
+    };
+    final completeSnapshot = entry.runtimePhysicalRefs.length == entry.members.length;
+    changed =
+        (completeSnapshot
+            ? ledger.observePhysicalSnapshot(physicalSnapshot, eventWatermarks: eventWatermarks)
+            : ledger.observeAvailablePhysicalSnapshot(physicalSnapshot, eventWatermarks: eventWatermarks)) ||
+        changed;
+    if (!completeSnapshot) {
+      activeState.syncPending = true;
+    }
+    if (changed || !completeSnapshot) _scheduleLogicalUnreadPersistence(activeState);
+    _refreshLogicalUnreadCompatibility(latest: activeState);
+    return activeState;
+  }
+
+  LogicalRouteDecision _resolveCertifiedLogicalReadMutation(
+    LogicalConversationRegistryEntry entry,
+    List<Chat> sources,
+    Set<int> unreadRows,
+  ) {
+    if (!_logicalSourcesExactlyMatchRegistryEntry(entry, sources)) {
+      return const LogicalRouteDecision.notProven('LOGICAL_UNREAD_SOURCE_BINDING_INCOMPLETE');
+    }
+    if (unreadRows.any((rowId) => !entry.sourceChatRowIds.contains(rowId))) {
+      return const LogicalRouteDecision.notProven('LOGICAL_UNREAD_TARGET_OUTSIDE_CERTIFICATE');
+    }
+    return LogicalRouteDecision.qualified('CERTIFIED_EXACT_UNREAD_SOURCE_SET', unreadRows.toList()..sort());
+  }
+
+  /// Applies an exact-source provider status event to local projection only.
+  /// `privateMark: false` is mandatory: the provider already performed the
+  /// transition, so observation must never issue a second read mutation.
+  Future<bool> observeProviderChatReadStatus({required String sourceChatGuid, required bool read}) async {
+    final source = findChatByGuid(sourceChatGuid) ?? Chat.findOne(guid: sourceChatGuid);
+    if (source == null) return false;
+    final hasUnread = !read;
+    final entry = _registryEntryForChat(source);
+
+    if (entry == null) {
+      if (isApprovedLogicalSource(source)) return false;
+      await source.toggleHasUnreadAsync(hasUnread, force: true, clearLocalNotifications: false, privateMark: false);
+      getChatState(source.guid)?.updateHasUnreadInternal(hasUnread);
+      _recalculateUnreadCount();
+      _scheduleListVersionUpdate(immediate: true);
+      return true;
+    }
+
+    final sources = _logicalSourceChatsForEntry(entry);
+    final ref = _certifiedLogicalRefForSource(entry, source);
+    final state = _synchronizeLogicalUnreadState(logicalId: entry.logicalId, sourceSnapshot: sources);
+    if (ref == null || state == null || !sources.any((candidate) => candidate.guid == source.guid)) {
+      return false;
+    }
+
+    await source.toggleHasUnreadAsync(hasUnread, force: true, clearLocalNotifications: false, privateMark: false);
+    getChatState(source.guid)?.updateHasUnreadInternal(hasUnread);
+    final observation = state.observeProviderReadStatus(source: ref, hasUnread: hasUnread);
+    if (!hasUnread &&
+        observation == LogicalUnreadObservationResult.staleIgnored &&
+        state.ledger.observationFor(ref)?.hasUnread == true) {
+      // The provider status carried no causal message watermark and could only
+      // acknowledge an older admitted plan. Keep the newer inbound projected.
+      await source.toggleHasUnreadAsync(true, force: true, clearLocalNotifications: false, privateMark: false);
+      getChatState(source.guid)?.updateHasUnreadInternal(true);
+    }
+    state.syncPending = state.hasPendingWatermarks || entry.runtimePhysicalRefs.length != entry.members.length;
+    _refreshLogicalUnreadCompatibility(latest: state);
+    await _persistLogicalUnreadState(state);
+    _syncLogicalPresentationState();
+    _recalculateUnreadCount();
+    _scheduleListVersionUpdate(immediate: true);
+    return true;
+  }
+
+  /// Marks only the exact unread source set captured by the monotonic ledger.
+  /// Provider failures are retained as partial acknowledgement; successful
+  /// sources advance independently and no historical source is mutated merely
+  /// because it belongs to the logical presentation union.
+  Future<LogicalRouteDecision> markLogicalConversationRead(Chat chat) {
+    final entry = _registryEntryForChat(chat);
+    if (entry == null) {
+      return Future<LogicalRouteDecision>.value(
+        const LogicalRouteDecision.notProven('LOGICAL_UNREAD_LEDGER_UNAVAILABLE'),
+      );
+    }
+    return _logicalMarkReadOperations.run(entry.logicalId.value, () => _executeMarkLogicalConversationRead(chat));
+  }
+
+  Future<LogicalRouteDecision> _executeMarkLogicalConversationRead(Chat chat) async {
+    final entry = _registryEntryForChat(chat);
+    final definition = entry == null ? null : LogicalConversationViewPolicy.certificateForLogicalId(entry.logicalId);
+    if (entry == null || definition == null) {
+      return const LogicalRouteDecision.notProven('LOGICAL_UNREAD_LEDGER_UNAVAILABLE');
+    }
+    final sources = _logicalSourceChats(definition);
+    final state = _synchronizeLogicalUnreadState(logicalId: entry.logicalId, sourceSnapshot: sources);
+    if (state == null) {
+      return const LogicalRouteDecision.notProven('LOGICAL_UNREAD_SOURCE_BINDING_INCOMPLETE');
+    }
+    final ledger = state.ledger;
+    final sourceByFingerprint = <String, Chat>{};
+    final refByRow = <int, PhysicalConversationRef>{};
+    for (final source in sources) {
+      final rowId = source.originalROWID;
+      final ref = _certifiedLogicalRefForSource(entry, source);
+      if (rowId == null ||
+          ref == null ||
+          sourceByFingerprint.putIfAbsent(ref.fingerprint, () => source) != source ||
+          refByRow.putIfAbsent(rowId, () => ref) != ref) {
+        return const LogicalRouteDecision.notProven('LOGICAL_UNREAD_SOURCE_BINDING_INCOMPLETE');
+      }
+    }
+    final plan = ledger.markReadPlan();
+    final unreadRows = plan.entries
+        .map((entry) => sourceByFingerprint[entry.source.fingerprint]?.originalROWID)
         .whereType<int>()
         .toSet();
-    final decision = await resolveLogicalMutation(
-      chat,
-      LogicalMutationRequest(mutationClass: LogicalMutationClass.markRead, unreadSourceChatRowIds: unreadRows),
-      force: true,
-    );
-    if (!decision.isQualified) return decision;
-    for (final rowId in decision.physicalTargetRowIds) {
-      final source = sources.firstWhere((candidate) => candidate.originalROWID == rowId);
-      await HttpSvc.chat.markRead(source.guid);
-      await source.toggleHasUnreadAsync(false, privateMark: false);
-      getChatState(source.guid)?.updateHasUnreadInternal(false);
+    if (unreadRows.length != plan.entries.length) {
+      return const LogicalRouteDecision.notProven('LOGICAL_UNREAD_SOURCE_BINDING_INCOMPLETE');
     }
-    _syncLogicalPresentationState();
+    final decision = _resolveCertifiedLogicalReadMutation(entry, sources, unreadRows);
+    if (!decision.isQualified) return decision;
+
+    state.beginMarkRead(plan);
+    var outcome = LogicalMarkReadOutcome.partial;
+    try {
+      final receipts = <LogicalMarkReadReceipt>[];
+      for (final rowId in decision.physicalTargetRowIds) {
+        final source = sources.firstWhere((candidate) => candidate.originalROWID == rowId);
+        final ref = refByRow[rowId]!;
+        final planned = plan.entries.firstWhere((entry) => entry.source == ref);
+
+        LogicalMarkReadReceipt receiptForCurrentState({required bool providerRequestSucceeded}) {
+          final refreshed = _synchronizeLogicalUnreadState(logicalId: entry.logicalId, sourceSnapshot: sources);
+          final current = ledger.observationFor(ref);
+          if (!identical(refreshed, state) ||
+              current == null ||
+              current.eventWatermark != planned.observedEventWatermark) {
+            return LogicalMarkReadReceipt.failure(source: ref, plannedRevision: planned.observedRevision);
+          }
+          if (!current.hasUnread && current.revision > planned.observedRevision) {
+            return LogicalMarkReadReceipt.success(
+              source: ref,
+              plannedRevision: planned.observedRevision,
+              resultRevision: current.revision,
+            );
+          }
+          if (providerRequestSucceeded && current.hasUnread && current.revision == planned.observedRevision) {
+            return LogicalMarkReadReceipt.success(
+              source: ref,
+              plannedRevision: planned.observedRevision,
+              resultRevision: planned.observedRevision + 1,
+            );
+          }
+          return LogicalMarkReadReceipt.failure(source: ref, plannedRevision: planned.observedRevision);
+        }
+
+        try {
+          await HttpSvc.chat.markRead(source.guid);
+          receipts.add(receiptForCurrentState(providerRequestSucceeded: true));
+        } catch (error, trace) {
+          Logger.warn(
+            'Logical read acknowledgement failed for one source',
+            error: error,
+            trace: trace,
+            tag: 'LogicalUnread',
+          );
+          receipts.add(receiptForCurrentState(providerRequestSucceeded: false));
+        }
+      }
+
+      final refreshed = _synchronizeLogicalUnreadState(logicalId: entry.logicalId, sourceSnapshot: sources);
+      outcome = identical(refreshed, state)
+          ? ledger.applyMarkReadReceipts(plan, receipts, stalePlanAsPartial: true)
+          : LogicalMarkReadOutcome.partial;
+
+      for (final receipt in receipts.where((receipt) => receipt.succeeded)) {
+        final source = sourceByFingerprint[receipt.source.fingerprint]!;
+        final planned = plan.entries.firstWhere((entry) => entry.source == receipt.source);
+        final current = ledger.observationFor(receipt.source);
+        if (current?.hasUnread == false && current?.revision == receipt.resultRevision) {
+          state.clearPendingThrough(receipt.source, planned.observedEventWatermark);
+          try {
+            await source.toggleHasUnreadAsync(false, force: true, clearLocalNotifications: false, privateMark: false);
+          } catch (error, trace) {
+            Logger.warn(
+              'Logical local read projection failed for one source',
+              error: error,
+              trace: trace,
+              tag: 'LogicalUnread',
+            );
+            ledger.observe(
+              LogicalUnreadObservation(
+                source: receipt.source,
+                revision: current!.revision + 1,
+                hasUnread: true,
+                eventWatermark: current.eventWatermark,
+              ),
+            );
+            state.retainPending(receipt.source, current.eventWatermark);
+            outcome = LogicalMarkReadOutcome.partial;
+          }
+        }
+      }
+
+      for (final observation in ledger.observations.where((entry) => entry.hasUnread)) {
+        final source = sourceByFingerprint[observation.source.fingerprint];
+        if (source != null) {
+          state.retainPending(observation.source, observation.eventWatermark);
+          if (source.hasUnreadMessage != true) {
+            try {
+              await source.toggleHasUnreadAsync(true, force: true, clearLocalNotifications: false, privateMark: false);
+            } catch (error, trace) {
+              Logger.warn(
+                'Logical pending unread projection could not be restored',
+                error: error,
+                trace: trace,
+                tag: 'LogicalUnread',
+              );
+            }
+          }
+        }
+      }
+      if (ledger.hasUnread || state.hasPendingWatermarks) {
+        outcome = LogicalMarkReadOutcome.partial;
+      }
+
+      state.lastOutcome = outcome;
+      state.syncPending = outcome == LogicalMarkReadOutcome.partial;
+      _refreshLogicalUnreadCompatibility(latest: state);
+      await _persistLogicalUnreadState(state);
+
+      final finalState = _synchronizeLogicalUnreadState(logicalId: entry.logicalId, sourceSnapshot: sources);
+      if (!identical(finalState, state) || ledger.hasUnread || state.hasPendingWatermarks) {
+        outcome = LogicalMarkReadOutcome.partial;
+        state.lastOutcome = outcome;
+        state.syncPending = true;
+        _refreshLogicalUnreadCompatibility(latest: state);
+        await _persistLogicalUnreadState(state);
+      }
+
+      _syncLogicalPresentationState();
+      if (outcome != LogicalMarkReadOutcome.partial && !ledger.hasUnread) {
+        if (kIsDesktop) {
+          await NotificationsSvc.clearDesktopNotificationsForChat(presentationChatFor(chat).guid);
+        } else if (!kIsWeb) {
+          final notificationTargets = LogicalPlatformCleanupPlan.notificationTargets(
+            logicalId: entry.logicalId,
+            legacyPhysicalIds: sources.map((source) => source.id),
+            ordinaryTag: NotificationsService.NEW_MESSAGE_TAG,
+          );
+          for (final target in notificationTargets) {
+            await MethodChannelSvc.actions.deleteNotification(notificationId: target.id, tag: target.tag);
+          }
+        }
+      }
+    } finally {
+      state.endMarkRead();
+      _refreshLogicalUnreadCompatibility(latest: state);
+    }
     return decision;
   }
 
   String presentationGuidFor(String guid) {
-    final definition = _logicalDefinition;
     final chat =
-        findChatByGuid(guid) ??
-        (definition == null
-            ? null
-            : _logicalSourceChats(definition).firstWhereOrNull((candidate) => candidate.guid == guid));
+        findChatByGuid(guid) ?? _registeredLogicalChats().firstWhereOrNull((candidate) => candidate.guid == guid);
     return chat == null ? guid : presentationChatFor(chat).guid;
   }
 
   List<Chat> _projectLogicalChatList(Iterable<Chat> rawChats) {
-    final projected = LogicalConversationViewPolicy.projectConversationList(rawChats, (chat) => chat.originalROWID);
+    final registry = _logicalRegistry;
+    final nowEpochMs = DateTime.now().millisecondsSinceEpoch;
+    final visible = rawChats.where(
+      (chat) => !_isLogicalCandidateTemporarilySuppressed(chat, registry, nowEpochMs: nowEpochMs),
+    );
+    final projected = registry.projectConversationList(visible, (chat) => chat.originalROWID);
     projected.sort(_sortCompare);
     return projected;
   }
 
   void _syncLogicalPresentationState() {
-    final definition = _logicalDefinition;
-    if (definition == null) return;
-    final sources = _logicalSourceChats(definition);
-    final presentation = sources.firstWhere((chat) => chat.originalROWID == definition.presentationSourceChatRowId);
-    final presentationState = chatStates[presentation.guid];
-    if (presentationState == null) return;
+    for (final entry in _logicalRegistry.entries) {
+      final sources = _logicalSourceChatsForEntry(entry);
+      final presentation = _presentationChatForEntry(entry);
+      if (presentation == null) continue;
+      final presentationState = chatStates[presentation.guid];
+      if (presentationState == null) continue;
 
-    final latestMessages = sources.map((source) => source.dbLatestMessage.target).whereType<Message>().toList()
-      ..sort(Message.sort);
-    if (latestMessages.isNotEmpty && presentationState.latestMessage.value?.guid != latestMessages.first.guid) {
-      presentationState.updateLatestMessageInternal(latestMessages.first);
+      final latestMessages = sources.map((source) => source.dbLatestMessage.target).whereType<Message>().toList()
+        ..sort(compareLogicalMessagesDescending);
+      if (latestMessages.isNotEmpty) {
+        final latest = latestMessages.first;
+        presentationState.updateLatestMessageInternal(latest);
+        final redacted = SettingsSvc.settings.redactedMode.value;
+        presentationState.updateSubtitleInternal(
+          latest.getNotificationText(
+            hideContactInfo: redacted && SettingsSvc.settings.hideContactInfo.value,
+            hideMessageContent: redacted && SettingsSvc.settings.hideMessageContent.value,
+          ),
+        );
+      }
+
+      final currentActive = activeChat;
+      if (currentActive != null &&
+          conversationKeyFor(currentActive.chat) == entry.logicalId.value &&
+          !identical(currentActive, presentationState)) {
+        final openController = currentActive.controller;
+        currentActive.controller = null;
+        currentActive.updateActiveAndAliveInternal(false);
+        presentationState.controller = openController;
+        activeChat = presentationState;
+        presentationState.updateActiveAndAliveInternal(true);
+        openController?.rebindPresentation(presentation);
+      }
+      final synchronized = _synchronizeLogicalUnreadState(logicalId: entry.logicalId, sourceSnapshot: sources);
+      final cached = synchronized ?? _logicalUnreadStates.stateFor(entry.logicalId);
+      final unread = (cached?.ledger.hasUnread ?? false) || sources.any((source) => source.hasUnreadMessage == true);
+      presentationState.updateHasUnreadInternal(unread);
     }
-    final unread = LogicalConversationViewPolicy.logicalUnread(
-      sources.map((source) => source.hasUnreadMessage ?? false),
-    );
-    presentationState.updateHasUnreadInternal(unread);
   }
 
   void _refreshLogicalPresentation({bool immediate = true}) {
     _syncLogicalPresentationState();
-    final definition = _logicalDefinition;
-    if (definition == null) return;
-    final presentation = _logicalSourceChats(
-      definition,
-    ).firstWhere((chat) => chat.originalROWID == definition.presentationSourceChatRowId);
-    _repositionChat(presentation, immediate: immediate);
+    for (final entry in _logicalRegistry.entries) {
+      final presentation = _presentationChatForEntry(entry);
+      if (presentation != null) _repositionChat(presentation, immediate: immediate);
+    }
   }
 
   /// Find chat by GUID
@@ -1761,9 +3563,9 @@ class ChatsService {
     // Apply archived filter
     if (showArchived != null) {
       if (showArchived) {
-        chats = chats.where((e) => e.isArchived ?? false).toList();
+        chats = chats.where(isConversationArchived).toList();
       } else {
-        chats = chats.where((e) => !(e.isArchived ?? false)).toList();
+        chats = chats.where((e) => !isConversationArchived(e)).toList();
       }
     }
 
@@ -1811,9 +3613,9 @@ class ChatsService {
       }
 
       if (filters.muteFilter == ChatMuteFilter.muted) {
-        chats = chats.where((e) => e.muteType != null).toList();
+        chats = chats.where(isConversationMuted).toList();
       } else if (filters.muteFilter == ChatMuteFilter.unmuted) {
-        chats = chats.where((e) => e.muteType == null).toList();
+        chats = chats.where((e) => !isConversationMuted(e)).toList();
       }
 
       if (filters.serviceFilter == ChatServiceFilter.iMessage) {
@@ -1829,20 +3631,17 @@ class ChatsService {
         // (e.g. by CustomGroupFilterChipRow's unread-count badges), so it
         // goes stale as soon as a chat is added to/removed from a group and
         // never picks up the change without this.
-        final matchingGuids = CustomGroupsSvc.groups
-            .where((g) => filters.customGroupIds.contains(g.id))
-            .expand((g) => g.chats)
-            .map((c) => c.guid)
-            .toSet();
-        chats = chats.where((e) => matchingGuids.contains(e.guid)).toList();
+        chats = chats
+            .where((chat) => filters.customGroupIds.any((id) => isConversationInCustomGroup(chat, id)))
+            .toList();
       }
     }
 
     // Apply pinned filter
     if (pinnedOnly == true) {
-      chats = chats.where((e) => e.isPinned ?? false).toList();
+      chats = chats.where(isConversationPinned).toList();
     } else if (excludePinned == true) {
-      chats = chats.where((e) => !(e.isPinned ?? false)).toList();
+      chats = chats.where((e) => !isConversationPinned(e)).toList();
     }
 
     return chats;
@@ -1855,8 +3654,8 @@ class ChatsService {
 
   /// Get pinned chats
   List<Chat> get pinnedChats {
-    return getSortedChats().where((c) => (c.pinIndex ?? -1) >= 0).toList()
-      ..sort((a, b) => (a.pinIndex ?? 0).compareTo(b.pinIndex ?? 0));
+    return getSortedChats().where(isConversationPinned).toList()
+      ..sort((a, b) => (conversationPinIndex(a) ?? 0).compareTo(conversationPinIndex(b) ?? 0));
   }
 
   /// Search chats by title
@@ -1924,6 +3723,8 @@ class ChatsService {
     Logger.info("Fetching chats...", tag: "ChatBloc");
 
     reset();
+    await _restoreLogicalCandidateQuarantine();
+    await _restoreLogicalCandidateContexts();
 
     // Preload the saved default filter selection (if any) — independent of
     // chat count, so set this up unconditionally.
@@ -1974,7 +3775,7 @@ class ChatsService {
         final state = chatStates[c.guid] = ChatState(c);
         _setupChatStateListeners(state);
 
-        if (activeChatGuid.value == c.guid) {
+        if (activeChatGuid.value == conversationKeyFor(c)) {
           _activeChat = state;
           state.updateActiveAndAliveInternal(true);
         }
@@ -1993,18 +3794,34 @@ class ChatsService {
     Logger.info("Finished fetching chats (${chatStates.length}).", tag: "ChatBloc");
 
     _refreshLogicalPresentation(immediate: false);
+    _observeLogicalInventoryTransitions(reportChanges: false);
+    await _restoreLogicalSettings();
+    final candidateNowEpochMs = DateTime.now().millisecondsSinceEpoch;
+    final restoredCandidates = _logicalCandidateQuarantine.recordsAt(nowEpochMs: candidateNowEpochMs);
+    _scheduleLogicalCandidateQuarantinePersistence(candidateNowEpochMs);
+    if (restoredCandidates.any(
+      (record) =>
+          logicalCandidateTargets(record, LogicalConversationViewPolicy.bankedApplicationLogicalId) &&
+          (record.phase == LogicalCandidateQuarantinePhase.nominated ||
+              record.phase == LogicalCandidateQuarantinePhase.reconciling ||
+              record.phase == LogicalCandidateQuarantinePhase.certified),
+    )) {
+      _scheduleLogicalAuthorityRecheck();
+    }
+    _scheduleLogicalCandidateReconciliation(delay: Duration.zero);
 
     // Calculate initial unread count now that all chat states are populated.
     // The listener only fires on changes, so we need an explicit call here to
     // seed the badge with the correct value before any message is received.
     _recalculateUnreadCount();
+    await _reconcileDeferredLogicalNotifications();
 
     if (kIsDesktop) {
       unawaited(
         DesktopNotifications.cancelStale(
           keepGroups: presentationChatStates
               .where((state) => state.hasUnreadMessage.value)
-              .map((state) => state.chat.guid)
+              .map((state) => conversationKeyFor(state.chat))
               .toList(),
         ),
       );
@@ -2174,20 +3991,30 @@ class ChatsService {
   /// Recalculate the global unread count based on all chat states
   void _recalculateUnreadCount() {
     _syncLogicalPresentationState();
-    final definition = _logicalDefinition;
-    final count = definition == null
-        ? chatStates.values.where((state) => state.hasUnreadMessage.value).length
-        : chatStates.values
-                  .where(
-                    (state) =>
-                        !definition.containsSourceRowId(state.chat.originalROWID) && state.hasUnreadMessage.value,
-                  )
-                  .length +
-              (LogicalConversationViewPolicy.logicalUnread(
-                    _logicalSourceChats(definition).map((chat) => chat.hasUnreadMessage ?? false),
-                  )
-                  ? 1
-                  : 0);
+    final registry = _logicalRegistry;
+    final nowEpochMs = DateTime.now().millisecondsSinceEpoch;
+    var count = chatStates.values
+        .where(
+          (state) =>
+              state.hasUnreadMessage.value &&
+              shouldCountPhysicalUnreadAsOrdinary(
+                certifiedSource: isApprovedLogicalSource(state.chat),
+                temporarilySuppressed: _isLogicalCandidateTemporarilySuppressed(
+                  state.chat,
+                  registry,
+                  nowEpochMs: nowEpochMs,
+                ),
+              ),
+        )
+        .length;
+    for (final entry in _logicalRegistry.entries) {
+      final sources = _logicalSourceChatsForEntry(entry);
+      final synchronized = _synchronizeLogicalUnreadState(logicalId: entry.logicalId, sourceSnapshot: sources);
+      final cached = synchronized ?? _logicalUnreadStates.stateFor(entry.logicalId);
+      if ((cached?.ledger.hasUnread ?? false) || sources.any((source) => source.hasUnreadMessage == true)) {
+        count++;
+      }
+    }
     if (unreadCount.value != count) {
       unreadCount.value = count;
     }
@@ -2245,20 +4072,22 @@ class ChatsService {
   /// reactive state avoids a race condition where the DB write for the new message
   /// has not yet completed when the chat list needs to be repositioned.
   int _sortCompare(Chat a, Chat b) {
-    final aIsPinned = a.isPinned ?? false;
-    final bIsPinned = b.isPinned ?? false;
+    final aIsPinned = isConversationPinned(a);
+    final bIsPinned = isConversationPinned(b);
+    final aPinIndex = conversationPinIndex(a);
+    final bPinIndex = conversationPinIndex(b);
 
     // Both pinned with an explicit order → sort by pinIndex.
-    if (aIsPinned && bIsPinned && a.pinIndex != null && b.pinIndex != null) {
-      return a.pinIndex!.compareTo(b.pinIndex!);
+    if (aIsPinned && bIsPinned && aPinIndex != null && bPinIndex != null) {
+      return aPinIndex.compareTo(bPinIndex);
     }
 
     // b is ordered-pinned, a is not → b comes first.
-    if (bIsPinned && b.pinIndex != null && (!aIsPinned || a.pinIndex == null)) {
+    if (bIsPinned && bPinIndex != null && (!aIsPinned || aPinIndex == null)) {
       return 1;
     }
     // a is ordered-pinned, b is not → a comes first.
-    if (aIsPinned && a.pinIndex != null && (!bIsPinned || b.pinIndex == null)) {
+    if (aIsPinned && aPinIndex != null && (!bIsPinned || bPinIndex == null)) {
       return -1;
     }
 
@@ -2356,8 +4185,17 @@ class ChatsService {
 
     final state = chatStates[updated.guid];
     if (state != null) {
-      if (isApprovedLogicalSource(updated) && _logicalAuthorityShapeChanged(state, updated)) {
-        invalidateLogicalAuthority('LOGICAL_SOURCE_AUTHORITY_SHAPE_CHANGED');
+      final authorityShapeChanged = _logicalAuthorityShapeChanged(state, updated);
+      if (authorityShapeChanged) {
+        if (_canAffectBuild99WriterAuthority(state.chat) || _canAffectBuild99WriterAuthority(updated)) {
+          _invalidateBuild99LogicalAuthority('LOGICAL_SOURCE_AUTHORITY_SHAPE_CHANGED');
+        }
+        final contextRelevant =
+            isApprovedLogicalSource(state.chat) ||
+            isApprovedLogicalSource(updated) ||
+            _logicalCandidateContextMatchForChat(state.chat).kind != LogicalCandidateContextMatchKind.none ||
+            _logicalCandidateContextMatchForChat(updated).kind != LogicalCandidateContextMatchKind.none;
+        if (contextRelevant) _scheduleLogicalCandidateReconciliation();
       }
       final currentLatestMessage = state.latestMessage.value;
       final currentPinIndex = state.pinIndex.value;
@@ -2397,11 +4235,28 @@ class ChatsService {
 
   Future<void> addChat(Chat toAdd, {bool immediate = false}) async {
     if (headless) return;
+    final isNewInventoryBinding = !chatStates.containsKey(toAdd.guid);
+    if (isNewInventoryBinding && _matchesCertifiedProviderProof(toAdd)) {
+      LogicalConversationDatabaseCertificateBinding.rebindActiveCertificates(
+        arrivingBindings: <LogicalConversationPhysicalChatBinding>[
+          LogicalConversationPhysicalChatBinding.fromProviderGuid(
+            sourceChatRowId: toAdd.originalROWID!,
+            sourceChatGuid: toAdd.guid,
+          ),
+        ],
+      );
+    }
     // A newly observed group chat can be a route candidate. Conservatively
     // invalidate admission state until a forced provider observation proves it.
     // Re-adding a known chat or observing a one-to-one chat cannot.
-    if (!chatStates.containsKey(toAdd.guid) && (toAdd.style == 43 || toAdd.style == null)) {
-      invalidateLogicalAuthority('PHYSICAL_CHAT_CANDIDATE_OBSERVED');
+    if (isNewInventoryBinding && _canAffectBuild99WriterAuthority(toAdd)) {
+      _invalidateBuild99LogicalAuthority('PHYSICAL_CHAT_CANDIDATE_OBSERVED');
+    }
+    if (isNewInventoryBinding &&
+        (isApprovedLogicalSource(toAdd) ||
+            toAdd.style == 43 ||
+            _logicalCandidateContextMatchForChat(toAdd).kind != LogicalCandidateContextMatchKind.none)) {
+      _scheduleLogicalCandidateReconciliation(delay: const Duration(milliseconds: 250));
     }
     // Check if chat already exists
     if (chatStates.containsKey(toAdd.guid)) {
@@ -2418,6 +4273,7 @@ class ChatsService {
     _insertChatSorted(toAdd);
 
     _refreshLogicalPresentation(immediate: immediate);
+    _observeLogicalInventoryTransitions(reportChanges: true);
 
     // _sortedChats isn't reactive; bump the list version so the UI rebuilds.
     _scheduleListVersionUpdate(immediate: immediate);
@@ -2425,10 +4281,10 @@ class ChatsService {
 
   void removeChat(Chat toRemove) {
     if (headless) return;
-    if (isApprovedLogicalSource(toRemove) || toRemove.style == 43 || toRemove.style == null) {
-      invalidateLogicalAuthority('PHYSICAL_CHAT_REMOVAL_OBSERVED');
+    if (_canAffectBuild99WriterAuthority(toRemove)) {
+      _invalidateBuild99LogicalAuthority('PHYSICAL_CHAT_REMOVAL_OBSERVED');
     }
-    if (isApprovedLogicalSource(toRemove)) return;
+    if (isPotentialLogicalSource(toRemove)) return;
     chatStates.remove(toRemove.guid);
     _sortedChats.removeWhere((c) => c.guid == toRemove.guid);
     _scheduleListVersionUpdate(immediate: true);
@@ -2439,11 +4295,27 @@ class ChatsService {
   /// otherwise every unread chat is marked, regardless of any active filter.
   Future<void> markAllAsRead({Set<String>? chatGuids}) async {
     try {
+      for (final entry in _logicalRegistry.entries) {
+        final definition = LogicalConversationViewPolicy.certificateForLogicalId(entry.logicalId);
+        if (definition == null) continue;
+        final sources = _logicalSourceChats(definition);
+        final presentation = _presentationChatForDefinition(definition);
+        if (presentation == null) continue;
+        final state = _synchronizeLogicalUnreadState(logicalId: entry.logicalId, sourceSnapshot: sources);
+        final selected =
+            chatGuids == null ||
+            chatGuids.contains(conversationKeyFor(presentation)) ||
+            sources.any((source) => chatGuids.contains(source.guid));
+        if (selected && state?.ledger.hasUnread == true) {
+          await markLogicalConversationRead(presentation);
+        }
+      }
+
       // Phase 1: instant UI update from in-memory state — no DB query needed
       final unreadStates = chatStates.values
           .where(
             (s) =>
-                !isApprovedLogicalSource(s.chat) &&
+                !isPotentialLogicalSource(s.chat) &&
                 s.hasUnreadMessage.value &&
                 (chatGuids == null || chatGuids.contains(s.chat.guid)),
           )
@@ -2475,8 +4347,8 @@ class ChatsService {
 
   void updateChatPinIndex(int oldIndex, int newIndex) {
     final chatList = getSortedChats();
-    final items = List<Chat>.from(chatList.where((c) => (c.pinIndex ?? -1) >= 0));
-    items.sort((a, b) => (a.pinIndex ?? 0).compareTo(b.pinIndex ?? 0));
+    final items = List<Chat>.from(chatList.where(isConversationPinned));
+    items.sort((a, b) => (conversationPinIndex(a) ?? 0).compareTo(conversationPinIndex(b) ?? 0));
 
     final item = items[oldIndex];
 
@@ -2485,35 +4357,19 @@ class ChatsService {
     items.removeAt(oldIndex);
     items.insert(newIndex + (oldIndex < newIndex ? -1 : 0), item);
 
-    // Move the pinIndex for each of the chats, and save the pinIndex in the DB
-    items.forEachIndexed((i, e) async {
-      e.pinIndex = i;
-      await e.saveAsync(updatePinIndex: true);
-
-      // Update chat state
-      final state = chatStates[e.guid];
-      if (state != null) {
-        state.pinIndex.value = i;
-      }
+    // Route through the logical ledger for certified conversations. Ordinary
+    // chats retain the existing database-backed setter behavior.
+    items.forEachIndexed((i, chat) {
+      unawaited(setChatPinIndex(chat, i).then((_) => _repositionChat(chat, immediate: true)));
     });
   }
 
   void removePinIndices() {
     final chatList = getSortedChats();
     // Create a snapshot to avoid concurrent modification during iteration
-    final pinnedChats = List<Chat>.from(chatList.where((c) => (c.pinIndex ?? -1) >= 0 && c.pinIndex != null));
-    for (var element in pinnedChats) {
-      element.pinIndex = null;
-      element.saveAsync(updatePinIndex: true);
-
-      // Update chat state
-      final state = chatStates[element.guid];
-      if (state != null) {
-        state.pinIndex.value = null;
-      }
-
-      // Trigger reposition to re-sort the chat
-      _repositionChat(element, immediate: true);
+    final pinnedChats = List<Chat>.from(chatList.where((chat) => conversationPinIndex(chat) != null));
+    for (final chat in pinnedChats) {
+      unawaited(setChatPinIndex(chat, null).then((_) => _repositionChat(chat, immediate: true)));
     }
   }
 
@@ -2521,12 +4377,51 @@ class ChatsService {
     if (Platform.isAndroid) {
       StartupTasks.waitForUI().then((_) async {
         // Create a snapshot to avoid concurrent modification during iteration
+        final registry = _logicalRegistry;
+        final physicalShortcutIds = <String>{};
+        final logicalShortcutIds = <LogicalConversationId>{};
+        final nowEpochMs = DateTime.now().millisecondsSinceEpoch;
+        final activeCandidateRefs = _logicalCandidateQuarantine
+            .recordsAt(nowEpochMs: nowEpochMs)
+            .where(
+              (record) =>
+                  logicalCandidatePresentationAdmission(phase: record.phase, admittedToActiveCertificate: false) ==
+                  LogicalCandidatePresentationAdmission.suppressPhysical,
+            )
+            .map((record) => record.candidate)
+            .toSet();
+        _scheduleLogicalCandidateQuarantinePersistence(nowEpochMs);
+        for (final state in chatStates.values) {
+          if (activeCandidateRefs.contains(PhysicalConversationRef.fromStablePhysicalGuid(state.chat.guid))) {
+            physicalShortcutIds.add(state.chat.guid);
+          }
+        }
+        for (final entry in registry.entries) {
+          final definition = LogicalConversationViewPolicy.certificateForLogicalId(entry.logicalId);
+          if (definition == null) continue;
+          physicalShortcutIds.addAll(_logicalSourceChats(definition).map((source) => source.guid));
+          logicalShortcutIds.add(entry.logicalId);
+        }
+        await MethodChannelSvc.actions.removeShareTargets(
+          candidateIds: LogicalPlatformCleanupPlan.shareTargetCandidates(physicalShortcutIds),
+          protectedIds: LogicalPlatformCleanupPlan.protectedShareTargetKeys(logicalShortcutIds),
+        );
+
+        // Cleanup is registry-wide and intentionally runs before the visible
+        // top-four snapshot. A certified or actively quarantined physical
+        // shortcut must not survive merely because its logical presentation
+        // is outside the current top four targets. Rejected/expired-visible
+        // candidates are deliberately absent and may be recreated ordinarily.
         final chatList = getSortedChats();
         final chatSnapshot = chatList.where((e) => !isNullOrEmpty(e.displayName ?? e.chatIdentifier)).take(4).toList();
         for (Chat c in chatSnapshot) {
           await MethodChannelSvc.actions.pushShareTarget(
             title: c.getTitle(),
             guid: c.guid,
+            conversationKey: conversationKeyFor(c),
+            legacyPhysicalGuids: isApprovedLogicalSource(c)
+                ? logicalSourceChatsFor(c).map((source) => source.guid).toList(growable: false)
+                : const <String>[],
             icon: await avatarAsBytes(chat: c, quality: 256),
           );
         }
@@ -2590,12 +4485,11 @@ class ChatsService {
 
   Future<void> _backfillApprovedLogicalSourceRows() async {
     if (kIsWeb) return;
-    final query = Database.chats
-        .query(Chat_.originalROWID.oneOf(LogicalConversationViewPolicy.activeCertificate.sourceChatRowIds.toList()))
-        .build();
+    final approvedSourceRows = LogicalConversationViewPolicy.approvedSourceRowIds;
+    final query = Database.chats.query(Chat_.originalROWID.oneOf(approvedSourceRows.toList())).build();
     final existingCount = query.count();
     query.close();
-    if (existingCount == LogicalConversationViewPolicy.activeCertificate.sourceChatRowIds.length) {
+    if (existingCount == approvedSourceRows.length) {
       return;
     }
 
@@ -2620,12 +4514,10 @@ class ChatsService {
           await ChatInterface.bulkSyncChats(chatsData: approved);
         }
 
-        final refreshedQuery = Database.chats
-            .query(Chat_.originalROWID.oneOf(LogicalConversationViewPolicy.activeCertificate.sourceChatRowIds.toList()))
-            .build();
+        final refreshedQuery = Database.chats.query(Chat_.originalROWID.oneOf(approvedSourceRows.toList())).build();
         final refreshedCount = refreshedQuery.count();
         refreshedQuery.close();
-        if (refreshedCount == LogicalConversationViewPolicy.activeCertificate.sourceChatRowIds.length) {
+        if (refreshedCount == approvedSourceRows.length) {
           return;
         }
         if (rawPage.length < batchSize) return;
@@ -2689,6 +4581,11 @@ class ChatsService {
     return _withLogicalHydrationLock(() => _hydrateLogicalMessageSources(chat, offset: offset, limit: limit));
   }
 
+  void _resetLogicalProjectionCursors(String logicalId) {
+    final prefix = '$logicalId:';
+    _logicalHydrationCursors.removeWhere((key, _) => key.startsWith(prefix));
+  }
+
   Future<void> _withLogicalHydrationLock(Future<void> Function() operation) async {
     while (_logicalHydrationMutex != null) {
       await _logicalHydrationMutex!.future;
@@ -2706,11 +4603,11 @@ class ChatsService {
   Future<void> _hydrateLogicalMessageSources(Chat chat, {required int offset, required int limit}) async {
     final sources = logicalSourceChatsFor(chat);
     if (sources.length == 1) return;
-    final definition = _logicalDefinition;
+    final definition = _logicalDefinitionForChat(chat);
     if (definition == null) return;
     final requiredDepth = offset + limit;
     for (final source in sources) {
-      final authorityRevision = currentLogicalAuthorityRevision?.authorityRevision ?? 'UNOBSERVED_AUTHORITY';
+      final authorityRevision = logicalProjectionAuthorityRevisionFor(source);
       final sourceEventWatermark = _logicalSourceEventWatermarks[source.guid] ?? 0;
       final memberBindingDigest = sha256.convert(utf8.encode('${source.originalROWID}\u0000${source.guid}')).toString();
       final identity = LogicalProjectionCacheIdentity(
@@ -2926,7 +4823,7 @@ class ChatsService {
   /// Set a chat as the active chat
   Future<void> setActiveChat(Chat chat, {bool clearNotifications = true}) async {
     chat = presentationChatFor(chat);
-    await PrefsSvc.messaging.setLastOpenedChat(chat.guid);
+    await PrefsSvc.messaging.setLastOpenedChat(conversationKeyFor(chat));
     setActiveChatSync(chat, clearNotifications: clearNotifications, save: false);
   }
 
@@ -2945,15 +4842,25 @@ class ChatsService {
     // Clear all other chats to inactive
     setAllInactiveSync(save: false, clearActive: false);
 
-    if (clearNotifications && !isLogicalConversation(chat)) {
+    if (clearNotifications) {
       // Defer the observable update to avoid updating during build phase
-      Future.microtask(() {
-        setChatHasUnread(chatState.chat, false, force: true);
-      });
+      unawaited(
+        Future<void>.microtask(() async {
+          try {
+            if (isLogicalConversation(chatState.chat)) {
+              await markLogicalConversationRead(chatState.chat);
+            } else {
+              await setChatHasUnread(chatState.chat, false, force: true);
+            }
+          } catch (error, trace) {
+            Logger.warn('View-entry read acknowledgement failed', error: error, trace: trace, tag: 'LogicalUnread');
+          }
+        }),
+      );
     }
 
     if (save) {
-      unawaited(PrefsSvc.messaging.setLastOpenedChat(chat.guid));
+      unawaited(PrefsSvc.messaging.setLastOpenedChat(conversationKeyFor(chat)));
     }
   }
 
@@ -2993,7 +4900,7 @@ class ChatsService {
   /// Set [deleteHandles] to true to also remove the chat's participant handles.
   Future<void> deleteChat(Chat chat, {bool deleteHandles = false}) async {
     if (kIsWeb) return;
-    if (isApprovedLogicalSource(chat)) return;
+    if (isPotentialLogicalSource(chat)) return;
 
     // Handle active chat cleanup
     if (activeChat?.chat.guid == chat.guid) {
@@ -3086,7 +4993,7 @@ class ChatsService {
   /// Soft delete a chat with full UI cleanup and service state management
   Future<void> softDeleteChat(Chat chat) async {
     if (kIsWeb) return;
-    if (isApprovedLogicalSource(chat)) return;
+    if (isPotentialLogicalSource(chat)) return;
 
     // Handle active chat cleanup
     if (activeChat?.chat.guid == chat.guid) {
@@ -3110,8 +5017,17 @@ class ChatsService {
   /// Undelete a chat
   Future<void> unDeleteChat(Chat chat) async {
     if (kIsWeb) return;
-    if (isApprovedLogicalSource(chat)) return;
+    if (isPotentialLogicalSource(chat)) return;
     await ChatInterface.unDeleteChat(chatData: chat.toMap());
+  }
+
+  /// Clears only an ordinary physical transcript. Protected source records are
+  /// observational provenance and are never rewritten through this UI action.
+  bool clearChatTranscript(Chat chat) {
+    if (kIsWeb || isPotentialLogicalSource(chat)) return false;
+    chat.clearTranscript();
+    EventDispatcherSvc.emit('refresh-messagebloc', {'chatGuid': chat.guid});
+    return true;
   }
 
   /// Toggle chat pin status with service updates
@@ -3241,7 +5157,23 @@ class ChatsService {
 
   /// Set chat pinned status
   Future<void> setChatPinned(Chat chat, bool value) async {
-    if (isApprovedLogicalSource(chat)) return;
+    if (isApprovedLogicalSource(chat)) {
+      final maxPinIndex = allChats
+          .where(isConversationPinned)
+          .map(conversationPinIndex)
+          .whereType<int>()
+          .fold<int>(-1, (maximum, index) => index > maximum ? index : maximum);
+      await _mutateLogicalSettings(
+        chat,
+        kind: 'pin',
+        value: value,
+        isPinned: value,
+        pinIndex: value ? maxPinIndex + 1 : null,
+        clearPinIndex: !value,
+      );
+      return;
+    }
+    if (isPotentialLogicalSource(chat)) return;
     final state = getChatState(chat.guid);
 
     if (state != null && state.isPinned.value == value) return;
@@ -3255,7 +5187,18 @@ class ChatsService {
 
   /// Set chat pin index
   Future<void> setChatPinIndex(Chat chat, int? value) async {
-    if (isApprovedLogicalSource(chat)) return;
+    if (isApprovedLogicalSource(chat)) {
+      await _mutateLogicalSettings(
+        chat,
+        kind: 'pin-index',
+        value: value,
+        isPinned: value != null,
+        pinIndex: value,
+        clearPinIndex: value == null,
+      );
+      return;
+    }
+    if (isPotentialLogicalSource(chat)) return;
     final state = getChatState(chat.guid);
 
     if (state != null && state.pinIndex.value == value) return;
@@ -3277,7 +5220,7 @@ class ChatsService {
     bool clearLocalNotifications = true,
     bool privateMark = true,
   }) async {
-    if (isApprovedLogicalSource(chat)) return;
+    if (isPotentialLogicalSource(chat)) return;
     final state = getChatState(chat.guid);
 
     if (state != null && state.hasUnreadMessage.value == value && !force) {
@@ -3299,7 +5242,11 @@ class ChatsService {
 
   /// Set chat muted status
   Future<void> setChatMuted(Chat chat, bool isMuted) async {
-    if (isApprovedLogicalSource(chat)) return;
+    if (isApprovedLogicalSource(chat)) {
+      await _mutateLogicalSettings(chat, kind: 'mute', value: isMuted, isMuted: isMuted);
+      return;
+    }
+    if (isPotentialLogicalSource(chat)) return;
     final state = getChatState(chat.guid);
 
     final newMuteType = isMuted ? "mute" : null;
@@ -3315,7 +5262,11 @@ class ChatsService {
 
   /// Set chat archived status
   Future<void> setChatArchived(Chat chat, bool value) async {
-    if (isApprovedLogicalSource(chat)) return;
+    if (isApprovedLogicalSource(chat)) {
+      await _mutateLogicalSettings(chat, kind: 'archive', value: value, isArchived: value);
+      return;
+    }
+    if (isPotentialLogicalSource(chat)) return;
     final state = getChatState(chat.guid);
 
     if (state != null && state.isArchived.value == value) return;
@@ -3329,7 +5280,7 @@ class ChatsService {
 
   /// Set chat auto send read receipts
   Future<void> setChatAutoSendReadReceipts(Chat chat, bool? value) async {
-    if (isApprovedLogicalSource(chat)) return;
+    if (isPotentialLogicalSource(chat)) return;
     final state = getChatState(chat.guid);
 
     if (state != null && state.autoSendReadReceipts.value == value) return;
@@ -3344,7 +5295,7 @@ class ChatsService {
 
   /// Set chat auto send typing indicators
   Future<void> setChatAutoSendTypingIndicators(Chat chat, bool? value) async {
-    if (isApprovedLogicalSource(chat)) return;
+    if (isPotentialLogicalSource(chat)) return;
     final state = getChatState(chat.guid);
 
     if (state != null && state.autoSendTypingIndicators.value == value) return;
@@ -3359,7 +5310,7 @@ class ChatsService {
 
   /// Set chat lock name status
   Future<void> setChatLockName(Chat chat, bool value) async {
-    if (isApprovedLogicalSource(chat)) return;
+    if (isPotentialLogicalSource(chat)) return;
     final state = getChatState(chat.guid);
 
     if (state != null && state.lockChatName.value == value) return;
@@ -3375,7 +5326,7 @@ class ChatsService {
 
   /// Set chat lock icon status
   Future<void> setChatLockIcon(Chat chat, bool value) async {
-    if (isApprovedLogicalSource(chat)) return;
+    if (isPotentialLogicalSource(chat)) return;
     final state = getChatState(chat.guid);
 
     if (state != null && state.lockChatIcon.value == value) return;
@@ -3391,7 +5342,7 @@ class ChatsService {
 
   /// Set chat display name
   Future<void> setChatDisplayName(Chat chat, String? value) async {
-    if (isApprovedLogicalSource(chat)) return;
+    if (isPotentialLogicalSource(chat)) return;
     final state = getChatState(chat.guid);
 
     if (state != null && state.displayName.value == value) return;
@@ -3408,7 +5359,7 @@ class ChatsService {
 
   /// Set chat custom avatar path
   Future<void> setChatCustomAvatarPath(Chat chat, String? value) async {
-    if (isApprovedLogicalSource(chat)) return;
+    if (isPotentialLogicalSource(chat)) return;
     final state = getChatState(chat.guid);
     final chatToUpdate = state?.chat ?? chat;
     final oldPath = chatToUpdate.customAvatarPath;
@@ -3433,7 +5384,7 @@ class ChatsService {
 
   /// Set chat custom background path
   Future<void> setChatCustomBackgroundPath(Chat chat, String? value) async {
-    if (isApprovedLogicalSource(chat)) return;
+    if (isPotentialLogicalSource(chat)) return;
     final state = getChatState(chat.guid);
     final resolvedPath = value ?? FilesystemSvc.getExistingChatBackgroundPath(chat.guid);
     final oldPath = state?.customBackgroundPath.value ?? FilesystemSvc.getExistingChatBackgroundPath(chat.guid);
@@ -3459,7 +5410,7 @@ class ChatsService {
 
   /// Set the custom light and dark themes for a specific chat.
   Future<void> setChatCustomThemes(Chat chat, {String? lightTheme, String? darkTheme}) async {
-    if (isApprovedLogicalSource(chat)) return;
+    if (isPotentialLogicalSource(chat)) return;
     final state = getChatState(chat.guid);
     final changed =
         state == null || state.customThemeLight.value != lightTheme || state.customThemeDark.value != darkTheme;
@@ -3539,7 +5490,7 @@ class ChatsService {
   /// ChatState is updated synchronously and is the source of truth for the UI.
   /// The DB write is fire-and-forget so callers never need to await this.
   Future<void> setChatTextFieldText(Chat chat, String? value) async {
-    if (isApprovedLogicalSource(chat)) return;
+    if (isPotentialLogicalSource(chat)) return;
     final state = getChatState(chat.guid);
 
     if (state != null && state.textFieldText.value == value) return;
@@ -3557,7 +5508,7 @@ class ChatsService {
   /// ChatState is updated synchronously and is the source of truth for the UI.
   /// The DB write is fire-and-forget so callers never need to await this.
   Future<void> setChatTextFieldAttachments(Chat chat, List<String> value) async {
-    if (isApprovedLogicalSource(chat)) return;
+    if (isPotentialLogicalSource(chat)) return;
     final state = getChatState(chat.guid);
 
     if (state != null && listEquals(state.textFieldAttachments, value)) return;
@@ -3576,6 +5527,7 @@ class ChatsService {
   // ========== End Chat Operations ==========
 
   void reset({bool reinitWatchers = false}) {
+    _invalidateKnownLogicalDraftPreviews();
     currentCount = 0;
     hasChats.value = false;
     _activeChat = null;
@@ -3586,6 +5538,13 @@ class ChatsService {
     webCachedHandles.clear();
     _logicalHydrationCursors.clear();
     _logicalSourceEventWatermarks.clear();
+    _logicalUnreadStates.clear();
+    _logicalMembershipAvailability.clear();
+    logicalMarkReadOutcome.value = null;
+    logicalReadSyncPending.value = false;
+    _logicalCandidateReconciliationTimer?.cancel();
+    _logicalCandidateReconciliationTimer = null;
+    _logicalCandidateReconciliationGeneration += 1;
 
     countSub?.cancel();
     if (reinitWatchers) {

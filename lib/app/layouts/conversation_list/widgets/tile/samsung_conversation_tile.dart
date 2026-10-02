@@ -30,7 +30,10 @@ class _SamsungConversationTileState extends CustomState<SamsungConversationTile,
 
   @override
   Widget build(BuildContext context) {
-    final leading = ChatLeading(controller: controller, unreadIcon: UnreadIcon(parentController: controller));
+    final leading = ChatLeading(
+      controller: controller,
+      unreadIcon: UnreadIcon(parentController: controller),
+    );
     final child = Material(
       color: Colors.transparent,
       child: InkWell(
@@ -38,30 +41,37 @@ class _SamsungConversationTileState extends CustomState<SamsungConversationTile,
         onTap: () => controller.onTap(context),
         onSecondaryTapUp: (details) => controller.onSecondaryTap(Get.context!, details),
         onLongPress: controller.onLongPress,
-        child: Obx(() => ListTile(
-              mouseCursor: MouseCursor.defer,
-              dense: SettingsSvc.settings.denseChatTiles.value,
-              visualDensity: SettingsSvc.settings.denseChatTiles.value ? VisualDensity.compact : null,
-              minVerticalPadding: SettingsSvc.settings.denseChatTiles.value ? 7.5 : 10,
-              title: Obx(() => ChatTitle(
+        child: Obx(
+          () => ListTile(
+            mouseCursor: MouseCursor.defer,
+            dense: SettingsSvc.settings.denseChatTiles.value,
+            visualDensity: SettingsSvc.settings.denseChatTiles.value ? VisualDensity.compact : null,
+            minVerticalPadding: SettingsSvc.settings.denseChatTiles.value ? 7.5 : 10,
+            title: Obx(
+              () => ChatTitle(
+                parentController: controller,
+                style: context.theme.textTheme.bodyLarge!.copyWith(
+                  fontWeight: controller.shouldHighlight.value ? FontWeight.w600 : null,
+                ),
+              ),
+            ),
+            subtitle:
+                controller.subtitle ??
+                Obx(
+                  () => ChatSubtitle(
                     parentController: controller,
-                    style: context.theme.textTheme.bodyLarge!.copyWith(
-                      fontWeight: controller.shouldHighlight.value ? FontWeight.w600 : null,
+                    style: context.theme.textTheme.bodyMedium!.copyWith(
+                      color: controller.shouldHighlight.value
+                          ? context.theme.colorScheme.onSurface
+                          : context.theme.colorScheme.outline,
+                      height: 1.5,
                     ),
-                  )),
-              subtitle: controller.subtitle ??
-                  Obx(() => ChatSubtitle(
-                        parentController: controller,
-                        style: context.theme.textTheme.bodyMedium!.copyWith(
-                          color: controller.shouldHighlight.value
-                              ? context.theme.colorScheme.onSurface
-                              : context.theme.colorScheme.outline,
-                          height: 1.5,
-                        ),
-                      )),
-              leading: leading,
-              trailing: SamsungTrailing(parentController: controller),
-            )),
+                  ),
+                ),
+            leading: leading,
+            trailing: SamsungTrailing(parentController: controller),
+          ),
+        ),
       ),
     );
 
@@ -75,10 +85,10 @@ class _SamsungConversationTileState extends CustomState<SamsungConversationTile,
             color: controller.isSelected
                 ? context.theme.colorScheme.primaryContainer.withValues(alpha: 0.5)
                 : shouldPartialHighlight
-                    ? context.theme.colorScheme.surfaceContainerHighest
-                    : shouldHighlight
-                        ? context.theme.colorScheme.primaryContainer
-                        : Colors.transparent,
+                ? context.theme.colorScheme.surfaceContainerHighest
+                : shouldHighlight
+                ? context.theme.colorScheme.primaryContainer
+                : Colors.transparent,
           ),
           duration: const Duration(milliseconds: 100),
           child: NavigationSvc.isAvatarOnly(context)
@@ -116,8 +126,8 @@ class _SamsungTrailingState extends CustomState<SamsungTrailing, void, Conversat
       final indicator = computeIndicatorText(chatState.latestMessageStatus.value, controller.chat.isGroup);
       final hasError = (message?.error ?? 0) > 0;
       final unread = chatState.hasUnreadMessage.value;
-      final muteType = chatState.muteType.value;
-      final isPinned = chatState.isPinned.value;
+      final isMuted = ChatsSvc.isConversationMuted(controller.chat);
+      final isPinned = ChatsSvc.isConversationPinned(controller.chat);
       return Padding(
         padding: const EdgeInsets.only(right: 3),
         child: Row(
@@ -126,27 +136,26 @@ class _SamsungTrailingState extends CustomState<SamsungTrailing, void, Conversat
           mainAxisSize: MainAxisSize.min,
           children: [
             Padding(
-                padding: const EdgeInsets.only(top: 1),
-                child: Text(
-                  hasError
-                      ? "Error"
-                      : "${indicator.isNotEmpty ? "$indicator\n" : ""}${buildDate(message?.dateCreated)}",
-                  textAlign: TextAlign.right,
-                  style: context.theme.textTheme.bodySmall!.copyWith(
-                    color: hasError
-                        ? context.theme.colorScheme.error
-                        : controller.shouldHighlight.value || unread
-                            ? context.theme.colorScheme.onSurface
-                            : context.theme.colorScheme.outline,
-                    fontWeight: controller.shouldHighlight.value ? FontWeight.w500 : null,
-                  ),
-                  overflow: TextOverflow.clip,
-                )),
+              padding: const EdgeInsets.only(top: 1),
+              child: Text(
+                hasError ? "Error" : "${indicator.isNotEmpty ? "$indicator\n" : ""}${buildDate(message?.dateCreated)}",
+                textAlign: TextAlign.right,
+                style: context.theme.textTheme.bodySmall!.copyWith(
+                  color: hasError
+                      ? context.theme.colorScheme.error
+                      : controller.shouldHighlight.value || unread
+                      ? context.theme.colorScheme.onSurface
+                      : context.theme.colorScheme.outline,
+                  fontWeight: controller.shouldHighlight.value ? FontWeight.w500 : null,
+                ),
+                overflow: TextOverflow.clip,
+              ),
+            ),
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 if (isPinned) const SizedBox(width: 5.0),
-                if (muteType == "mute")
+                if (isMuted)
                   Icon(
                     Icons.notifications_off,
                     color: controller.shouldHighlight.value || unread
@@ -154,7 +163,7 @@ class _SamsungTrailingState extends CustomState<SamsungTrailing, void, Conversat
                         : context.theme.colorScheme.outline,
                     size: 16,
                   ),
-                if (muteType == "mute") const SizedBox(width: 2.0),
+                if (isMuted) const SizedBox(width: 2.0),
                 if (isPinned) Icon(Icons.star, size: 16, color: context.theme.colorScheme.tertiary),
               ],
             ),
@@ -188,10 +197,7 @@ class _UnreadIconState extends CustomState<UnreadIcon, void, ConversationTileCon
       final unread = controller.chatState.hasUnreadMessage.value;
       return (unread)
           ? Container(
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: context.theme.colorScheme.primary,
-              ),
+              decoration: BoxDecoration(shape: BoxShape.circle, color: context.theme.colorScheme.primary),
               width: 15,
               height: 15,
             )

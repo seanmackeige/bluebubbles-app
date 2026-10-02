@@ -185,6 +185,11 @@ class _MessagePopupHolderState extends State<MessagePopupHolder> with ThemeHelpe
   }
 
   void sendTapback([String? type, int? part]) {
+    final chat = message.chat.target ?? ChatStateScope.chatOf(context);
+    if (ChatsSvc.isPotentialLogicalSource(chat) && !ChatsSvc.hasBuild99WriterCapability(chat)) {
+      return;
+    }
+
     HapticFeedback.lightImpact();
     final reaction = type ?? SettingsSvc.settings.quickTapbackType.value;
     Logger.info("Sending reaction type: $reaction");
@@ -206,7 +211,7 @@ class _MessagePopupHolderState extends State<MessagePopupHolder> with ThemeHelpe
 
     OutgoingMsgHandler.queue(
       OutgoingReaction(
-        chat: message.chat.target ?? ChatStateScope.chatOf(context),
+        chat: chat,
         message: tempMessage,
         selectedMessage: message,
         reaction: reaction,

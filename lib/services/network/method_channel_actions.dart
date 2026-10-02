@@ -15,10 +15,7 @@ class MethodChannelActions {
   }
 
   Future<void> openContactForm({required String address, required bool isEmail}) async {
-    await service.invokeMethod('open-contact-form', {
-      'address': address,
-      'address_type': isEmail ? 'email' : 'phone',
-    });
+    await service.invokeMethod('open-contact-form', {'address': address, 'address_type': isEmail ? 'email' : 'phone'});
   }
 
   Future<void> viewContactForm({required dynamic nativeContactId}) async {
@@ -29,11 +26,32 @@ class MethodChannelActions {
     await service.invokeMethod('open-calendar', {'date': dateEpochMillis});
   }
 
-  Future<void> pushShareTarget({required String title, required String guid, required Uint8List icon}) async {
+  Future<void> pushShareTarget({
+    required String title,
+    required String guid,
+    required Uint8List icon,
+    String? conversationKey,
+    List<String> legacyPhysicalGuids = const <String>[],
+  }) async {
     await service.invokeMethod('push-share-targets', {
       'title': title,
       'guid': guid,
       'icon': icon,
+      if (conversationKey != null) 'conversation_key': conversationKey,
+      'legacy_physical_guids': legacyPhysicalGuids,
+    });
+  }
+
+  Future<void> removeShareTargets({
+    required Iterable<String> candidateIds,
+    Iterable<String> protectedIds = const <String>[],
+  }) async {
+    final candidates = candidateIds.where((value) => value.isNotEmpty).toSet().toList()..sort();
+    if (candidates.isEmpty) return;
+    final protected = protectedIds.where((value) => value.isNotEmpty).toSet().toList()..sort();
+    await service.invokeMethod('push-share-targets', {
+      'remove_shortcut_ids': candidates,
+      'protected_shortcut_ids': protected,
     });
   }
 
@@ -65,10 +83,7 @@ class MethodChannelActions {
   }
 
   Future<void> deleteNotification({required int notificationId, String? tag}) async {
-    await service.invokeMethod('delete-notification', {
-      'notification_id': notificationId,
-      if (tag != null) 'tag': tag,
-    });
+    await service.invokeMethod('delete-notification', {'notification_id': notificationId, if (tag != null) 'tag': tag});
   }
 
   Future<String?> firebaseAuth({required Map<String, dynamic> fcmData}) async {
@@ -99,6 +114,9 @@ class MethodChannelActions {
     required String channelId,
     required int? chatId,
     required String chatGuid,
+    String? conversationKey,
+    String? sourceChatGuid,
+    String? notificationTag,
     required bool chatIsGroup,
     required String chatTitle,
     required Uint8List chatIcon,
@@ -108,6 +126,7 @@ class MethodChannelActions {
     required String messageText,
     required int messageDate,
     required bool messageIsFromMe,
+    required bool allowMutatingActions,
     required bool showReactionAction,
     required String reactionType,
   }) async {
@@ -115,6 +134,9 @@ class MethodChannelActions {
       'channel_id': channelId,
       'chat_id': chatId,
       'chat_guid': chatGuid,
+      if (conversationKey != null) 'conversation_key': conversationKey,
+      if (sourceChatGuid != null) 'source_chat_guid': sourceChatGuid,
+      if (notificationTag != null) 'notification_tag': notificationTag,
       'chat_is_group': chatIsGroup,
       'chat_title': chatTitle,
       'chat_icon': chatIcon,
@@ -124,6 +146,7 @@ class MethodChannelActions {
       'message_text': messageText,
       'message_date': messageDate,
       'message_is_from_me': messageIsFromMe,
+      'allow_mutating_actions': allowMutatingActions,
       'show_reaction_action': showReactionAction,
       'reaction_type': reactionType,
     });
@@ -158,9 +181,7 @@ class MethodChannelActions {
   }
 
   Future<void> updateUnifiedPushRegistration({required bool enabled}) async {
-    await service.invokeMethod('UnifiedPushHandler', {
-      'operation': enabled ? 'register' : 'unregister',
-    });
+    await service.invokeMethod('UnifiedPushHandler', {'operation': enabled ? 'register' : 'unregister'});
   }
 
   Future<void> saveFileToDownloads({

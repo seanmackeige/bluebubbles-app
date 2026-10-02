@@ -31,6 +31,7 @@ One instance per chat GUID. Accessed via `MessagesSvc(chatGuid)`.
 - `mostRecent` — the most recent message in the thread
 - `mostRecentReceived` — the most recent incoming message
 
+- Search-around loading for a logical presentation service queries every certified physical source and deduplicates only exact message GUIDs.
 **Rules:**
 - Never write `MessageState` fields directly from UI — always go through `MessagesService.updateMessage()`
 - Widgets should observe `messageUpdateTrigger[guid]` in an `Obx()` to know when to re-query state

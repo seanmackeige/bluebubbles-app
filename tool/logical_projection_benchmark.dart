@@ -5,7 +5,8 @@ import 'package:bluebubbles/services/ui/chat/logical_conversation_view.dart';
 
 const _historySize = 20000;
 const _sampleCount = 5;
-const _memberRowIds = <int>[2027, 2155, 2156];
+const _memberRowIds = <int>[101, 102, 103];
+const _currentSyntheticMemberRowId = 103;
 
 class _BenchmarkEvent {
   const _BenchmarkEvent({
@@ -231,7 +232,7 @@ List<_EventCase> _eventCases(List<_BenchmarkEvent> history) {
       mutation: 'append',
       event: _BenchmarkEvent(
         id: 'event-normal-append',
-        sourceRowId: 2156,
+        sourceRowId: _currentSyntheticMemberRowId,
         timestamp: nextTimestamp,
         eventClass: LogicalProjectionEventClass.normalMessage,
         payloadVersion: 1,
@@ -243,7 +244,7 @@ List<_EventCase> _eventCases(List<_BenchmarkEvent> history) {
       mutation: 'append',
       event: _BenchmarkEvent(
         id: 'event-reaction-append',
-        sourceRowId: 2156,
+        sourceRowId: _currentSyntheticMemberRowId,
         timestamp: nextTimestamp + 1000,
         eventClass: LogicalProjectionEventClass.reaction,
         payloadVersion: 1,
@@ -256,7 +257,7 @@ List<_EventCase> _eventCases(List<_BenchmarkEvent> history) {
       mutation: 'append',
       event: _BenchmarkEvent(
         id: 'event-reply-append',
-        sourceRowId: 2156,
+        sourceRowId: _currentSyntheticMemberRowId,
         timestamp: nextTimestamp + 2000,
         eventClass: LogicalProjectionEventClass.reply,
         payloadVersion: 1,
@@ -485,7 +486,7 @@ void _warmUp(List<_BenchmarkEvent> history) {
     subset,
     _BenchmarkEvent(
       id: 'warm-up-event',
-      sourceRowId: 2156,
+      sourceRowId: _currentSyntheticMemberRowId,
       timestamp: subset.last.timestamp + 1000,
       eventClass: LogicalProjectionEventClass.normalMessage,
       payloadVersion: 1,

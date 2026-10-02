@@ -27,3 +27,15 @@
 ## Triggering Notifications
 Called from `IncomingMessageHandler` when a new message arrives, and from `ScheduledMessage` reminders.
 Don't call directly from UI code — route through the handler/service layer.
+
+## Logical Conversation Identity
+
+- `conversation_key` is the stable notification/group/shortcut identity. Derive it from
+  `ChatsSvc.conversationKeyFor(presentationChat)`. Derive the positive Android ID from
+  `LogicalNotificationIdentity.fromLogicalId(ChatsSvc.conversationIdentityFor(presentationChat))`.
+- `chat_guid` remains a compatible physical navigation route; `source_chat_guid` records
+  the physical source that produced the notification; `message_guid` remains exact.
+- Legacy Android/desktop payloads omit the logical key and must default to `chat_guid`.
+- Evaluate mute state on the current presentation chat, never only on an incoming member.
+- Desktop reply and mark-read actions resolve the current presentation chat and use the
+  existing logical mutation admission. Never report an unqualified logical read as success.

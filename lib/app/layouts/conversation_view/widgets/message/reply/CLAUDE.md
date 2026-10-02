@@ -20,6 +20,8 @@ Displays reply threading: the quoted preview above a message and the thread conn
 
 `ReplyLineDecoration` wraps `CustomPaint(_ReplyLinePainter)` to draw a vertical line connecting a series of replies. Only rendered when `iOS == true` and `message.threadOriginatorGuid != null`.
 
+- Logical reply threads retain only messages whose physical chat is in `ChatsSvc.logicalSourceChatsFor`.
+- Logical bookmark queries cover every certified source GUID and still navigate through the presentation service.
 ## Thread Popup
 
 `ReplyThreadPopup` is a bottom sheet / modal that shows all messages with the same `threadOriginatorGuid`. Opened from `MessageProperties` when the user taps the reply-count badge.

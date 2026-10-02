@@ -2,7 +2,6 @@ import 'package:bluebubbles/app/state/message_state.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
-import 'package:bluebubbles/services/ui/chat/logical_conversation_route.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -37,6 +36,7 @@ class MessageErrorDialog extends StatelessWidget {
     required this.onRemove,
     required this.chatId,
     this.retryAllowed = true,
+    this.removeAllowed = true,
   });
 
   final int errorCode;
@@ -45,6 +45,7 @@ class MessageErrorDialog extends StatelessWidget {
   final VoidCallback onRemove;
   final int chatId;
   final bool retryAllowed;
+  final bool removeAllowed;
 
   @override
   Widget build(BuildContext context) {
@@ -69,17 +70,18 @@ class MessageErrorDialog extends StatelessWidget {
               onRetry();
             },
           ),
-        TextButton(
-          child: Text(
-            "Remove",
-            style: context.theme.textTheme.bodyLarge!.copyWith(color: Get.context!.theme.colorScheme.primary),
+        if (removeAllowed)
+          TextButton(
+            child: Text(
+              "Remove",
+              style: context.theme.textTheme.bodyLarge!.copyWith(color: Get.context!.theme.colorScheme.primary),
+            ),
+            onPressed: () async {
+              Navigator.of(context).pop();
+              onRemove();
+              await NotificationsSvc.clearFailedToSend(chatId);
+            },
           ),
-          onPressed: () async {
-            Navigator.of(context).pop();
-            onRemove();
-            await NotificationsSvc.clearFailedToSend(chatId);
-          },
-        ),
         TextButton(
           child: Text(
             "Cancel",
@@ -97,12 +99,18 @@ class MessageErrorDialog extends StatelessWidget {
 
 /// Shared retry logic for reactions
 Future<void> retryReaction({required Message reaction, required Chat chat, required Message selected}) async {
+  // A non-writer certified conversation is read-only and must not inspect the
+  // banked ambiguity ledger while declining a retry. Candidate and corrupt
+  // authority states share the same fail-closed boundary.
+  if (ChatsSvc.isPotentialLogicalSource(chat) && !ChatsSvc.hasBuild99WriterCapability(chat)) {
+    return;
+  }
   final ledger = LogicalAdmissionLedger.fromEntries(PrefsSvc.messaging.loadLogicalAdmissionLedger());
   final previouslyAdmitted = ledger.containsTransportTempGuid(reaction.guid ?? '');
   if (previouslyAdmitted || ChatsSvc.isApprovedLogicalSource(chat)) {
-    ChatsSvc.logicalRouteRuntimeStatus.value = LogicalRouteRuntimeStatus(
-      stage: LogicalRouteRuntimeStage.routeNotProven,
-      reason: previouslyAdmitted
+    ChatsSvc.publishBuild99WriterBlocked(
+      chat,
+      previouslyAdmitted
           ? 'LOGICAL_RETRY_ALREADY_ADMITTED_OR_OUTCOME_UNKNOWN'
           : 'LOGICAL_RETRY_LEGACY_OR_UNTRACKED_OUTCOME',
     );
@@ -139,6 +147,7 @@ Future<void> retryReaction({required Message reaction, required Chat chat, requi
 
 /// Shared remove logic for reactions
 Future<void> removeReaction({required Message reaction, required Chat chat}) async {
+  if (ChatsSvc.isPotentialLogicalSource(chat)) return;
   // Delete the message from DB and service
   await MessagesSvc(chat.guid).deleteMessage(reaction);
 

@@ -8,15 +8,10 @@ class ChatCreatorDialogs {
     return showBBDialog(
       barrierDismissible: false,
       context: context,
-      title: "Group Chat Creation",
+      title: "Group creation unavailable",
       body:
-          "Creating group chats from BlueBubbles is not possible on macOS 11 (Big Sur) and later due to limitations from Apple. You must setup the Private API to gain this feature.",
-      actions: [
-        BBDialogAction(
-          text: "Close",
-          onPressed: () => Navigator.of(context, rootNavigator: true).pop(),
-        ),
-      ],
+          "Sean Edition cannot safely create a new group because the exact sending account and caller identity cannot be guaranteed. Existing conversations remain available.",
+      actions: [BBDialogAction(text: "Close", onPressed: () => Navigator.of(context, rootNavigator: true).pop())],
     );
   }
 
@@ -26,11 +21,7 @@ class ChatCreatorDialogs {
       title: "Cannot Forward Attachment",
       body: "Attachments cannot be forwarded to a new conversation. Please select an existing contact.",
       actions: [
-        BBDialogAction(
-          text: "OK",
-          isDefault: true,
-          onPressed: () => Navigator.of(context, rootNavigator: true).pop(),
-        ),
+        BBDialogAction(text: "OK", isDefault: true, onPressed: () => Navigator.of(context, rootNavigator: true).pop()),
       ],
     );
   }
@@ -38,10 +29,7 @@ class ChatCreatorDialogs {
   static Widget buildCreatingChatDialog(BuildContext context, String method) {
     return AlertDialog(
       backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-      title: Text(
-        "Creating a new $method chat...",
-        style: context.theme.textTheme.titleLarge,
-      ),
+      title: Text("Creating a new $method chat...", style: context.theme.textTheme.titleLarge),
       content: SizedBox(
         height: 70,
         child: Center(
@@ -57,10 +45,7 @@ class ChatCreatorDialogs {
   static Widget buildCreateChatErrorDialog(BuildContext context, Object error) {
     return AlertDialog(
       backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-      title: Text(
-        "Failed to create chat!",
-        style: context.theme.textTheme.titleLarge,
-      ),
+      title: Text("Failed to create chat!", style: context.theme.textTheme.titleLarge),
       content: Text(
         error is Response
             ? "Reason: (${error.data["error"]["type"]}) -> ${error.data["error"]["message"]}"
@@ -69,10 +54,12 @@ class ChatCreatorDialogs {
       ),
       actions: [
         TextButton(
-          child: Text("OK",
-              style: context.theme.textTheme.bodyLarge!.copyWith(color: Get.context!.theme.colorScheme.primary)),
+          child: Text(
+            "OK",
+            style: context.theme.textTheme.bodyLarge!.copyWith(color: Get.context!.theme.colorScheme.primary),
+          ),
           onPressed: () => Navigator.of(context).pop(),
-        )
+        ),
       ],
     );
   }

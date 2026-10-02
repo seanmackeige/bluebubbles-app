@@ -59,10 +59,11 @@ class CupertinoConversationListState extends State<CupertinoConversationList> wi
           ? Colors.transparent
           : context.theme.colorScheme.surface,
       extendBodyBehindAppBar: !showArchived && !showUnknown,
-      floatingActionButton: Obx(() =>
-          !SettingsSvc.settings.moveChatCreatorToHeader.value && !showArchived && !showUnknown
-              ? ConversationListFAB(parentController: controller)
-              : const SizedBox.shrink()),
+      floatingActionButton: Obx(
+        () => !SettingsSvc.settings.moveChatCreatorToHeader.value && !showArchived && !showUnknown
+            ? ConversationListFAB(parentController: controller)
+            : const SizedBox.shrink(),
+      ),
       appBar: showArchived || showUnknown
           ? BBAppBar(
               titleText: showArchived ? "Archive" : "Unknown Senders",
@@ -76,47 +77,49 @@ class CupertinoConversationListState extends State<CupertinoConversationList> wi
           ScrollbarWrapper(
             showScrollbar: true,
             controller: controller.iosScrollController,
-            child: Obx(() => CustomScrollView(
-                  controller: controller.iosScrollController,
-                  physics: ThemeSvc.scrollPhysics,
-                  slivers: <Widget>[
-                    if (!showArchived && !showUnknown) CupertinoHeader(controller: controller),
-                    if (!showArchived && !showUnknown)
-                      const SliverToBoxAdapter(child: CustomGroupFilterChipRow()),
-                    Obx(() {
-                      // Force reactivity by accessing observable values first
-                      // ignore: unused_local_variable
-                      final loaded = ChatsSvc.loadedFirstChatBatch.value;
-                      // Observe chatListVersion so pinned section rebuilds when a chat is pinned/unpinned
-                      // ignore: unused_local_variable
-                      final _version = ChatsSvc.chatListVersion.value;
-                      NavigationSvc.listener.value;
-                      final _chats = ChatsSvc.getFilteredChats(
-                          showArchived: showArchived,
-                          showUnknown: showUnknown,
-                          pinnedOnly: true,
-                          filters: ChatsSvc.chatListFilters.value);
+            child: Obx(
+              () => CustomScrollView(
+                controller: controller.iosScrollController,
+                physics: ThemeSvc.scrollPhysics,
+                slivers: <Widget>[
+                  if (!showArchived && !showUnknown) CupertinoHeader(controller: controller),
+                  if (!showArchived && !showUnknown) const SliverToBoxAdapter(child: CustomGroupFilterChipRow()),
+                  Obx(() {
+                    // Force reactivity by accessing observable values first
+                    // ignore: unused_local_variable
+                    final loaded = ChatsSvc.loadedFirstChatBatch.value;
+                    // Observe chatListVersion so pinned section rebuilds when a chat is pinned/unpinned
+                    // ignore: unused_local_variable
+                    final _version = ChatsSvc.chatListVersion.value;
+                    NavigationSvc.listener.value;
+                    final _chats = ChatsSvc.getFilteredChats(
+                      showArchived: showArchived,
+                      showUnknown: showUnknown,
+                      pinnedOnly: true,
+                      filters: ChatsSvc.chatListFilters.value,
+                    );
 
-                      if (_chats.isEmpty) {
-                        return const SliverToBoxAdapter(child: SizedBox.shrink());
-                      }
+                    if (_chats.isEmpty) {
+                      return const SliverToBoxAdapter(child: SizedBox.shrink());
+                    }
 
-                      int rowCount = context.mediaQuery.orientation == Orientation.portrait || kIsDesktop
-                          ? SettingsSvc.settings.pinRowsPortrait.value
-                          : SettingsSvc.settings.pinRowsLandscape.value;
-                      int colCount = kIsDesktop
-                          ? SettingsSvc.settings.pinColumnsLandscape.value
-                          : SettingsSvc.settings.pinColumnsPortrait.value;
-                      int pinCount = _chats.length;
-                      int usedRowCount = min((pinCount / colCount).ceil(), rowCount);
-                      int maxOnPage = rowCount * colCount;
-                      PageController _controller = PageController();
-                      int _pageCount = (pinCount / maxOnPage).ceil();
+                    int rowCount = context.mediaQuery.orientation == Orientation.portrait || kIsDesktop
+                        ? SettingsSvc.settings.pinRowsPortrait.value
+                        : SettingsSvc.settings.pinRowsLandscape.value;
+                    int colCount = kIsDesktop
+                        ? SettingsSvc.settings.pinColumnsLandscape.value
+                        : SettingsSvc.settings.pinColumnsPortrait.value;
+                    int pinCount = _chats.length;
+                    int usedRowCount = min((pinCount / colCount).ceil(), rowCount);
+                    int maxOnPage = rowCount * colCount;
+                    PageController _controller = PageController();
+                    int _pageCount = (pinCount / maxOnPage).ceil();
 
-                      return SliverPadding(
-                        padding: const EdgeInsets.only(top: 10),
-                        sliver: SliverToBoxAdapter(
-                          child: LayoutBuilder(builder: (BuildContext context, BoxConstraints constraints) {
+                    return SliverPadding(
+                      padding: const EdgeInsets.only(top: 10),
+                      sliver: SliverToBoxAdapter(
+                        child: LayoutBuilder(
+                          builder: (BuildContext context, BoxConstraints constraints) {
                             // Horizontal overhead per tile: margins (4+4) + padding (11+11) + extra gap
                             const double tileHOverhead = 42.0;
                             // Vertical overhead per tile: AnimatedContainer margins (top:1) + padding (4+2)
@@ -128,8 +131,11 @@ class CupertinoConversationListState extends State<CupertinoConversationList> wi
                             // Derive a clean, capped avatar size from the actual available width
                             final double rawAvatarSize =
                                 (constraints.maxWidth - pageHPadding - colCount * tileHOverhead) / colCount;
-                            final double avatarSize =
-                                clampDouble(rawAvatarSize, 70.0, Platform.isAndroid ? 120.0 : 140.0);
+                            final double avatarSize = clampDouble(
+                              rawAvatarSize,
+                              70.0,
+                              Platform.isAndroid ? 120.0 : 140.0,
+                            );
                             final double tileWidth = avatarSize + tileHOverhead;
 
                             final TextStyle style = context.theme.textTheme.bodyMedium!;
@@ -146,13 +152,13 @@ class CupertinoConversationListState extends State<CupertinoConversationList> wi
                                     shrinkWrap: true,
                                     itemCount: _chats.length,
                                     findChildIndexCallback: (key) =>
-                                        findChildIndexByKey(_chats, key, (item) => item.guid),
+                                        findChildIndexByKey(_chats, key, ChatsSvc.conversationKeyFor),
                                     itemBuilder: (context, index) {
                                       final chat = _chats[index];
                                       return Center(
                                         heightFactor: 1,
                                         child: ConversationTile(
-                                          key: Key(chat.guid),
+                                          key: Key(ChatsSvc.conversationKeyFor(chat)),
                                           chat: chat,
                                           controller: controller,
                                         ),
@@ -166,7 +172,7 @@ class CupertinoConversationListState extends State<CupertinoConversationList> wi
                                       thickness: 2,
                                       height: 2,
                                     ),
-                                  )
+                                  ),
                                 ],
                               );
                             }
@@ -183,8 +189,10 @@ class CupertinoConversationListState extends State<CupertinoConversationList> wi
                                     itemCount: _pageCount,
                                     itemBuilder: (context, pageIndex) {
                                       final int start = pageIndex * maxOnPage;
-                                      final List<Chat> pageChats =
-                                          _chats.sublist(start, min(start + maxOnPage, pinCount));
+                                      final List<Chat> pageChats = _chats.sublist(
+                                        start,
+                                        min(start + maxOnPage, pinCount),
+                                      );
 
                                       return Padding(
                                         padding: const EdgeInsets.symmetric(horizontal: 10),
@@ -192,19 +200,22 @@ class CupertinoConversationListState extends State<CupertinoConversationList> wi
                                           mainAxisAlignment: MainAxisAlignment.center,
                                           children: List.generate(usedRowCount, (rowIndex) {
                                             final int rowStart = rowIndex * colCount;
-                                            final List<Chat> rowChats =
-                                                pageChats.skip(rowStart).take(colCount).toList();
+                                            final List<Chat> rowChats = pageChats
+                                                .skip(rowStart)
+                                                .take(colCount)
+                                                .toList();
                                             final bool singleRow = usedRowCount == 1;
 
                                             return Row(
-                                              mainAxisAlignment:
-                                                  singleRow ? MainAxisAlignment.center : MainAxisAlignment.start,
+                                              mainAxisAlignment: singleRow
+                                                  ? MainAxisAlignment.center
+                                                  : MainAxisAlignment.start,
                                               children: [
                                                 for (final chat in rowChats)
                                                   SizedBox(
                                                     width: tileWidth,
                                                     child: PinnedConversationTile(
-                                                      key: Key(chat.guid),
+                                                      key: Key(ChatsSvc.conversationKeyFor(chat)),
                                                       chat: chat,
                                                       avatarSize: avatarSize,
                                                       controller: controller,
@@ -233,10 +244,10 @@ class CupertinoConversationListState extends State<CupertinoConversationList> wi
                                         controller: _controller,
                                         onDotClicked: kIsDesktop || kIsWeb
                                             ? (page) => _controller.animateToPage(
-                                                  page,
-                                                  curve: Curves.linear,
-                                                  duration: const Duration(milliseconds: 150),
-                                                )
+                                                page,
+                                                curve: Curves.linear,
+                                                duration: const Duration(milliseconds: 150),
+                                              )
                                             : null,
                                         effect: ColorTransitionEffect(
                                           activeDotColor: context.theme.colorScheme.primary,
@@ -250,106 +261,105 @@ class CupertinoConversationListState extends State<CupertinoConversationList> wi
                                   ),
                               ],
                             );
-                          }),
+                          },
+                        ),
+                      ),
+                    );
+                  }),
+                  Obx(() {
+                    // Force reactivity by accessing observable values first
+                    final loaded = ChatsSvc.loadedFirstChatBatch.value;
+                    // Observe chat list version to trigger rebuild when order changes
+                    final _ = ChatsSvc.chatListVersion.value;
+                    final _chats = ChatsSvc.getFilteredChats(
+                      showArchived: showArchived,
+                      showUnknown: showUnknown,
+                      excludePinned: true,
+                      filters: ChatsSvc.chatListFilters.value,
+                    );
+
+                    if (!loaded || _chats.isEmpty) {
+                      return SliverToBoxAdapter(
+                        child: Center(
+                          child: Padding(
+                            padding: const EdgeInsets.only(top: 50.0),
+                            child: loaded
+                                ? buildEmptyChatListState(
+                                    context,
+                                    showArchived: showArchived,
+                                    showUnknown: showUnknown,
+                                    filters: ChatsSvc.chatListFilters.value,
+                                  )
+                                : Column(
+                                    children: [
+                                      Padding(
+                                        padding: const EdgeInsets.all(8.0),
+                                        child: Text(
+                                          "Loading chats...",
+                                          style: context.textTheme.labelLarge,
+                                          textAlign: TextAlign.center,
+                                        ),
+                                      ),
+                                      buildProgressIndicator(context, size: 15),
+                                    ],
+                                  ),
+                          ),
                         ),
                       );
-                    }),
-                    Obx(() {
-                      // Force reactivity by accessing observable values first
-                      final loaded = ChatsSvc.loadedFirstChatBatch.value;
-                      // Observe chat list version to trigger rebuild when order changes
-                      final _ = ChatsSvc.chatListVersion.value;
-                      final _chats = ChatsSvc.getFilteredChats(
-                          showArchived: showArchived,
-                          showUnknown: showUnknown,
-                          excludePinned: true,
-                          filters: ChatsSvc.chatListFilters.value);
+                    }
 
-                      if (!loaded || _chats.isEmpty) {
-                        return SliverToBoxAdapter(
-                          child: Center(
-                            child: Padding(
-                              padding: const EdgeInsets.only(top: 50.0),
-                              child: loaded
-                                  ? buildEmptyChatListState(context,
-                                      showArchived: showArchived,
-                                      showUnknown: showUnknown,
-                                      filters: ChatsSvc.chatListFilters.value)
-                                  : Column(
-                                      children: [
-                                        Padding(
-                                          padding: const EdgeInsets.all(8.0),
-                                          child: Text(
-                                            "Loading chats...",
-                                            style: context.textTheme.labelLarge,
-                                            textAlign: TextAlign.center,
-                                          ),
-                                        ),
-                                        buildProgressIndicator(context, size: 15),
-                                      ],
+                    return SliverPadding(
+                      // Bottom padding is 20 to account for the bottom pill bar.
+                      padding: const EdgeInsets.only(top: 10, bottom: 20),
+                      sliver: SliverList(
+                        delegate: SliverChildBuilderDelegate((context, index) {
+                          final chat = ChatsSvc.findChatByGuid(_chats[index].guid)!;
+
+                          // No need for Obx here - ConversationTile handles its own reactivity
+                          final child = ConversationTile(
+                            key: Key(ChatsSvc.conversationKeyFor(chat)),
+                            chat: chat,
+                            controller: controller,
+                          );
+
+                          final separator = Obx(
+                            () => !SettingsSvc.settings.hideDividers.value
+                                ? Padding(
+                                    padding: EdgeInsets.only(left: SettingsSvc.settings.denseChatTiles.value ? 70 : 82),
+                                    child: Divider(
+                                      color: context.theme.colorScheme.outline.withValues(alpha: 0.4),
+                                      thickness: 0.5,
+                                      height: 0.5,
                                     ),
-                            ),
-                          ),
-                        );
-                      }
+                                  )
+                                : const SizedBox.shrink(),
+                          );
 
-                      return SliverPadding(
-                        // Bottom padding is 20 to account for the bottom pill bar.
-                        padding: const EdgeInsets.only(top: 10, bottom: 20),
-                        sliver: SliverList(
-                          delegate: SliverChildBuilderDelegate(
-                            (context, index) {
-                              final chat = ChatsSvc.findChatByGuid(_chats[index].guid)!;
-
-                              // No need for Obx here - ConversationTile handles its own reactivity
-                              final child = ConversationTile(
-                                key: Key(chat.guid),
-                                chat: chat,
-                                controller: controller,
-                              );
-
-                              final separator = Obx(() => !SettingsSvc.settings.hideDividers.value
-                                  ? Padding(
-                                      padding:
-                                          EdgeInsets.only(left: SettingsSvc.settings.denseChatTiles.value ? 70 : 82),
-                                      child: Divider(
-                                        color: context.theme.colorScheme.outline.withValues(alpha: 0.4),
-                                        thickness: 0.5,
-                                        height: 0.5,
-                                      ),
-                                    )
-                                  : const SizedBox.shrink());
-
-                              final topDivider = index == 0
-                                  ? const SizedBox.shrink()
-                                  : Obx(() => !SettingsSvc.settings.hideDividers.value
+                          final topDivider = index == 0
+                              ? const SizedBox.shrink()
+                              : Obx(
+                                  () => !SettingsSvc.settings.hideDividers.value
                                       ? Padding(
                                           padding: EdgeInsets.only(
-                                              left: SettingsSvc.settings.denseChatTiles.value ? 70 : 82),
+                                            left: SettingsSvc.settings.denseChatTiles.value ? 70 : 82,
+                                          ),
                                           child: Divider(
                                             color: context.theme.colorScheme.outline.withValues(alpha: 0.4),
                                             thickness: 0.5,
                                             height: 0.5,
                                           ),
                                         )
-                                      : const SizedBox.shrink());
+                                      : const SizedBox.shrink(),
+                                );
 
-                              return Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  topDivider,
-                                  child,
-                                  separator,
-                                ],
-                              );
-                            },
-                            childCount: _chats.length,
-                          ),
-                        ),
-                      );
-                    }),
-                  ],
-                )),
+                          return Column(mainAxisSize: MainAxisSize.min, children: [topDivider, child, separator]);
+                        }, childCount: _chats.length),
+                      ),
+                    );
+                  }),
+                ],
+              ),
+            ),
           ),
           if (!showArchived && !showUnknown) CupertinoMiniHeader(controller: controller),
         ],

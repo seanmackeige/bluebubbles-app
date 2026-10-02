@@ -51,11 +51,13 @@ Future<void> createContact(MessagePopupActionContext ctx) async {
 }
 
 Future<void> unsend(MessagePopupActionContext ctx) async {
+  if (ChatsSvc.isPotentialLogicalSource(ctx.chat)) return;
   ctx.popDetails();
   await MessagesSvc(ctx.chat.guid).unsendMessage(ctx.message, ctx.part.part);
 }
 
 void edit(MessagePopupActionContext ctx) {
+  if (ChatsSvc.isPotentialLogicalSource(ctx.chat)) return;
   ctx.popDetails();
   final FocusNode? node = kIsDesktop || kIsWeb ? FocusNode() : null;
   ctx.cvController.editing.add(
@@ -68,6 +70,7 @@ void edit(MessagePopupActionContext ctx) {
 }
 
 Future<void> delete(MessagePopupActionContext ctx) async {
+  if (ChatsSvc.isPotentialLogicalSource(ctx.chat)) return;
   await ctx.service.deleteMessage(ctx.message);
   ctx.popDetails();
 }
@@ -81,6 +84,7 @@ void selectMultiple(MessagePopupActionContext ctx) {
 }
 
 void toggleBookmark(MessagePopupActionContext ctx) {
+  if (ChatsSvc.isPotentialLogicalSource(ctx.chat)) return;
   MessagesSvc(ctx.cvController.chat.guid).toggleBookmark(ctx.message);
   ctx.popDetails();
 }
@@ -89,19 +93,22 @@ void messageInfo(MessagePopupActionContext ctx) {
   const encoder = JsonEncoder.withIndent("     ");
   final Map map = ctx.message.toMap();
   if (map["dateCreated"] is int) {
-    map["dateCreated"] =
-        DateFormat("MMMM d, yyyy h:mm:ss a").format(DateTime.fromMillisecondsSinceEpoch(map["dateCreated"]));
+    map["dateCreated"] = DateFormat(
+      "MMMM d, yyyy h:mm:ss a",
+    ).format(DateTime.fromMillisecondsSinceEpoch(map["dateCreated"]));
   }
   if (map["dateDelivered"] is int) {
-    map["dateDelivered"] =
-        DateFormat("MMMM d, yyyy h:mm:ss a").format(DateTime.fromMillisecondsSinceEpoch(map["dateDelivered"]));
+    map["dateDelivered"] = DateFormat(
+      "MMMM d, yyyy h:mm:ss a",
+    ).format(DateTime.fromMillisecondsSinceEpoch(map["dateDelivered"]));
   }
   if (map["dateRead"] is int) {
     map["dateRead"] = DateFormat("MMMM d, yyyy h:mm:ss a").format(DateTime.fromMillisecondsSinceEpoch(map["dateRead"]));
   }
   if (map["dateEdited"] is int) {
-    map["dateEdited"] =
-        DateFormat("MMMM d, yyyy h:mm:ss a").format(DateTime.fromMillisecondsSinceEpoch(map["dateEdited"]));
+    map["dateEdited"] = DateFormat(
+      "MMMM d, yyyy h:mm:ss a",
+    ).format(DateTime.fromMillisecondsSinceEpoch(map["dateEdited"]));
   }
   final String str = encoder.convert(map);
   final adaptiveTheme = Theme.of(ctx.context);
@@ -121,9 +128,7 @@ void messageInfo(MessagePopupActionContext ctx) {
               color: adaptiveTheme.colorScheme.surface,
               borderRadius: const BorderRadius.all(Radius.circular(10)),
             ),
-            child: SingleChildScrollView(
-              child: SelectableText(str, style: adaptiveTheme.textTheme.bodyLarge),
-            ),
+            child: SingleChildScrollView(child: SelectableText(str, style: adaptiveTheme.textTheme.bodyLarge)),
           ),
         ),
         actions: [

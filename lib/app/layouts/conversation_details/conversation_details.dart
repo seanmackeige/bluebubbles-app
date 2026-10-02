@@ -1,6 +1,7 @@
 import 'package:bluebubbles/app/layouts/conversation_details/widgets/attachments_loader.dart';
 import 'package:flutter_acrylic/flutter_acrylic.dart';
 import 'package:bluebubbles/app/layouts/conversation_details/widgets/chat_info.dart';
+import 'package:bluebubbles/app/layouts/conversation_details/widgets/logical_conversation_health_card.dart';
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/app/layouts/conversation_details/widgets/chat_options.dart';
 import 'package:bluebubbles/app/layouts/conversation_details/widgets/sections/documents/documents_section.dart';
@@ -29,13 +30,16 @@ class _ConversationDetailsState extends State<ConversationDetails> with WidgetsB
   List<Attachment> media = <Attachment>[];
   List<Attachment> docs = <Attachment>[];
   List<Attachment> locations = <Attachment>[];
-  late Chat chat = widget.chat;
+  late Chat chat;
+  late bool readOnlyLogical;
   final RxList<String> selected = <String>[].obs;
   bool isLoadingAttachments = true;
 
   @override
   void initState() {
     super.initState();
+    chat = ChatsSvc.presentationChatFor(widget.chat);
+    readOnlyLogical = ChatsSvc.isPotentialLogicalSource(chat);
     ChatsSvc.setActiveToDead();
   }
 
@@ -49,7 +53,10 @@ class _ConversationDetailsState extends State<ConversationDetails> with WidgetsB
   }
 
   void onAttachmentsLoaded(
-      List<Attachment> loadedMedia, List<Attachment> loadedDocs, List<Attachment> loadedLocations) {
+    List<Attachment> loadedMedia,
+    List<Attachment> loadedDocs,
+    List<Attachment> loadedLocations,
+  ) {
     if (mounted) {
       setState(() {
         media = loadedMedia;
@@ -93,147 +100,171 @@ class _ConversationDetailsState extends State<ConversationDetails> with WidgetsB
             : ThemeSvc.isMaterialYouActive(context);
 
         return Theme(
-            data: baseTheme.copyWith(
-              primaryColor: bubbleColor,
-              colorScheme: baseTheme.colorScheme.copyWith(
-                primary: bubbleColor,
-                onPrimary: onBubbleColor,
-                surface: useGeneratedThemeSurface ? null : bubbleColors?.receivedBubbleColor,
-                onSurface: useGeneratedThemeSurface ? null : bubbleColors?.onReceivedBubbleColor,
-              ),
+          data: baseTheme.copyWith(
+            primaryColor: bubbleColor,
+            colorScheme: baseTheme.colorScheme.copyWith(
+              primary: bubbleColor,
+              onPrimary: onBubbleColor,
+              surface: useGeneratedThemeSurface ? null : bubbleColors?.receivedBubbleColor,
+              onSurface: useGeneratedThemeSurface ? null : bubbleColors?.onReceivedBubbleColor,
             ),
-            child: Obx(() => SettingsScaffold(
-                  headerColor: scaffoldHeaderColor,
-                  title: "Details",
-                  tileColor: scaffoldTileColor,
-                  initialHeader: null,
-                  iosSubtitle: iosSubtitle,
-                  materialSubtitle: materialSubtitle,
-                  actions: [
-                    Obx(() {
-                      if (selected.isNotEmpty) {
-                        return IconButton(
-                          icon: Icon(iOS ? CupertinoIcons.xmark : Icons.close,
-                              color: context.theme.colorScheme.onSurface),
-                          onPressed: () {
-                            selected.clear();
-                          },
-                        );
-                      } else {
-                        return const SizedBox.shrink();
-                      }
-                    }),
-                    Obx(() {
-                      if (selected.isNotEmpty) {
-                        return IconButton(
-                          icon: Icon(iOS ? CupertinoIcons.cloud_download : Icons.file_download,
-                              color: context.theme.colorScheme.onSurface),
-                          onPressed: () {
-                            final attachments = media.where((e) => selected.contains(e.guid!));
-                            for (Attachment a in attachments) {
-                              final file = AttachmentsSvc.getContent(a, autoDownload: false);
-                              if (file is PlatformFile) {
-                                AttachmentsSvc.saveToDisk(file);
-                              }
-                            }
-                          },
-                        );
-                      } else {
-                        return const SizedBox.shrink();
-                      }
-                    }),
-                  ],
-                  bodySlivers: [
-                    SliverToBoxAdapter(
-                      child: ChatInfo(chat: chat),
-                    ),
-                    ParticipantsList(chat: chat),
-                    // Hidden widget that loads attachments in the background
-                    SliverToBoxAdapter(
-                      child: AttachmentsLoader(
-                        chat: chat,
-                        onAttachmentsLoaded: onAttachmentsLoaded,
+          ),
+          child: Obx(
+            () => SettingsScaffold(
+              headerColor: scaffoldHeaderColor,
+              title: "Details",
+              tileColor: scaffoldTileColor,
+              initialHeader: null,
+              iosSubtitle: iosSubtitle,
+              materialSubtitle: materialSubtitle,
+              actions: [
+                Obx(() {
+                  if (selected.isNotEmpty) {
+                    return IconButton(
+                      icon: Icon(iOS ? CupertinoIcons.xmark : Icons.close, color: context.theme.colorScheme.onSurface),
+                      onPressed: () {
+                        selected.clear();
+                      },
+                    );
+                  } else {
+                    return const SizedBox.shrink();
+                  }
+                }),
+                Obx(() {
+                  if (selected.isNotEmpty) {
+                    return IconButton(
+                      icon: Icon(
+                        iOS ? CupertinoIcons.cloud_download : Icons.file_download,
+                        color: context.theme.colorScheme.onSurface,
                       ),
-                    ),
-                    if (chat.handles.length > 2 &&
-                        SettingsSvc.settings.enablePrivateAPI.value &&
-                        SettingsSvc.serverDetails.supportsGroupChatManagement)
-                      SliverToBoxAdapter(
-                        child: Builder(builder: (context) {
-                          return ListTile(
-                            mouseCursor: MouseCursor.defer,
-                            title: Text("Leave ${iOS ? "Chat" : "chat"}",
-                                style: context.theme.textTheme.bodyLarge!
-                                    .copyWith(color: context.theme.colorScheme.error)),
-                            leading: Container(
-                              width: 40 * SettingsSvc.settings.avatarScale.value,
-                              height: 40 * SettingsSvc.settings.avatarScale.value,
-                              decoration: BoxDecoration(
-                                  color: !iOS ? null : context.theme.colorScheme.surfaceContainerHighest,
-                                  shape: BoxShape.circle,
-                                  border: iOS ? null : Border.all(color: context.theme.colorScheme.error, width: 3)),
-                              child: Icon(Icons.error_outline, color: context.theme.colorScheme.error, size: 20),
+                      onPressed: () {
+                        final attachments = media.where((e) => selected.contains(e.guid!));
+                        for (Attachment a in attachments) {
+                          final file = AttachmentsSvc.getContent(a, autoDownload: false);
+                          if (file is PlatformFile) {
+                            AttachmentsSvc.saveToDisk(file);
+                          }
+                        }
+                      },
+                    );
+                  } else {
+                    return const SizedBox.shrink();
+                  }
+                }),
+              ],
+              bodySlivers: [
+                SliverToBoxAdapter(
+                  child: ChatInfo(chat: chat, readOnly: readOnlyLogical),
+                ),
+                ParticipantsList(chat: chat, readOnly: readOnlyLogical),
+                // Hidden widget that loads attachments in the background
+                SliverToBoxAdapter(
+                  child: AttachmentsLoader(chat: chat, onAttachmentsLoaded: onAttachmentsLoaded),
+                ),
+                if (!readOnlyLogical &&
+                    chat.handles.length > 2 &&
+                    SettingsSvc.settings.enablePrivateAPI.value &&
+                    SettingsSvc.serverDetails.supportsGroupChatManagement)
+                  SliverToBoxAdapter(
+                    child: Builder(
+                      builder: (context) {
+                        return ListTile(
+                          mouseCursor: MouseCursor.defer,
+                          title: Text(
+                            "Leave ${iOS ? "Chat" : "chat"}",
+                            style: context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.error),
+                          ),
+                          leading: Container(
+                            width: 40 * SettingsSvc.settings.avatarScale.value,
+                            height: 40 * SettingsSvc.settings.avatarScale.value,
+                            decoration: BoxDecoration(
+                              color: !iOS ? null : context.theme.colorScheme.surfaceContainerHighest,
+                              shape: BoxShape.circle,
+                              border: iOS ? null : Border.all(color: context.theme.colorScheme.error, width: 3),
                             ),
-                            onTap: () async {
-                              await showAreYouSure(
-                                context,
-                                title: "Leave Chat?",
-                                content: const Text(
-                                    "Are you sure you want to leave this chat? You will no longer receive messages from this group."),
-                                yesText: "Leave",
-                                yesColor: context.theme.colorScheme.error,
-                                onNo: () => Navigator.of(context, rootNavigator: true).pop(),
-                                onYes: () async {
-                                  Navigator.of(context, rootNavigator: true).pop();
-                                  showDialog(
-                                      context: context,
-                                      builder: (BuildContext context) {
-                                        return AlertDialog(
-                                          backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-                                          title: Text(
-                                            "Leaving chat...",
-                                            style: context.theme.textTheme.titleLarge,
-                                          ),
-                                          content: SizedBox(
-                                            height: 70,
-                                            child: Center(
-                                              child: CircularProgressIndicator(
-                                                backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-                                                valueColor:
-                                                    AlwaysStoppedAnimation<Color>(context.theme.colorScheme.primary),
-                                              ),
+                            child: Icon(Icons.error_outline, color: context.theme.colorScheme.error, size: 20),
+                          ),
+                          onTap: () async {
+                            await showAreYouSure(
+                              context,
+                              title: "Leave Chat?",
+                              content: const Text(
+                                "Are you sure you want to leave this chat? You will no longer receive messages from this group.",
+                              ),
+                              yesText: "Leave",
+                              yesColor: context.theme.colorScheme.error,
+                              onNo: () => Navigator.of(context, rootNavigator: true).pop(),
+                              onYes: () async {
+                                if (ChatsSvc.isPotentialLogicalSource(chat)) {
+                                  showSnackbar('Action unavailable', 'This conversation is read-only.');
+                                  return;
+                                }
+                                Navigator.of(context, rootNavigator: true).pop();
+                                showDialog(
+                                  context: context,
+                                  builder: (BuildContext context) {
+                                    return AlertDialog(
+                                      backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
+                                      title: Text("Leaving chat...", style: context.theme.textTheme.titleLarge),
+                                      content: SizedBox(
+                                        height: 70,
+                                        child: Center(
+                                          child: CircularProgressIndicator(
+                                            backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
+                                            valueColor: AlwaysStoppedAnimation<Color>(
+                                              context.theme.colorScheme.primary,
                                             ),
                                           ),
-                                        );
-                                      });
-                                  final response = await HttpSvc.chat.leave(chat.guid);
-                                  if (!context.mounted) return;
-                                  if (response.statusCode == 200) {
-                                    Navigator.of(context, rootNavigator: true).pop();
-                                    showSnackbar("Notice", "Left chat successfully!");
-                                  } else {
-                                    Navigator.of(context, rootNavigator: true).pop();
-                                    showSnackbar("Error", "Failed to leave chat!");
-                                  }
-                                },
-                              );
-                            },
-                          );
-                        }),
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                );
+                                if (ChatsSvc.isPotentialLogicalSource(chat)) {
+                                  Navigator.of(context, rootNavigator: true).pop();
+                                  showSnackbar('Action unavailable', 'This conversation is read-only.');
+                                  return;
+                                }
+                                final response = await HttpSvc.chat.leave(chat.guid);
+                                if (!context.mounted) return;
+                                if (response.statusCode == 200) {
+                                  Navigator.of(context, rootNavigator: true).pop();
+                                  showSnackbar("Notice", "Left chat successfully!");
+                                } else {
+                                  Navigator.of(context, rootNavigator: true).pop();
+                                  showSnackbar("Error", "Failed to leave chat!");
+                                }
+                              },
+                            );
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                const SliverPadding(padding: EdgeInsets.symmetric(vertical: 10)),
+                if (readOnlyLogical)
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                      child: Text(
+                        'Logical conversation details are read-only.',
+                        style: context.theme.textTheme.bodyMedium!.copyWith(color: context.theme.colorScheme.outline),
                       ),
-                    const SliverPadding(
-                      padding: EdgeInsets.symmetric(vertical: 10),
                     ),
-                    ChatOptions(chat: chat),
-                    MediaGridSection(chat: chat, media: media, selected: selected, isLoading: isLoadingAttachments),
-                    LinksSection(chat: chat),
-                    LocationsSection(chat: chat, locations: locations, isLoading: isLoadingAttachments),
-                    DocumentsSection(chat: chat, docs: docs, isLoading: isLoadingAttachments),
-                    const SliverPadding(
-                      padding: EdgeInsets.only(top: 50),
-                    ),
-                  ],
-                )));
+                  ),
+                if (readOnlyLogical)
+                  SliverToBoxAdapter(child: LogicalConversationHealthCard(chat: chat))
+                else
+                  ChatOptions(chat: chat),
+                MediaGridSection(chat: chat, media: media, selected: selected, isLoading: isLoadingAttachments),
+                LinksSection(chat: chat),
+                LocationsSection(chat: chat, locations: locations, isLoading: isLoadingAttachments),
+                DocumentsSection(chat: chat, docs: docs, isLoading: isLoadingAttachments),
+                const SliverPadding(padding: EdgeInsets.only(top: 50)),
+              ],
+            ),
+          ),
+        );
       }),
     );
   }
