@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:bluebubbles/app/layouts/conversation_details/widgets/chat_info.dart';
 import 'package:bluebubbles/app/layouts/conversation_details/widgets/participants_list.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/pages/conversation_list.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/pages/search/search_models.dart';
@@ -290,6 +291,29 @@ void main() {
 
     await tester.pumpWidget(detailsFor(readOnly: true));
     expect(find.text('Add people'), findsNothing);
+  });
+
+  testWidgets('read-only logical ChatInfo does not create an empty Obx observer', (tester) async {
+    GetIt.I.registerSingleton<ChatsService>(_UiTestChatsService());
+    settingsService.settings.skin.value = Skins.iOS;
+    final group = Chat(
+      guid: 'SMS;+;logical-details-fixture',
+      chatIdentifier: 'logical-details-fixture',
+      displayName: 'Certified logical conversation',
+      style: 43,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(child: ChatInfo(chat: group, readOnly: true)),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(tester.takeException(), isNull);
+    expect(find.text('Certified logical conversation', findRichText: true), findsOneWidget);
   });
 
   testWidgets('search result tap navigates through presentation chat with the exact source message anchor', (

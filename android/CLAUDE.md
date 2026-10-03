@@ -42,12 +42,12 @@ Flutter side: `lib/services/backend/java_dart_interop/`
   physical writer. The gate also requires the worker-result, worker-completion,
   share-target-cleanup, physical-only notification-reaction, and bounded exact
   notification-event-history contracts in packaged `classes*.dex`.
-- The Build 101 runtime fix advances immutably to Android `versionCode 20002107` after the
-  rejected Build 102 through Build 106 candidates exposed remaining tile-read, contact-refresh,
-  touch-triggered Flutter stretch-shader, timeline emoji-regexp, and timeline controller-rebind
-  feedback paths. It is derived from base `20002000` plus Flutter build number `107`. Keep `pubspec.yaml` unchanged
+- The Build 101 runtime fix advances immutably to Android `versionCode 20002108` after the
+  rejected Build 102 through Build 107 candidates exposed remaining tile-read, contact-refresh,
+  touch-triggered Flutter stretch-shader, timeline emoji-regexp, timeline controller-rebind
+  feedback, and read-only logical-details empty-observer paths. It is derived from base `20002000` plus Flutter build number `108`. Keep `pubspec.yaml` unchanged
   during qualification; the one authorized forward candidate build must pass
-  `--build-number=107`. The release task rejects both a mismatched configured
+  `--build-number=108`. The release task rejects both a mismatched configured
   build number before assembly and mismatched AGP `output-metadata.json` after
   assembly. `verifySeanReleaseGateDefinitions` is the zero-package source and
   version-mapping preflight. `verifySeanReleaseGateRegression` independently

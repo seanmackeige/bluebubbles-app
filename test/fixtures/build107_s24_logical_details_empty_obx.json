@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "source": "sanitized exact-S24 Build 107 runtime evidence",
+  "package": "com.mackeige.bluebubbles",
+  "versionCode": 20002107,
+  "trigger": "open details from the certified Comcast logical conversation",
+  "runtimeShape": {
+    "certifiedLogicalRowCount": 1,
+    "externalParticipantCount": 16,
+    "timelineResponsive": true,
+    "processExited": false
+  },
+  "failureType": "FLUTTER_UI_RENDER_EXCEPTION",
+  "exceptionClass": "GETX_EMPTY_OBSERVER",
+  "exceptionSignature": "improper use of a GetX has been detected",
+  "firstBrokenTransition": "LOGICAL_CONVERSATION_DETAILS_TO_READ_ONLY_CHAT_INFO_EMPTY_OBX",
+  "causalSourceEvidence": {
+    "widget": "ChatInfo",
+    "readOnlyConditionWasInsideObx": true,
+    "shortCircuitSkippedAllObservableReads": true
+  },
+  "containsPersonalContent": false
+}

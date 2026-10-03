@@ -136,6 +136,25 @@ void main() {
       expect(fixture['containsPersonalContent'], isFalse);
     });
 
+    test('banks the Build 107 exact-S24 logical details empty-observer failure', () {
+      final fixture =
+          (jsonDecode(File('test/fixtures/build107_s24_logical_details_empty_obx.json').readAsStringSync()) as Map)
+              .cast<String, dynamic>();
+      final runtimeShape = (fixture['runtimeShape'] as Map).cast<String, dynamic>();
+      final causalSource = (fixture['causalSourceEvidence'] as Map).cast<String, dynamic>();
+
+      expect(fixture['versionCode'], 20002107);
+      expect(fixture['failureType'], 'FLUTTER_UI_RENDER_EXCEPTION');
+      expect(fixture['exceptionClass'], 'GETX_EMPTY_OBSERVER');
+      expect(fixture['firstBrokenTransition'], 'LOGICAL_CONVERSATION_DETAILS_TO_READ_ONLY_CHAT_INFO_EMPTY_OBX');
+      expect(runtimeShape['externalParticipantCount'], 16);
+      expect(runtimeShape['timelineResponsive'], isTrue);
+      expect(runtimeShape['processExited'], isFalse);
+      expect(causalSource['readOnlyConditionWasInsideObx'], isTrue);
+      expect(causalSource['shortCircuitSkippedAllObservableReads'], isTrue);
+      expect(fixture['containsPersonalContent'], isFalse);
+    });
+
     test('attachment reactive rebuilds do not walk the Navigator ancestor chain', () {
       final navigatorSource = File('lib/services/ui/navigator/navigator_service.dart').readAsStringSync();
       final widthMethod = navigatorSource.substring(

@@ -179,35 +179,36 @@ class _ChatInfoState extends State<ChatInfo> with ThemeHelpers {
                         : null,
                     child: ContactAvatarGroupWidget(size: 100, editable: !widget.readOnly && !chat.isGroup),
                   ),
-                  Obx(
-                    () => !widget.readOnly && chat.customAvatarPath != null
-                        ? Positioned(
-                            right: -5,
-                            top: -5,
-                            child: DeferPointer(
-                              child: InkWell(
-                                onTap: () async {
-                                  deletePhoto();
-                                },
-                                child: Container(
-                                  width: 30,
-                                  height: 30,
-                                  decoration: BoxDecoration(
-                                    border: Border.all(color: context.theme.colorScheme.surface, width: 1),
-                                    shape: BoxShape.circle,
-                                    color: context.theme.colorScheme.tertiaryContainer,
-                                  ),
-                                  child: Icon(
-                                    Icons.close,
-                                    color: context.theme.colorScheme.onTertiaryContainer,
-                                    size: 20,
+                  if (!widget.readOnly)
+                    Obx(
+                      () => chat.customAvatarPath != null
+                          ? Positioned(
+                              right: -5,
+                              top: -5,
+                              child: DeferPointer(
+                                child: InkWell(
+                                  onTap: () async {
+                                    deletePhoto();
+                                  },
+                                  child: Container(
+                                    width: 30,
+                                    height: 30,
+                                    decoration: BoxDecoration(
+                                      border: Border.all(color: context.theme.colorScheme.surface, width: 1),
+                                      shape: BoxShape.circle,
+                                      color: context.theme.colorScheme.tertiaryContainer,
+                                    ),
+                                    child: Icon(
+                                      Icons.close,
+                                      color: context.theme.colorScheme.onTertiaryContainer,
+                                      size: 20,
+                                    ),
                                   ),
                                 ),
                               ),
-                            ),
-                          )
-                        : const SizedBox.shrink(),
-                  ),
+                            )
+                          : const SizedBox.shrink(),
+                    ),
                 ],
               ),
             ),
