@@ -130,6 +130,9 @@ class MessageApi {
     int? partIndex,
     bool? ddScan,
     bool allowTransientRetry = true,
+    Future<void> Function()? validateBeforeTransport,
+    void Function()? validateIntentBeforeTransport,
+    void Function()? onTransportInvocation,
     CancelToken? cancelToken,
   }) async {
     return _svc.runApiGuarded(() async {
@@ -152,12 +155,16 @@ class MessageApi {
         data["ddScan"] = ddScan;
       }
 
-      final response = await _svc.dio.post(
+      await validateBeforeTransport?.call();
+      validateIntentBeforeTransport?.call();
+      final request = _svc.dio.post(
         "${_svc.apiRoot}/message/text",
         queryParameters: _svc.buildQueryParams(),
         data: data,
         cancelToken: cancelToken,
       );
+      onTransportInvocation?.call();
+      final response = await request;
       return _svc.returnSuccessOrError(response);
     }, retryTransientMutation: allowTransientRetry);
   }
@@ -178,6 +185,8 @@ class MessageApi {
     bool? isAudioMessage,
     bool allowTransientRetry = true,
     Future<void> Function()? validateBeforeTransport,
+    void Function()? validateIntentBeforeTransport,
+    void Function()? onTransportInvocation,
     CancelToken? cancelToken,
   }) async {
     return _svc.runApiGuarded(() async {
@@ -209,7 +218,8 @@ class MessageApi {
       // context after that yield and immediately before the transport captures
       // its URL, auth query, and headers.
       await validateBeforeTransport?.call();
-      final response = await _svc.dio.post(
+      validateIntentBeforeTransport?.call();
+      final request = _svc.dio.post(
         "${_svc.apiRoot}/message/attachment",
         queryParameters: _svc.buildQueryParams(),
         cancelToken: cancelToken,
@@ -221,6 +231,8 @@ class MessageApi {
           headers: _svc.headers,
         ),
       );
+      onTransportInvocation?.call();
+      final response = await request;
       return _svc.returnSuccessOrError(response);
     }, retryTransientMutation: allowTransientRetry);
   }
@@ -238,6 +250,9 @@ class MessageApi {
     int? partIndex,
     bool? ddScan,
     bool allowTransientRetry = true,
+    Future<void> Function()? validateBeforeTransport,
+    void Function()? validateIntentBeforeTransport,
+    void Function()? onTransportInvocation,
     CancelToken? cancelToken,
   }) async {
     return _svc.runApiGuarded(() async {
@@ -255,12 +270,16 @@ class MessageApi {
         data["ddScan"] = ddScan;
       }
 
-      final response = await _svc.dio.post(
+      await validateBeforeTransport?.call();
+      validateIntentBeforeTransport?.call();
+      final request = _svc.dio.post(
         "${_svc.apiRoot}/message/multipart",
         queryParameters: _svc.buildQueryParams(),
         data: data,
         cancelToken: cancelToken,
       );
+      onTransportInvocation?.call();
+      final response = await request;
       return _svc.returnSuccessOrError(response);
     }, retryTransientMutation: allowTransientRetry);
   }
@@ -275,10 +294,13 @@ class MessageApi {
     String reaction, {
     int? partIndex,
     bool allowTransientRetry = true,
+    void Function()? validateIntentBeforeTransport,
+    void Function()? onTransportInvocation,
     CancelToken? cancelToken,
   }) async {
     return _svc.runApiGuarded(() async {
-      final response = await _svc.dio.post(
+      validateIntentBeforeTransport?.call();
+      final request = _svc.dio.post(
         "${_svc.apiRoot}/message/react",
         queryParameters: _svc.buildQueryParams(),
         data: {
@@ -290,6 +312,8 @@ class MessageApi {
         },
         cancelToken: cancelToken,
       );
+      onTransportInvocation?.call();
+      final response = await request;
       return _svc.returnSuccessOrError(response);
     }, retryTransientMutation: allowTransientRetry);
   }

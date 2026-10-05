@@ -216,6 +216,7 @@ class _SendAnimationState extends CustomState<SendAnimation, SendData, Conversat
           attachment: attachment,
           logicalActionId: data.logicalDraft == null ? null : '${data.logicalDraft!.actionId}:attachment:$i',
           logicalDraft: data.logicalDraft,
+          logicalIntentGuard: data.logicalIntentGuard,
           logicalRouteTargetMessageGuid: data.replyGuid,
           isAudioMessage: data.isAudioMessage,
         ),
@@ -284,18 +285,21 @@ class _SendAnimationState extends CustomState<SendAnimation, SendData, Conversat
                 message: _message,
                 logicalActionId: data.logicalDraft == null ? null : '${data.logicalDraft!.actionId}:text',
                 logicalDraft: data.logicalDraft,
+                logicalIntentGuard: data.logicalIntentGuard,
               )
             : OutgoingMessage(
                 chat: controller.chat,
                 message: _message,
                 logicalActionId: data.logicalDraft == null ? null : '${data.logicalDraft!.actionId}:text',
                 logicalDraft: data.logicalDraft,
+                logicalIntentGuard: data.logicalIntentGuard,
               ),
       );
       animatedMessage = _message;
     }
 
     if (outgoingItems.isNotEmpty) {
+      data.logicalIntentGuard?.check();
       await OutgoingMsgHandler.queueBatch(outgoingItems);
     }
     if (animatedMessage != null && mounted) {

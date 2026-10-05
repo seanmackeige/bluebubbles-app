@@ -1,3 +1,4 @@
+import 'package:bluebubbles/services/ui/chat/logical_draft_intent_guard.dart';
 import 'package:bluebubbles/models/models.dart' show AttachmentUploadProgress;
 import 'dart:async';
 import 'dart:collection';
@@ -270,10 +271,14 @@ class OutgoingMessageHandler {
       }
       for (final item in items) {
         item.completer ??= Completer<void>();
+        // Admission may reject before the final wait is reached. Observe now,
+        // then still await the original future so the caller receives failure.
+        unawaited(item.completer!.future.catchError((Object _) {}));
       }
       await _withLogicalAdmissionLock(() => _admitLogicalBatch(items));
       for (final item in items) {
         item.logicalDispatchReservationCompleter = Completer<void>();
+        unawaited(item.logicalDispatchReservationCompleter!.future.catchError((Object _) {}));
       }
     }
 
@@ -335,6 +340,9 @@ class OutgoingMessageHandler {
   }
 
   Future<void> _admitLogicalBatch(List<OutgoingQueueItem> items) async {
+    for (final item in items) {
+      item.logicalIntentGuard?.check();
+    }
     final presentationChat = items.first.chat;
     final replyDraft = items.map((item) => item.logicalDraft?.reply).whereType<LogicalReplyIntent>().firstOrNull;
     if (replyDraft != null && items.length != 1) {
@@ -505,6 +513,9 @@ class OutgoingMessageHandler {
     // bounded stable snapshot; this second revision read ensures that an
     // in-process invalidation observed while decisions/receipts were being
     // assembled cannot be committed under the older authority.
+    for (final item in items) {
+      item.logicalIntentGuard?.check();
+    }
     final commitRevision = ChatsSvc.currentLogicalAuthorityRevision;
     if (commitRevision == null ||
         !ChatsSvc.isLogicalEvidenceObservationCurrent(observationEpoch) ||
@@ -823,6 +834,7 @@ class OutgoingMessageHandler {
         reaction: item.reaction,
         logicalActionId: item.logicalActionId,
         logicalDraft: item.logicalDraft,
+        logicalIntentGuard: item.logicalIntentGuard,
         logicalAdmissionReceipt: item.logicalAdmissionReceipt,
         acknowledgedAmbiguousAdmissionId: item.acknowledgedAmbiguousAdmissionId,
         logicalTransportMethod: item.logicalTransportMethod,
@@ -841,6 +853,7 @@ class OutgoingMessageHandler {
         message: message,
         logicalActionId: item.logicalActionId,
         logicalDraft: item.logicalDraft,
+        logicalIntentGuard: item.logicalIntentGuard,
         logicalAdmissionReceipt: item.logicalAdmissionReceipt,
         acknowledgedAmbiguousAdmissionId: item.acknowledgedAmbiguousAdmissionId,
         logicalTransportMethod: item.logicalTransportMethod,
@@ -859,6 +872,7 @@ class OutgoingMessageHandler {
         message: message,
         logicalActionId: item.logicalActionId,
         logicalDraft: item.logicalDraft,
+        logicalIntentGuard: item.logicalIntentGuard,
         logicalAdmissionReceipt: item.logicalAdmissionReceipt,
         acknowledgedAmbiguousAdmissionId: item.acknowledgedAmbiguousAdmissionId,
         logicalTransportMethod: item.logicalTransportMethod,
@@ -878,6 +892,7 @@ class OutgoingMessageHandler {
         attachment: item.attachment,
         logicalActionId: item.logicalActionId,
         logicalDraft: item.logicalDraft,
+        logicalIntentGuard: item.logicalIntentGuard,
         logicalAdmissionReceipt: item.logicalAdmissionReceipt,
         acknowledgedAmbiguousAdmissionId: item.acknowledgedAmbiguousAdmissionId,
         logicalTransportMethod: item.logicalTransportMethod,
@@ -896,10 +911,38 @@ class OutgoingMessageHandler {
     throw StateError('Unsupported outgoing item type: ${item.runtimeType}');
   }
 
-
-  Future<void> _rollbackPreparedBeforeProviderDispatch(
+  Future<void> _abortUnstartedLogicalIntentBatch(
     OutgoingQueueItem item,
+    LogicalDraftIntentGuard guard,
+    Object error,
+    StackTrace stack,
   ) async {
+    final untouched = <OutgoingQueueItem>[
+      item,
+      ..._queue.where((entry) => identical(entry.item.logicalIntentGuard, guard)).map((entry) => entry.item),
+    ];
+    _queue.removeWhere((entry) => identical(entry.item.logicalIntentGuard, guard));
+    Object outcome = error;
+    try {
+      for (final pending in untouched) {
+        await _rollbackPreparedBeforeProviderDispatch(pending, strict: true);
+      }
+      // Retain durable replay custody if any prepared-message cleanup fails.
+      await _rollbackLogicalAdmissionBeforeDispatchBatch(untouched);
+    } catch (_) {
+      outcome = StateError('LOGICAL_DRAFT_CLEANUP_UNVERIFIED');
+    } finally {
+      for (final pending in untouched) {
+        final reservation = pending.logicalDispatchReservationCompleter;
+        if (reservation != null && !reservation.isCompleted) reservation.completeError(outcome, stack);
+        final completer = pending.completer;
+        if (completer != null && !completer.isCompleted) completer.completeError(outcome, stack);
+      }
+      pendingChatGuids.assignAll(_queue.map((entry) => _conversationKey(entry.item.chat)).toSet());
+    }
+  }
+
+  Future<void> _rollbackPreparedBeforeProviderDispatch(OutgoingQueueItem item, {bool strict = false}) async {
     final guid = item.message.guid;
     if (guid == null || guid.isEmpty) return;
 
@@ -921,17 +964,13 @@ class OutgoingMessageHandler {
         if (latest.isEmpty) {
           throw StateError('NOTIFICATION_REPLY_PREPARED_LATEST_RESTORE_EMPTY');
         }
-        ChatsSvc.updateChatLatestMessage(
-          item.chat.guid,
-          latest.first,
-          allowOlder: true,
-        );
+        ChatsSvc.updateChatLatestMessage(item.chat.guid, latest.first, allowOlder: true);
       },
     );
     if (!rollback.isComplete) {
-      final description =
-          StringBuffer('Notification reply pre-dispatch cleanup was partial: ')
-            ..write(rollback.failedSteps.map((step) => step.name).join(','));
+      if (strict) throw StateError('LOGICAL_DRAFT_CLEANUP_UNVERIFIED');
+      final description = StringBuffer('Notification reply pre-dispatch cleanup was partial: ')
+        ..write(rollback.failedSteps.map((step) => step.name).join(','));
       Logger.warn(description.toString(), tag: _tag);
     }
   }
@@ -964,8 +1003,7 @@ class OutgoingMessageHandler {
         if (item.beforeProviderDispatch != null) {
           await NotificationReplyPreparedDispatchAdmission.run(
             admit: admitBeforeProviderDispatch,
-            rollbackPreparedMessage: () =>
-                _rollbackPreparedBeforeProviderDispatch(item),
+            rollbackPreparedMessage: () => _rollbackPreparedBeforeProviderDispatch(item),
           );
         } else {
           await admitBeforeProviderDispatch();
@@ -978,7 +1016,7 @@ class OutgoingMessageHandler {
         await _handleSend(() => _dispatchItem(item), item.chat).catchError((Object err, StackTrace stack) async {
           dispatchError = err;
           dispatchStack = stack;
-          if (SettingsSvc.settings.cancelQueuedMessages.value) {
+          if (err is! LogicalDraftIntentException && SettingsSvc.settings.cancelQueuedMessages.value) {
             // Cancel all subsequent messages for the same chat.
             final toCancel = _queue.where((e) => e.item.chat.guid == item.chat.guid).map((e) => e.item).toList();
             for (final pending in toCancel) {
@@ -991,6 +1029,19 @@ class OutgoingMessageHandler {
             }
           }
         });
+        final intentGuard = item.logicalIntentGuard;
+        if (dispatchError != null &&
+            intentGuard != null &&
+            intentGuard.blockedReason != null &&
+            !intentGuard.providerRequestStarted) {
+          await _abortUnstartedLogicalIntentBatch(
+            item,
+            intentGuard,
+            LogicalDraftIntentException(intentGuard.blockedReason!),
+            dispatchStack ?? StackTrace.current,
+          );
+          continue;
+        }
         await _transitionLogicalOperation(
           item,
           from: LogicalOperationState.dispatchReserved,
@@ -1014,6 +1065,11 @@ class OutgoingMessageHandler {
           item.completer!.complete();
         }
       } catch (ex, st) {
+        final intentGuard = item.logicalIntentGuard;
+        if (ex is LogicalDraftIntentException && intentGuard != null && !intentGuard.providerRequestStarted) {
+          await _abortUnstartedLogicalIntentBatch(item, intentGuard, ex, st);
+          continue;
+        }
         if (!dispatchReserved && item.logicalAdmissionReceipt != null) {
           try {
             await _rollbackLogicalAdmissionBeforeDispatch(item);
@@ -1149,7 +1205,7 @@ class OutgoingMessageHandler {
       onError: (Object error, StackTrace stack) async {
         completeSendProgressIfExists(tempGuid, Origin.outgoingMessageHandler, error: error, stack: stack);
         try {
-          await onError(error, stack);
+          if (error is! LogicalDraftIntentException) await onError(error, stack);
         } catch (ex, st) {
           Logger.warn('Send error handler threw for $tempGuid', error: ex, trace: st, tag: _tag);
         }
@@ -1171,6 +1227,7 @@ class OutgoingMessageHandler {
           null,
           transportMethod: typed.logicalTransportMethod,
           ddScan: typed.logicalDdScan,
+          logicalIntentGuard: typed.logicalIntentGuard,
           expectedProviderContextFingerprint: typed.logicalAdmissionReceipt?.providerContextFingerprint,
           expectedCertificateRevision: typed.logicalAdmissionReceipt?.certificateRevision,
           expectedProviderAccountSnapshotSha256: typed.logicalAdmissionReceipt?.providerAccountSnapshotSha256,
@@ -1186,6 +1243,7 @@ class OutgoingMessageHandler {
           typed.selectedMessage,
           typed.reaction,
           transportMethod: typed.logicalTransportMethod,
+          logicalIntentGuard: typed.logicalIntentGuard,
           expectedProviderContextFingerprint: typed.logicalAdmissionReceipt?.providerContextFingerprint,
           expectedCertificateRevision: typed.logicalAdmissionReceipt?.certificateRevision,
           expectedProviderAccountSnapshotSha256: typed.logicalAdmissionReceipt?.providerAccountSnapshotSha256,
@@ -1202,6 +1260,7 @@ class OutgoingMessageHandler {
           null,
           transportMethod: typed.logicalTransportMethod,
           ddScan: typed.logicalDdScan,
+          logicalIntentGuard: typed.logicalIntentGuard,
           expectedProviderContextFingerprint: typed.logicalAdmissionReceipt?.providerContextFingerprint,
           expectedCertificateRevision: typed.logicalAdmissionReceipt?.certificateRevision,
           expectedProviderAccountSnapshotSha256: typed.logicalAdmissionReceipt?.providerAccountSnapshotSha256,
@@ -1217,6 +1276,7 @@ class OutgoingMessageHandler {
           typed.isAudioMessage,
           typed.attachment,
           transportMethod: typed.logicalTransportMethod,
+          logicalIntentGuard: typed.logicalIntentGuard,
           expectedProviderContextFingerprint: typed.logicalAdmissionReceipt?.providerContextFingerprint,
           expectedCertificateRevision: typed.logicalAdmissionReceipt?.certificateRevision,
           expectedProviderAccountSnapshotSha256: typed.logicalAdmissionReceipt?.providerAccountSnapshotSha256,
@@ -1236,6 +1296,7 @@ class OutgoingMessageHandler {
   }
 
   void _validateCommittedLogicalBindingSynchronous(OutgoingQueueItem item) {
+    item.logicalIntentGuard?.check();
     final receipt = item.logicalAdmissionReceipt;
     if (receipt == null) return;
     final currentRevision = ChatsSvc.currentLogicalAuthorityRevision;
@@ -1339,9 +1400,7 @@ class OutgoingMessageHandler {
     if (isRetry) return [m];
     if ((m.text?.isEmpty ?? true) && (m.subject?.isEmpty ?? true) && r == null) return [];
 
-    if (!requiresSingleProviderDispatch &&
-        !isLogicalAdmission &&
-        !SettingsSvc.serverDetails.isMinBigSur && r == null) {
+    if (!requiresSingleProviderDispatch && !isLogicalAdmission && !SettingsSvc.serverDetails.isMinBigSur && r == null) {
       // Split URL messages on OS X to prevent message matching glitches.
       String mainText = m.text!;
       String? secondaryText;
@@ -1547,6 +1606,7 @@ class OutgoingMessageHandler {
     String? r, {
     String? transportMethod,
     bool? ddScan,
+    LogicalDraftIntentGuard? logicalIntentGuard,
     String? expectedProviderContextFingerprint,
     String? expectedCertificateRevision,
     String? expectedProviderAccountSnapshotSha256,
@@ -1578,6 +1638,7 @@ class OutgoingMessageHandler {
               subject: m.subject,
               partIndex: int.tryParse(m.threadOriginatorPart?.split(':').firstOrNull ?? ''),
               ddScan: ddScan ?? (!SettingsSvc.serverDetails.isMinSonoma && m.text!.hasUrl),
+              logicalIntentGuard: logicalIntentGuard,
               expectedProviderContextFingerprint: expectedProviderContextFingerprint,
               expectedCertificateRevision: expectedCertificateRevision,
               expectedProviderAccountSnapshotSha256: expectedProviderAccountSnapshotSha256,
@@ -1590,6 +1651,7 @@ class OutgoingMessageHandler {
               selectedMessageGuid: selected.guid!,
               reaction: r,
               partIndex: m.associatedMessagePart,
+              logicalIntentGuard: logicalIntentGuard,
               expectedProviderContextFingerprint: expectedProviderContextFingerprint,
               expectedCertificateRevision: expectedCertificateRevision,
               expectedProviderAccountSnapshotSha256: expectedProviderAccountSnapshotSha256,
@@ -1652,6 +1714,7 @@ class OutgoingMessageHandler {
     String? r, {
     String? transportMethod,
     bool? ddScan,
+    LogicalDraftIntentGuard? logicalIntentGuard,
     String? expectedProviderContextFingerprint,
     String? expectedCertificateRevision,
     String? expectedProviderAccountSnapshotSha256,
@@ -1690,6 +1753,7 @@ class OutgoingMessageHandler {
         effectId: m.expressiveSendStyleId,
         partIndex: int.tryParse(m.threadOriginatorPart?.split(':').firstOrNull ?? ''),
         ddScan: ddScan ?? (!SettingsSvc.serverDetails.isMinSonoma && parts.any((e) => e['text'].toString().hasUrl)),
+        logicalIntentGuard: logicalIntentGuard,
         expectedProviderContextFingerprint: expectedProviderContextFingerprint,
         expectedCertificateRevision: expectedCertificateRevision,
         expectedProviderAccountSnapshotSha256: expectedProviderAccountSnapshotSha256,
@@ -1716,6 +1780,7 @@ class OutgoingMessageHandler {
     bool isAudioMessage,
     Attachment? attachment, {
     String? transportMethod,
+    LogicalDraftIntentGuard? logicalIntentGuard,
     String? expectedProviderContextFingerprint,
     String? expectedCertificateRevision,
     String? expectedProviderAccountSnapshotSha256,
@@ -1762,6 +1827,16 @@ class OutgoingMessageHandler {
         effectId: m.expressiveSendStyleId,
         partIndex: int.tryParse(m.threadOriginatorPart?.split(':').firstOrNull ?? ''),
         isAudioMessage: isAudioMessage,
+        onLocalProgress: logicalIntentGuard == null
+            ? null
+            : (count, total) {
+                _handleAttachmentUploadProgressEvent(<String, dynamic>{
+                  'chatGuid': c.guid,
+                  'messageGuid': attachment.guid!,
+                  'progress': count / total,
+                });
+              },
+        logicalIntentGuard: logicalIntentGuard,
         expectedProviderContextFingerprint: expectedProviderContextFingerprint,
         expectedCertificateRevision: expectedCertificateRevision,
         expectedProviderAccountSnapshotSha256: expectedProviderAccountSnapshotSha256,

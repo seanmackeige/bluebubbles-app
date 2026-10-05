@@ -42,17 +42,20 @@ Flutter side: `lib/services/backend/java_dart_interop/`
   physical writer. The gate also requires the worker-result, worker-completion,
   share-target-cleanup, physical-only notification-reaction, and bounded exact
   notification-event-history contracts in packaged `classes*.dex`.
-- The Build 101 runtime fix advances immutably to Android `versionCode 20002108` after the
-  rejected Build 102 through Build 107 candidates exposed remaining tile-read, contact-refresh,
-  touch-triggered Flutter stretch-shader, timeline emoji-regexp, timeline controller-rebind
-  feedback, and read-only logical-details empty-observer paths. It is derived from base `20002000` plus Flutter build number `108`. Keep `pubspec.yaml` unchanged
-  during qualification; the one authorized forward candidate build must pass
-  `--build-number=108`. The release task rejects both a mismatched configured
-  build number before assembly and mismatched AGP `output-metadata.json` after
-  assembly. `verifySeanReleaseGateDefinitions` is the zero-package source and
-  version-mapping preflight. `verifySeanReleaseGateRegression` independently
-  removes each required AOT/native marker and exercises adjacent version codes
-  to prove every gate fails closed.
+- Build 108 remains the immutable accepted ANR/UI baseline (`20002108`). Its
+  logical draft admission behavior is rejected for the proven raw-certificate
+  versus application-key namespace defect after legitimate consumption.
+- The isolated draft correction uses the next verified unused Sean version,
+  `20002109` (Flutter `--build-number=109`; base `20002000`). Keep `pubspec.yaml`
+  unchanged. See `docs/qualification/build108-logical-draft/INCIDENT.txt` for
+  source-linked reproduction, original-runtime limits, and acceptance gates.
+- The release gate requires bounded admission diagnostics in every packaged
+  Dart `libapp.so`, in addition to all existing authority/native contracts.
+  It rejects mismatched build input and output metadata. Run
+  `verifySeanReleaseGateDefinitions` and `verifySeanReleaseGateRegression`
+  before packaging; negative controls include immutable 108 and adjacent 110.
+  Build 109 is a candidate until real S24 draft-preserving installation and
+  zero-send acceptance complete. Never overwrite the archived Build 108 APK.
 
 ## Logical Notification Contract
 

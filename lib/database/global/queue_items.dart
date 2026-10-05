@@ -1,3 +1,4 @@
+import 'package:bluebubbles/services/ui/chat/logical_draft_intent_guard.dart';
 import 'dart:async';
 
 import 'package:bluebubbles/database/models.dart';
@@ -17,6 +18,7 @@ abstract class OutgoingQueueItem extends QueueItem {
   Message message;
   String? logicalActionId;
   LogicalDraft? logicalDraft;
+  LogicalDraftIntentGuard? logicalIntentGuard;
   LogicalSendAdmissionReceipt? logicalAdmissionReceipt;
   String? acknowledgedAmbiguousAdmissionId;
   String? logicalTransportMethod;
@@ -35,6 +37,7 @@ abstract class OutgoingQueueItem extends QueueItem {
     required this.message,
     this.logicalActionId,
     this.logicalDraft,
+    this.logicalIntentGuard,
     this.logicalAdmissionReceipt,
     this.acknowledgedAmbiguousAdmissionId,
     this.logicalTransportMethod,
@@ -69,6 +72,7 @@ class OutgoingMessage extends OutgoingQueueItem {
     required super.message,
     super.logicalActionId,
     super.logicalDraft,
+    super.logicalIntentGuard,
     super.logicalAdmissionReceipt,
     super.acknowledgedAmbiguousAdmissionId,
     super.logicalTransportMethod,
@@ -98,6 +102,7 @@ class OutgoingReaction extends OutgoingQueueItem {
     required this.reaction,
     super.logicalActionId,
     super.logicalDraft,
+    super.logicalIntentGuard,
     super.logicalAdmissionReceipt,
     super.acknowledgedAmbiguousAdmissionId,
     super.logicalTransportMethod,
@@ -126,6 +131,7 @@ class OutgoingAttachment extends OutgoingQueueItem {
     required this.attachment,
     super.logicalActionId,
     super.logicalDraft,
+    super.logicalIntentGuard,
     super.logicalAdmissionReceipt,
     super.acknowledgedAmbiguousAdmissionId,
     super.logicalTransportMethod,
@@ -153,6 +159,7 @@ class OutgoingMultipartMessage extends OutgoingQueueItem {
     required super.message,
     super.logicalActionId,
     super.logicalDraft,
+    super.logicalIntentGuard,
     super.logicalAdmissionReceipt,
     super.acknowledgedAmbiguousAdmissionId,
     super.logicalTransportMethod,

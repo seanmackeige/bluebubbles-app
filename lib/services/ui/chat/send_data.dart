@@ -1,3 +1,4 @@
+import 'package:bluebubbles/services/ui/chat/logical_draft_intent_guard.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/ui/chat/logical_draft.dart';
 
@@ -14,6 +15,7 @@ class SendData {
     this.replyPart,
     this.effectId,
     this.logicalDraft,
+    this.logicalIntentGuard,
     this.isAudioMessage = false,
   });
 
@@ -24,6 +26,7 @@ class SendData {
   final int? replyPart;
   final String? effectId;
   final LogicalDraft? logicalDraft;
+  final LogicalDraftIntentGuard? logicalIntentGuard;
 
   /// Whether the attached file is a voice/audio recording.
   final bool isAudioMessage;

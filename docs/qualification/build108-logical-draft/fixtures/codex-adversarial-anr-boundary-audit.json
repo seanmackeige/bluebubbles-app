@@ -1,0 +1,83 @@
+{
+  "accepted_commits": [
+    "5ff6846f75b4e02c1cc8f6d8f93c085587346d44 fix: render read-only logical details",
+    "64141f3106ddba85bcc535346a7840e0bf8e6397 fix: stop timeline controller rebind feedback",
+    "acee9f5545c270191f4ba738c6ae42c76e4d821a fix: bound timeline emoji processing",
+    "5138c47ec2255ea49e5865499c694241928ba244 fix: bound touch-triggered stretch shader path",
+    "8252051e49404b5bfbacede1c8dea634c5d38b30 fix: bound contact-driven logical refreshes"
+  ],
+  "anr_ui_affected_files": [
+    {
+      "file": "lib/app/layouts/chat_creator/chat_creator.dart",
+      "byte_identical_to_build108": true,
+      "semantic_line_identical_to_build108": true,
+      "modified_by_correction": false
+    },
+    {
+      "file": "lib/app/layouts/chat_creator/chat_creator_controller.dart",
+      "byte_identical_to_build108": true,
+      "semantic_line_identical_to_build108": true,
+      "modified_by_correction": false
+    },
+    {
+      "file": "lib/app/layouts/conversation_details/widgets/chat_info.dart",
+      "byte_identical_to_build108": true,
+      "semantic_line_identical_to_build108": true,
+      "modified_by_correction": false
+    },
+    {
+      "file": "lib/app/layouts/conversation_list/dialogs/conversation_peek_view.dart",
+      "byte_identical_to_build108": true,
+      "semantic_line_identical_to_build108": true,
+      "modified_by_correction": false
+    },
+    {
+      "file": "lib/app/layouts/conversation_view/pages/conversation_view.dart",
+      "byte_identical_to_build108": true,
+      "semantic_line_identical_to_build108": true,
+      "modified_by_correction": false
+    },
+    {
+      "file": "lib/app/layouts/conversation_view/widgets/message/attachment/attachment_holder.dart",
+      "byte_identical_to_build108": true,
+      "semantic_line_identical_to_build108": true,
+      "modified_by_correction": false
+    },
+    {
+      "file": "lib/helpers/types/helpers/message_helper.dart",
+      "byte_identical_to_build108": true,
+      "semantic_line_identical_to_build108": true,
+      "modified_by_correction": false
+    },
+    {
+      "file": "lib/main.dart",
+      "byte_identical_to_build108": true,
+      "semantic_line_identical_to_build108": true,
+      "modified_by_correction": false
+    },
+    {
+      "file": "lib/services/ui/chat/CLAUDE.md",
+      "byte_identical_to_build108": true,
+      "semantic_line_identical_to_build108": true,
+      "modified_by_correction": false
+    },
+    {
+      "file": "lib/services/ui/chat/chats_service.dart",
+      "byte_identical_to_build108": false,
+      "semantic_line_identical_to_build108": false,
+      "modified_by_correction": true
+    },
+    {
+      "file": "lib/services/ui/chat/conversation_view_controller.dart",
+      "byte_identical_to_build108": false,
+      "semantic_line_identical_to_build108": false,
+      "modified_by_correction": true
+    },
+    {
+      "file": "lib/services/ui/navigator/navigator_service.dart",
+      "byte_identical_to_build108": true,
+      "semantic_line_identical_to_build108": true,
+      "modified_by_correction": false
+    }
+  ]
+}

@@ -1,3 +1,4 @@
+import 'package:bluebubbles/services/ui/chat/logical_draft_intent_guard.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/ui/chat/logical_conversation_route.dart';
 import 'package:bluebubbles/services/ui/chat/logical_conversation_certificate_binding.dart';
@@ -113,7 +114,7 @@ class SendMessageActions {
   }
 
   /// Sends a text message via HTTP.
-  static Future<Map<String, dynamic>> sendTextMessage(dynamic data) async {
+  static Future<Map<String, dynamic>> sendTextMessage(dynamic data, {LogicalDraftIntentGuard? intentGuard}) async {
     final map = data as Map<String, dynamic>;
     await _refreshLogicalCertificateForRequest(map);
     await _validateProviderContext(map);
@@ -139,12 +140,14 @@ class SendMessageActions {
       partIndex: partIndex,
       ddScan: ddScan,
       allowTransientRetry: allowTransientRetry,
+      validateIntentBeforeTransport: intentGuard?.validateBeforeTransport,
+      onTransportInvocation: intentGuard?.requestStarted,
     );
     return response.data as Map<String, dynamic>;
   }
 
   /// Sends a tapback via HTTP.
-  static Future<Map<String, dynamic>> sendTapback(dynamic data) async {
+  static Future<Map<String, dynamic>> sendTapback(dynamic data, {LogicalDraftIntentGuard? intentGuard}) async {
     final map = data as Map<String, dynamic>;
     await _refreshLogicalCertificateForRequest(map);
     await _validateProviderContext(map);
@@ -162,12 +165,14 @@ class SendMessageActions {
       reaction,
       partIndex: partIndex,
       allowTransientRetry: allowTransientRetry,
+      validateIntentBeforeTransport: intentGuard?.validateBeforeTransport,
+      onTransportInvocation: intentGuard?.requestStarted,
     );
     return response.data as Map<String, dynamic>;
   }
 
   /// Sends a multipart (mention / mixed-content) message via HTTP.
-  static Future<Map<String, dynamic>> sendMultipartMessage(dynamic data) async {
+  static Future<Map<String, dynamic>> sendMultipartMessage(dynamic data, {LogicalDraftIntentGuard? intentGuard}) async {
     final map = data as Map<String, dynamic>;
     await _refreshLogicalCertificateForRequest(map);
     await _validateProviderContext(map);
@@ -191,6 +196,8 @@ class SendMessageActions {
       partIndex: partIndex,
       ddScan: ddScan,
       allowTransientRetry: allowTransientRetry,
+      validateIntentBeforeTransport: intentGuard?.validateBeforeTransport,
+      onTransportInvocation: intentGuard?.requestStarted,
     );
     return response.data as Map<String, dynamic>;
   }
@@ -199,7 +206,11 @@ class SendMessageActions {
   ///
   /// Reads the file from [filePath] inside the isolate and constructs
   /// [FormData] locally, avoiding cross-isolate byte transfer.
-  static Future<Map<String, dynamic>> sendAttachmentMessage(dynamic data) async {
+  static Future<Map<String, dynamic>> sendAttachmentMessage(
+    dynamic data, {
+    LogicalDraftIntentGuard? intentGuard,
+    void Function(int, int)? onLocalProgress,
+  }) async {
     final map = data as Map<String, dynamic>;
     await _refreshLogicalCertificateForRequest(map);
     await _validateProviderContext(map);
@@ -231,8 +242,14 @@ class SendMessageActions {
         await _refreshLogicalCertificateForRequest(map);
         await _validateProviderContext(map);
       },
+      validateIntentBeforeTransport: intentGuard?.validateBeforeTransport,
+      onTransportInvocation: intentGuard?.requestStarted,
       onSendProgress: (count, total) {
         if (total <= 0) return;
+        if (onLocalProgress != null) {
+          onLocalProgress(count, total);
+          return;
+        }
         IsolateEventEmitter.emit(IsolateEvent.attachmentUploadProgress, {
           'chatGuid': chatGuid,
           'messageGuid': tempGuid,

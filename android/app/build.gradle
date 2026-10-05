@@ -253,6 +253,8 @@ def seanRequiredLogicalMediaSchema = 'LOGICAL_MEDIA_ITEM_V1'
 def seanRequiredNewGroupSafetyContract = 'NEW_GROUP_SAFETY_GATE_V1_BLOCKED_UNPROVEN_SENDER_BINDING'
 def seanForbiddenLogicalPairId = 'LGC_V1_8ef6ba9306f2e2c3c2a28990d01a583e5c270c5ec61a313992c9d40322367c7f'
 def seanRequiredDailyDriverAotMarkers = [
+    SEAN_RELEASE_AOT_LOGICAL_DRAFT_ADMISSION_DIAGNOSTIC_MISSING:
+        'LOGICAL_DRAFT_ADMISSION_DIAGNOSTIC_V1',
     SEAN_RELEASE_AOT_LOGICAL_IDENTITY_SCHEMA_MISSING:
         seanRequiredLogicalIdentitySchema,
     SEAN_RELEASE_AOT_LOGICAL_UNREAD_SCHEMA_MISSING:
@@ -288,7 +290,7 @@ def seanRequiredDailyDriverAotMarkers = [
     SEAN_RELEASE_AOT_NEW_GROUP_SAFETY_CONTRACT_MISSING:
         seanRequiredNewGroupSafetyContract,
 ]
-def seanRequiredCandidateVersionCode = 20002108
+def seanRequiredCandidateVersionCode = 20002109
 def seanRequiredCandidateFlutterBuildNumber = seanRequiredCandidateVersionCode - seanVersionCodeBase
 def seanRequiredNativePolicyMarkers = [
     SEAN_RELEASE_NATIVE_WORKER_COMPLETION_POLICY_MISSING:
@@ -444,6 +446,8 @@ def verifySeanCandidateVersionMetadata = { File metadataFile ->
 }
 
 def seanReleaseMarkerSources = [
+    [marker: 'LOGICAL_DRAFT_ADMISSION_DIAGNOSTIC_V1',
+     source: rootProject.file('../lib/app/layouts/conversation_view/widgets/text_field/conversation_text_field.dart')],
     [marker: seanRequiredLogicalIdentitySchema,
      source: rootProject.file('../lib/services/ui/chat/logical_conversation_identity.dart')],
     [marker: seanRequiredLogicalSnapshotSchema,
@@ -545,7 +549,7 @@ tasks.register('verifySeanReleaseGateRegression') {
         proveMarkerRequirements(seanRequiredDailyDriverAotMarkers, 'aot')
         proveMarkerRequirements(seanRequiredNativePolicyMarkers, 'native')
         verifySeanCandidateVersionCode(seanRequiredCandidateVersionCode)
-        [20002101, 20002102, 20002103, 20002104, 20002105, 20002106, 20002107, 20002109].each { invalidVersionCode ->
+        [20002101, 20002102, 20002103, 20002104, 20002105, 20002106, 20002107, 20002108, 20002110].each { invalidVersionCode ->
             boolean rejected = false
             try {
                 verifySeanCandidateVersionCode(invalidVersionCode)
@@ -567,7 +571,7 @@ tasks.register('verifySeanReleaseGateRegression') {
 
 def verifySeanCandidateVersionInput = tasks.register('verifySeanCandidateVersionInput') {
     group = 'verification'
-    description = 'Rejects a Sean candidate unless Flutter supplied build-number 108 (versionCode 20002108).'
+    description = 'Rejects a Sean candidate unless Flutter supplied build-number 109 (versionCode 20002109).'
     doLast {
         int configuredVersionCode = seanVersionCodeBase + flutterVersionCode.toInteger()
         try {

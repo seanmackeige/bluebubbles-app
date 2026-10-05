@@ -1,0 +1,46 @@
+{
+  "at": "2026-10-05T18:42:31.518404+00:00",
+  "results": [
+    {
+      "fixture": "baseline-legitimate-consume-fixture.dart",
+      "exit": 0,
+      "stdout_sha256": "d817a01639e30a15af1b892cfb2f773c76074267d0642370ff67770a832db150"
+    },
+    {
+      "fixture": "baseline-namespace-fixture.dart",
+      "exit": 0,
+      "stdout_sha256": "de78eb752a7a3469b237b244f08d8024939264290ec310672610ee24f6a8c7c8"
+    },
+    {
+      "fixture": "codex-adversarial-abort-batch-fixture.dart",
+      "exit": 0,
+      "stdout_sha256": "40323dab003f3ed081fa3a5392194da667fdfc2ace8443c4497633c9c7349974"
+    },
+    {
+      "fixture": "codex-adversarial-composer-closure-fixture.dart",
+      "exit": 0,
+      "stdout_sha256": "35701f2bade1962a99dda94261f42564b100969522306f5f283a619460e08146"
+    },
+    {
+      "fixture": "codex-adversarial-corrected-service-fixture.dart",
+      "exit": 0,
+      "stdout_sha256": "2c3266f34d5dfcebc193d056fb21b816d9addec945aa32177fc676c6b5a09d79"
+    },
+    {
+      "fixture": "codex-adversarial-delayed-restore-fixture.dart",
+      "exit": 0,
+      "stdout_sha256": "ff61adb0526742c1f07f9b8807b4376af5f212642c285e23c852fd4f5a294002"
+    },
+    {
+      "fixture": "codex-adversarial-diagnostic-reasons-fixture.dart",
+      "exit": 0,
+      "stdout_sha256": "69c83e093964c2ca84153a38a38ca47b72f854bc59de8c2d3fc5121adff5c946"
+    },
+    {
+      "fixture": "codex-adversarial-post-clear-fixture.dart",
+      "exit": 0,
+      "stdout_sha256": "c5f32a010c5c9ff03c43acb46624adf6fc26cd014c00d1f71fd4c286e415d155"
+    }
+  ],
+  "real_transport_calls": 0
+}

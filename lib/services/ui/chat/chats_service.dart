@@ -1,3 +1,4 @@
+import 'package:bluebubbles/services/ui/chat/logical_draft_storage.dart';
 import 'dart:async';
 import 'dart:convert';
 
@@ -2869,7 +2870,7 @@ class ChatsService {
   }
 
   int logicalDraftRevisionFor(Chat chat) {
-    final logicalId = logicalConversationIdFor(chat);
+    final logicalId = _logicalDraftStorageFor(chat)?.canonicalKey;
     if (logicalId == null) return 0;
     return _logicalDraftPreviewRevisions[logicalId] ?? 0;
   }
@@ -2890,24 +2891,30 @@ class ChatsService {
     }
   }
 
+  LogicalDraftStorage? _logicalDraftStorageFor(Chat chat) {
+    final certificateId = logicalConversationIdFor(chat);
+    return certificateId == null ? null : LogicalDraftStorage(certificateId);
+  }
+
+  LogicalDraftStorage? _logicalDraftStorageForId(String draftId) {
+    for (final authority in LogicalConversationViewPolicy.activeAuthorities) {
+      final storage = LogicalDraftStorage(authority.certificate.id);
+      if (draftId == storage.canonicalKey || draftId == storage.legacyKey) return storage;
+    }
+    return null;
+  }
+
   LogicalDraft? loadLogicalDraft(Chat chat) {
-    final logicalId = logicalConversationIdFor(chat);
-    if (logicalId == null) return null;
-    final raw = PrefsSvc.messaging.loadLogicalDraftJson(logicalId);
-    if (raw == null || raw.isEmpty) return null;
     try {
-      final decoded = jsonDecode(raw);
-      if (decoded is! Map) return null;
-      final draft = LogicalDraft.fromJson(decoded.cast<String, dynamic>());
-      return draft.logicalId == logicalId ? draft : null;
+      return _logicalDraftStorageFor(chat)?.read(PrefsSvc.messaging.loadLogicalDraftJson).draft;
     } catch (error, stack) {
-      Logger.warn('Logical draft is unreadable and remains untouched', error: error, trace: stack, tag: 'LogicalDraft');
+      Logger.warn('Logical draft custody conflict remains untouched', error: error, trace: stack, tag: 'LogicalDraft');
       return null;
     }
   }
 
   int logicalDraftGenerationFor(Chat chat) {
-    final logicalId = logicalConversationIdFor(chat);
+    final logicalId = _logicalDraftStorageFor(chat)?.canonicalKey;
     return logicalId == null ? 0 : (_logicalDraftGenerations[logicalId] ?? 0);
   }
 
@@ -2949,9 +2956,11 @@ class ChatsService {
     if (expectedDraftGeneration != null && (_logicalDraftGenerations[logicalId] ?? 0) != expectedDraftGeneration) {
       return null;
     }
+    final storage = _logicalDraftStorageFor(chat)!;
+    final slot = storage.read(PrefsSvc.messaging.loadLogicalDraftJson);
     final now = DateTime.now().millisecondsSinceEpoch;
     final existing =
-        loadLogicalDraft(chat) ??
+        slot.draft ??
         LogicalDraft.create(
           logicalId: logicalId,
           nowEpochMilliseconds: now,
@@ -2967,7 +2976,9 @@ class ChatsService {
       effectId: effectId,
       updatedAtEpochMilliseconds: now,
     );
-    await PrefsSvc.messaging.saveLogicalDraftJson(logicalId, jsonEncode(updated.toJson()));
+    for (final key in slot.occupiedKeys.isEmpty ? <String>[slot.storageKey] : slot.occupiedKeys) {
+      await PrefsSvc.messaging.saveLogicalDraftJson(key, jsonEncode(updated.toJson()));
+    }
     _bumpLogicalDraftPreviewRevision(logicalId);
     return updated;
   }
@@ -3069,45 +3080,42 @@ class ChatsService {
 
   Future<void> persistRearmedLogicalDraft(LogicalDraft draft) {
     return _withLogicalDraftLock(() async {
-      final currentRaw = PrefsSvc.messaging.loadLogicalDraftJson(draft.logicalId);
-      if (currentRaw != null) {
-        try {
-          final current = LogicalDraft.fromJson((jsonDecode(currentRaw) as Map).cast<String, dynamic>());
-          if (current.contentRevision != draft.contentRevision ||
-              current.contentFingerprint != draft.contentFingerprint) {
-            return;
-          }
-        } catch (_) {
-          return;
-        }
+      final storage = _logicalDraftStorageForId(draft.logicalId);
+      if (storage == null) throw StateError('LOGICAL_DRAFT_OWNER_UNAVAILABLE');
+      final slot = storage.read(PrefsSvc.messaging.loadLogicalDraftJson);
+      final current = slot.draft;
+      if (current == null ||
+          current.actionId != draft.actionId ||
+          current.contentFingerprint != draft.contentFingerprint) {
+        return;
       }
-      await PrefsSvc.messaging.saveLogicalDraftJson(draft.logicalId, jsonEncode(draft.toJson()));
-      _bumpLogicalDraftPreviewRevision(draft.logicalId);
+      for (final key in slot.occupiedKeys.isEmpty ? <String>[slot.storageKey] : slot.occupiedKeys) {
+        await PrefsSvc.messaging.saveLogicalDraftJson(key, jsonEncode(draft.toJson()));
+      }
+      _bumpLogicalDraftPreviewRevision(storage.canonicalKey);
     });
   }
 
   Future<bool> clearLogicalDraftIfCurrent(LogicalDraft admittedDraft) {
     return _withLogicalDraftLock(() async {
-      final currentRaw = PrefsSvc.messaging.loadLogicalDraftJson(admittedDraft.logicalId);
-      if (currentRaw == null) {
-        _bumpLogicalDraftPreviewRevision(admittedDraft.logicalId);
-        return true;
-      }
-      try {
-        final current = LogicalDraft.fromJson((jsonDecode(currentRaw) as Map).cast<String, dynamic>());
-        if (current.contentRevision != admittedDraft.contentRevision ||
-            current.contentFingerprint != admittedDraft.contentFingerprint ||
-            current.observedCertificateRevision != admittedDraft.observedCertificateRevision ||
-            current.observedAuthorityRevision != admittedDraft.observedAuthorityRevision ||
-            current.observedAuthorityEpoch != admittedDraft.observedAuthorityEpoch) {
-          return false;
-        }
-      } catch (_) {
+      final storage = _logicalDraftStorageForId(admittedDraft.logicalId);
+      if (storage == null) return false;
+      final slot = storage.read(PrefsSvc.messaging.loadLogicalDraftJson);
+      final current = slot.draft;
+      if (current == null) return false;
+      if (current.actionId != admittedDraft.actionId ||
+          current.contentRevision != admittedDraft.contentRevision ||
+          current.contentFingerprint != admittedDraft.contentFingerprint ||
+          current.observedCertificateRevision != admittedDraft.observedCertificateRevision ||
+          current.observedAuthorityRevision != admittedDraft.observedAuthorityRevision ||
+          current.observedAuthorityEpoch != admittedDraft.observedAuthorityEpoch) {
         return false;
       }
-      _logicalDraftGenerations.update(admittedDraft.logicalId, (value) => value + 1, ifAbsent: () => 1);
-      await PrefsSvc.messaging.clearLogicalDraft(admittedDraft.logicalId);
-      _bumpLogicalDraftPreviewRevision(admittedDraft.logicalId);
+      _logicalDraftGenerations.update(storage.canonicalKey, (value) => value + 1, ifAbsent: () => 1);
+      for (final key in slot.occupiedKeys) {
+        await PrefsSvc.messaging.clearLogicalDraft(key);
+      }
+      _bumpLogicalDraftPreviewRevision(storage.canonicalKey);
       return true;
     });
   }

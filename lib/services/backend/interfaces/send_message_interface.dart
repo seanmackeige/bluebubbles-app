@@ -1,3 +1,4 @@
+import 'package:bluebubbles/services/ui/chat/logical_draft_intent_guard.dart';
 import 'package:bluebubbles/env.dart';
 import 'package:bluebubbles/services/backend/actions/send_message_actions.dart';
 import 'package:bluebubbles/services/isolates/global_isolate.dart';
@@ -20,6 +21,7 @@ class SendMessageInterface {
     String? selectedMessageGuid,
     int? partIndex,
     bool? ddScan,
+    LogicalDraftIntentGuard? logicalIntentGuard,
     String? expectedProviderContextFingerprint,
     String? expectedCertificateRevision,
     String? expectedProviderAccountSnapshotSha256,
@@ -42,6 +44,11 @@ class SendMessageInterface {
       'expectedProviderFactContractRevision': expectedProviderFactContractRevision,
       'allowTransientRetry': allowTransientRetry,
     };
+    // Composer intent and final POST must share one synchronous owner turn.
+    // IO remains asynchronous; ordinary/background requests retain the isolate.
+    if (logicalIntentGuard != null) {
+      return await SendMessageActions.sendTextMessage(data, intentGuard: logicalIntentGuard);
+    }
     if (isIsolate) {
       return await SendMessageActions.sendTextMessage(data);
     }
@@ -55,6 +62,7 @@ class SendMessageInterface {
     required String selectedMessageGuid,
     required String reaction,
     int? partIndex,
+    LogicalDraftIntentGuard? logicalIntentGuard,
     String? expectedProviderContextFingerprint,
     String? expectedCertificateRevision,
     String? expectedProviderAccountSnapshotSha256,
@@ -73,6 +81,11 @@ class SendMessageInterface {
       'expectedProviderFactContractRevision': expectedProviderFactContractRevision,
       'allowTransientRetry': allowTransientRetry,
     };
+    // Composer intent and final POST must share one synchronous owner turn.
+    // IO remains asynchronous; ordinary/background requests retain the isolate.
+    if (logicalIntentGuard != null) {
+      return await SendMessageActions.sendTapback(data, intentGuard: logicalIntentGuard);
+    }
     if (isIsolate) {
       return await SendMessageActions.sendTapback(data);
     }
@@ -90,6 +103,7 @@ class SendMessageInterface {
     String? selectedMessageGuid,
     int? partIndex,
     bool? ddScan,
+    LogicalDraftIntentGuard? logicalIntentGuard,
     String? expectedProviderContextFingerprint,
     String? expectedCertificateRevision,
     String? expectedProviderAccountSnapshotSha256,
@@ -111,6 +125,11 @@ class SendMessageInterface {
       'expectedProviderFactContractRevision': expectedProviderFactContractRevision,
       'allowTransientRetry': allowTransientRetry,
     };
+    // Composer intent and final POST must share one synchronous owner turn.
+    // IO remains asynchronous; ordinary/background requests retain the isolate.
+    if (logicalIntentGuard != null) {
+      return await SendMessageActions.sendMultipartMessage(data, intentGuard: logicalIntentGuard);
+    }
     if (isIsolate) {
       return await SendMessageActions.sendMultipartMessage(data);
     }
@@ -136,6 +155,8 @@ class SendMessageInterface {
     String? selectedMessageGuid,
     int? partIndex,
     bool? isAudioMessage,
+    LogicalDraftIntentGuard? logicalIntentGuard,
+    void Function(int, int)? onLocalProgress,
     String? expectedProviderContextFingerprint,
     String? expectedCertificateRevision,
     String? expectedProviderAccountSnapshotSha256,
@@ -160,6 +181,15 @@ class SendMessageInterface {
       'expectedProviderFactContractRevision': expectedProviderFactContractRevision,
       'allowTransientRetry': allowTransientRetry,
     };
+    // Composer intent and final POST must share one synchronous owner turn.
+    // IO remains asynchronous; ordinary/background requests retain the isolate.
+    if (logicalIntentGuard != null) {
+      return await SendMessageActions.sendAttachmentMessage(
+        data,
+        intentGuard: logicalIntentGuard,
+        onLocalProgress: onLocalProgress,
+      );
+    }
     if (isIsolate) {
       return await SendMessageActions.sendAttachmentMessage(data);
     }

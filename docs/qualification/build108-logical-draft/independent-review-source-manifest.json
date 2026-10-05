@@ -1,0 +1,24 @@
+{
+  "reviewer": "/root/admission_adversarial",
+  "reviewed_at_utc": "2026-10-05T18:40:01.140077+00:00",
+  "baseline": "5ff6846f75b4e02c1cc8f6d8f93c085587346d44",
+  "status": "OFFLINE_SOURCE_ACCEPTED_DEVICE_PENDING",
+  "reviewed_source_sha256": {
+    "lib/app/layouts/conversation_view/widgets/message/send_animation.dart": "16e54108e15cc3ed943f3686fb9c2b0e1687aa1146c965e85761ad464fd4e449",
+    "lib/app/layouts/conversation_view/widgets/text_field/conversation_text_field.dart": "c66ba79c005d9f079f87e4176acf8df2a4ffb35794dd1e6152f7255e03370945",
+    "lib/database/global/queue_items.dart": "3d410881e1b08992f0c363fa054c373c4e72130e51bd233020928050da90857c",
+    "lib/services/backend/actions/send_message_actions.dart": "6bbf87c2c2fb87f16368965888e5f55c6c973e05414a255b60f0a2979862b0ce",
+    "lib/services/backend/interfaces/send_message_interface.dart": "f943e6b7489d5255090ddb4ec4e3e8e63ec9ffa15bb9a1668c0b8ee09222a347",
+    "lib/services/backend/outgoing_message_handler.dart": "657c8c95f13a063294748f766f7a52369dd4bb6fde3b4776d64e7290e262240e",
+    "lib/services/network/api/message_api.dart": "50b72d3947f7f7627359926f627bfc971338fe1ea7532d64c8c50d00a27142ad",
+    "lib/services/ui/chat/chats_service.dart": "13178138a27920fe30684d45946b573e08b99ea81fcbb4b5b745373bc1147d0c",
+    "lib/services/ui/chat/conversation_view_controller.dart": "192633cf951ae74aee504ce770183d03dafac4069c85eb2a2356d738e7f9ee9d",
+    "lib/services/ui/chat/logical_draft_intent_guard.dart": "1d81267776a6df3e57c52ed5f9ff3fcbcf84e75e6957f14c1b0103aaf1e006cb",
+    "lib/services/ui/chat/logical_draft_storage.dart": "ebf4e9b9fdb09ca219e204380217fbff60f268da233584143f4142bd42866184",
+    "lib/services/ui/chat/send_data.dart": "a794c798cf3676298c43dcdfe19661fe235d044395c347a405f33ec59f1049bc",
+    "test/logical_draft_namespace_regression_test.dart": "80a1e135675398ea086ce30003d6f5e704ac62d9eb22ee6d06797eaddd36eba3",
+    "test/logical_draft_transport_guard_test.dart": "d1c449032dde8dc2038efff6ebc016f1aa2d8bac4746aaf1dd6fd40a6c3d08c8"
+  },
+  "real_provider_calls": 0,
+  "note": "Formatting after review changes byte hashes; source semantic changes need re-review."
+}

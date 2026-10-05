@@ -319,10 +319,14 @@ class ConversationViewController extends StatefulController with GetSingleTicker
         replyPart: data.replyPart,
         effectId: data.effectId,
         logicalDraft: draft,
+        logicalIntentGuard: data.logicalIntentGuard,
         isAudioMessage: data.isAudioMessage,
       ),
     );
+    if (data.logicalIntentGuard != null && !data.logicalIntentGuard!.composerStillCurrent) return;
     if (await ChatsSvc.clearLogicalDraftIfCurrent(draft)) {
+      data.logicalIntentGuard?.draftConsumed();
+      if (data.logicalIntentGuard != null && !data.logicalIntentGuard!.composerStillCurrent) return;
       logicalDraftConsumedFunc?.call();
     }
   }

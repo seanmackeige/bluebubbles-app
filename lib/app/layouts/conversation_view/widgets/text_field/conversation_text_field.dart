@@ -1,3 +1,6 @@
+import 'package:flutter/foundation.dart';
+import 'dart:convert';
+import 'package:bluebubbles/services/ui/chat/logical_draft_intent_guard.dart';
 import 'dart:async';
 import 'dart:math';
 
@@ -21,7 +24,6 @@ import 'package:bluebubbles/services/backend/typing_indicator_routing.dart';
 import 'package:bluebubbles/services/ui/chat/send_data.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:collection/collection.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:image_picker/image_picker.dart';
@@ -54,6 +56,11 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
   int _logicalIntentEpoch = 0;
   int _logicalUiGeneration = 0;
   Future<void>? _sendInFlight;
+  LogicalDraftIntentGuard? _activeIntentGuard;
+  String? _admissionEffect;
+  void Function()? _finalAdmissionDiagnostic;
+  bool Function()? _frozenComposerCurrent;
+
   LogicalReplyIntent? _retainedLogicalReplyIntent;
   final RxBool _logicalReplyResolutionPending = false.obs;
 
@@ -116,7 +123,7 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
       subject: useFrozenIntent ? frozenSubject! : controller.subjectTextController.text,
       attachments: selectedAttachments,
       reply: useFrozenIntent ? frozenReply : _logicalReplyIntent(),
-      effectId: effectId,
+      effectId: effectId ?? (_frozenComposerCurrent?.call() == true ? _admissionEffect : null),
       expectedDraftGeneration: expectedDraftGeneration,
     );
   }
@@ -142,6 +149,7 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
     if (_canMutateComposer && _hasLogicalDraftIdentity && !_logicalDraftConsumed) {
       _logicalAttachmentDraftWorker = ever(controller.pickedAttachments, (_) {
         if (_restoringLogicalDraft) return;
+        _logicalUiGeneration += 1;
         if (_logicalDraftConsumed && controller.pickedAttachments.isEmpty) return;
         _logicalIntentEpoch += 1;
         _logicalDraftConsumed = false;
@@ -152,6 +160,7 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
       });
       _logicalReplyDraftWorker = ever(controller.replyToMessageRx, (context) {
         if (_restoringLogicalDraft) return;
+        _logicalUiGeneration += 1;
         if (_logicalDraftConsumed && context == null) return;
         _logicalIntentEpoch += 1;
         _logicalDraftConsumed = false;
@@ -224,6 +233,9 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
         if (draft == null || !isCurrent()) return;
         if (draft.text.isNotEmpty) controller.textController.text = draft.text;
         if (draft.subject.isNotEmpty) controller.subjectTextController.text = draft.subject;
+        // Suppress only synchronous restoration writes. Human events during
+        // file IO must invalidate the pending restore generation.
+        _restoringLogicalDraft = false;
         await getAttachmentDrafts(
           attachments: draft.attachments
               .where((item) => item.isRestorable)
@@ -233,6 +245,7 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
           isCurrent: isCurrent,
         );
         if (!isCurrent()) return;
+        _restoringLogicalDraft = true;
         final reply = draft.reply;
         _logicalReplyResolutionPending.value = false;
         if (reply != null) {
@@ -274,7 +287,7 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
     // Read from ChatState — it is the source of truth and is always up-to-date.
     // Fall back to chat.textFieldAttachments for the first load after a cold start
     // (before ChatState has been updated by any setChatTextFieldAttachments call).
-    final incomingAttachments = attachments.isNotEmpty
+    final incomingAttachments = isCurrent != null || attachments.isNotEmpty
         ? attachments
         : (ChatsSvc.getChatState(chatGuid)?.textFieldAttachments.toList() ?? chat.textFieldAttachments);
     final currentPicked = controller.pickedAttachments.map((element) => element.path).toList();
@@ -288,10 +301,16 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
       }
     }
     if (isCurrent != null && !isCurrent()) return;
-    if (incomingAttachments.any((element) => !currentPicked.contains(element))) {
-      controller.pickedAttachments.clear();
+    final wasRestoring = _restoringLogicalDraft;
+    if (isCurrent != null) _restoringLogicalDraft = true;
+    try {
+      if (incomingAttachments.any((element) => !currentPicked.contains(element))) {
+        controller.pickedAttachments.clear();
+      }
+      controller.pickedAttachments.addAll(restored);
+    } finally {
+      _restoringLogicalDraft = wasRestoring;
     }
-    controller.pickedAttachments.addAll(restored);
   }
 
   void focusListener(bool subject) async {
@@ -304,6 +323,8 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
   }
 
   void textListener(bool subject) {
+    final semanticText = "${controller.subjectTextController.text}\n${controller.textController.text}";
+    if (!_restoringLogicalDraft && semanticText != localController.oldText.value) _logicalUiGeneration += 1;
     if (!_canMutateComposer) {
       localController.debounceDraftSave?.cancel();
       localController.debounceTyping?.cancel();
@@ -540,156 +561,330 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
   }
 
   Future<void> _sendMessageOnce({String? effect}) async {
-    if (_isProtectedLogicalSource && !_hasLogicalWriterCapability) {
-      showSnackbar('Send unavailable', 'This conversation is read-only while its identity is being verified.');
-      return;
-    }
-    final text = controller.textController.text;
-    if (_logicalReplyResolutionPending.value ||
-        !logicalReplyExecutionReady(
-          intent: _retainedLogicalReplyIntent,
-          exactTargetVisible: controller.replyToMessage != null,
-        )) {
-      showSnackbar('Reply unavailable', 'The reply target is still loading. Your draft was preserved.');
-      return;
-    }
-    final subject = controller.subjectTextController.text;
-    final replyIntent = _logicalReplyIntent();
-    final replyGuid =
-        replyIntent?.relationshipTargetGuid ??
-        controller.replyToMessage?.message.threadOriginatorGuid ??
-        controller.replyToMessage?.message.guid;
-    final replyPart = replyIntent?.part ?? controller.replyToMessage?.partIndex;
-    final attachments = controller.pickedAttachments.map(_freezeAttachment).toList(growable: false);
-    final intentEpoch = _logicalIntentEpoch;
-    localController.debounceDraftSave?.cancel();
-    if (controller.scheduledDate.value != null) {
-      if (_isProtectedLogicalSource) {
-        return showSnackbar('Scheduling unavailable', 'Scheduling is unavailable for this protected conversation.');
+    try {
+      if (_isProtectedLogicalSource && !_hasLogicalWriterCapability) {
+        showSnackbar('Send unavailable', 'This conversation is read-only while its identity is being verified.');
+        return;
       }
-      final date = controller.scheduledDate.value!;
-      if (date.isBefore(DateTime.now())) return showSnackbar("Error", "Pick a date in the future!");
-      if (text.contains(MentionTextEditingController.escapingChar)) {
-        return showSnackbar("Error", "Mentions are not allowed in scheduled messages!");
+      final text = controller.textController.text;
+      if (_logicalReplyResolutionPending.value ||
+          !logicalReplyExecutionReady(
+            intent: _retainedLogicalReplyIntent,
+            exactTargetVisible: controller.replyToMessage != null,
+          )) {
+        showSnackbar('Reply unavailable', 'The reply target is still loading. Your draft was preserved.');
+        return;
       }
-      showDialog(
-        context: context,
-        builder: (BuildContext context) {
-          return AlertDialog(
-            backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-            title: Text("Scheduling message...", style: context.theme.textTheme.titleLarge),
-            content: SizedBox(
-              height: 70,
-              child: Center(
-                child: CircularProgressIndicator(
-                  backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-                  valueColor: AlwaysStoppedAnimation<Color>(context.theme.colorScheme.primary),
+      final subject = controller.subjectTextController.text;
+      final replyIntent = _logicalReplyIntent();
+      final replyGuid =
+          replyIntent?.relationshipTargetGuid ??
+          controller.replyToMessage?.message.threadOriginatorGuid ??
+          controller.replyToMessage?.message.guid;
+      final replyPart = replyIntent?.part ?? controller.replyToMessage?.partIndex;
+      final attachments = controller.pickedAttachments.map(_freezeAttachment).toList(growable: false);
+      final intentEpoch = _logicalIntentEpoch;
+      final logicalOwner = ChatsSvc.conversationKeyFor(chat);
+      final ownerController = controller;
+      final selectedAtFreeze = controller.pickedAttachments.toList(growable: false);
+      final originalPaths = selectedAtFreeze.map((file) => file.path).toList(growable: false);
+      final replyFingerprint = logicalActionIdentity('reply', <Object?>[replyIntent?.toJson()]);
+      String? composerChange() {
+        if (!mounted || !identical(controller, ownerController)) return 'OWNER_CHANGED';
+        if (ChatsSvc.conversationKeyFor(chat) != logicalOwner) return 'DRAFT_IDENTITY_CHANGED';
+        if (controller.textController.text != text || controller.subjectTextController.text != subject) {
+          return 'CONTENT_CHANGED';
+        }
+        if (logicalActionIdentity('reply', <Object?>[_logicalReplyIntent()?.toJson()]) != replyFingerprint) {
+          return 'CONTENT_CHANGED';
+        }
+        final current = controller.pickedAttachments;
+        if (current.length != attachments.length) return 'ATTACHMENT_INTENT_CHANGED';
+        for (var index = 0; index < current.length; index++) {
+          final selected = current[index];
+          final frozen = attachments[index];
+          if (selected.name != frozen.name ||
+              selected.size != frozen.size ||
+              selected.balloonBundleId != frozen.balloonBundleId ||
+              !identical(selected, selectedAtFreeze[index])) {
+            return 'ATTACHMENT_INTENT_CHANGED';
+          }
+          final stagedInternally = identical(selected, selectedAtFreeze[index]) && selected.path == frozen.path;
+          if (selected.path != originalPaths[index] && !stagedInternally) return 'ATTACHMENT_INTENT_CHANGED';
+        }
+        return null;
+      }
+
+      _frozenComposerCurrent = () => composerChange() == null;
+      localController.debounceDraftSave?.cancel();
+      if (controller.scheduledDate.value != null) {
+        if (_isProtectedLogicalSource) {
+          return showSnackbar('Scheduling unavailable', 'Scheduling is unavailable for this protected conversation.');
+        }
+        final date = controller.scheduledDate.value!;
+        if (date.isBefore(DateTime.now())) return showSnackbar("Error", "Pick a date in the future!");
+        if (text.contains(MentionTextEditingController.escapingChar)) {
+          return showSnackbar("Error", "Mentions are not allowed in scheduled messages!");
+        }
+        showDialog(
+          context: context,
+          builder: (BuildContext context) {
+            return AlertDialog(
+              backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
+              title: Text("Scheduling message...", style: context.theme.textTheme.titleLarge),
+              content: SizedBox(
+                height: 70,
+                child: Center(
+                  child: CircularProgressIndicator(
+                    backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
+                    valueColor: AlwaysStoppedAnimation<Color>(context.theme.colorScheme.primary),
+                  ),
                 ),
               ),
-            ),
-          );
-        },
-      );
-      // Revalidate at the last synchronous boundary. The conversation may
-      // have entered quarantine (or the certificate ledger may have failed)
-      // after the scheduling UI was admitted.
-      if (_isProtectedLogicalSource) {
-        if (mounted) Navigator.of(context).pop();
-        return showSnackbar('Scheduling unavailable', 'Scheduling is unavailable for this protected conversation.');
-      }
-      final response = await HttpSvc.message.createScheduled(chat.guid, text, date.toUtc(), {"type": "once"});
-      if (!mounted) return;
-      Navigator.of(context).pop();
-      if (response.statusCode == 200 && response.data != null) {
-        showSnackbar("Notice", "Message scheduled successfully for ${buildFullDate(date)}");
-      } else {
-        Logger.error("Scheduled message error: ${response.statusCode}");
-        Logger.error(response.data);
-        showSnackbar("Error", "Something went wrong!");
-      }
-    } else {
-      if (text.isEmpty && subject.isEmpty && !SettingsSvc.settings.privateAPIAttachmentSend.value) {
-        if (controller.replyToMessage != null) {
-          return showSnackbar("Error", "Turn on Private API Attachment Send to send replies with media!");
-        } else if (effect != null) {
-          return showSnackbar("Error", "Turn on Private API Attachment Send to send effects with media!");
-        }
-      }
-      if (effect == null && SettingsSvc.settings.enablePrivateAPI.value) {
-        final cleansed = text.replaceAll("!", "").toLowerCase();
-        switch (cleansed) {
-          case "congratulations":
-          case "congrats":
-            effect = effectMap["confetti"];
-            break;
-          case "happy birthday":
-            effect = effectMap["balloons"];
-            break;
-          case "happy new year":
-            effect = effectMap["fireworks"];
-            break;
-          case "happy chinese new year":
-          case "happy lunar new year":
-            effect = effectMap["celebration"];
-            break;
-          case "pew pew":
-            effect = effectMap["lasers"];
-            break;
-        }
-      }
-      final logicalDraft = await _saveLogicalDraft(
-        effectId: effect,
-        useFrozenIntent: true,
-        frozenText: text,
-        frozenSubject: subject,
-        frozenAttachments: attachments,
-        frozenReply: replyIntent,
-      );
-      if (ChatsSvc.isLogicalConversation(chat) && logicalDraft == null) {
-        showSnackbar('Send paused', 'The logical draft changed while send intent was being frozen. Please try again.');
-        return;
-      }
-      if (logicalDraft?.attachments.any((attachment) => !attachment.isRestorable) == true) {
-        showSnackbar('Send blocked', 'One or more attachments are no longer available. Your draft was preserved.');
-        return;
-      }
-      try {
-        await controller.send(
-          SendData(
-            attachments: attachments,
-            text: text,
-            subject: subject,
-            replyGuid: replyGuid,
-            replyPart: replyPart,
-            effectId: effect,
-            logicalDraft: logicalDraft,
-          ),
+            );
+          },
         );
-      } on LogicalSendAdmissionException catch (error) {
-        if (mounted) showSnackbar('Send paused', logicalSendAdmissionUserMessage(error.state));
-        return;
-      }
-      if (logicalDraft != null && !_logicalDraftConsumed) {
-        if (_logicalIntentEpoch != intentEpoch) {
-          await _saveLogicalDraft();
+        // Revalidate at the last synchronous boundary. The conversation may
+        // have entered quarantine (or the certificate ledger may have failed)
+        // after the scheduling UI was admitted.
+        if (_isProtectedLogicalSource) {
+          if (mounted) Navigator.of(context).pop();
+          return showSnackbar('Scheduling unavailable', 'Scheduling is unavailable for this protected conversation.');
+        }
+        final response = await HttpSvc.message.createScheduled(chat.guid, text, date.toUtc(), {"type": "once"});
+        if (!mounted) return;
+        Navigator.of(context).pop();
+        if (response.statusCode == 200 && response.data != null) {
+          showSnackbar("Notice", "Message scheduled successfully for ${buildFullDate(date)}");
+        } else {
+          Logger.error("Scheduled message error: ${response.statusCode}");
+          Logger.error(response.data);
+          showSnackbar("Error", "Something went wrong!");
+        }
+      } else {
+        if (text.isEmpty && subject.isEmpty && !SettingsSvc.settings.privateAPIAttachmentSend.value) {
+          if (controller.replyToMessage != null) {
+            return showSnackbar("Error", "Turn on Private API Attachment Send to send replies with media!");
+          } else if (effect != null) {
+            return showSnackbar("Error", "Turn on Private API Attachment Send to send effects with media!");
+          }
+        }
+        if (effect == null && SettingsSvc.settings.enablePrivateAPI.value) {
+          final cleansed = text.replaceAll("!", "").toLowerCase();
+          switch (cleansed) {
+            case "congratulations":
+            case "congrats":
+              effect = effectMap["confetti"];
+              break;
+            case "happy birthday":
+              effect = effectMap["balloons"];
+              break;
+            case "happy new year":
+              effect = effectMap["fireworks"];
+              break;
+            case "happy chinese new year":
+            case "happy lunar new year":
+              effect = effectMap["celebration"];
+              break;
+            case "pew pew":
+              effect = effectMap["lasers"];
+              break;
+          }
+        }
+        _admissionEffect = effect;
+        final generationBefore = ChatsSvc.logicalDraftGenerationFor(chat);
+        final authorityBefore = ChatsSvc.currentLogicalAuthorityRevision;
+        final operationFingerprint = logicalActionIdentity('human-tap', <Object?>[
+          logicalOwner,
+          DateTime.now().microsecondsSinceEpoch,
+          identityHashCode(this),
+        ]);
+        var diagnosticCount = 0;
+        var lastDiagnosticResult = 'FREEZE_STARTED';
+        LogicalDraft? frozenDraft;
+        String selectionFingerprint(List<PlatformFile> selection) => logicalActionIdentity(
+          'attachment-selection',
+          selection.map((file) => <Object?>[identityHashCode(file), file.name, file.size, file.balloonBundleId]),
+        );
+        final attachmentSelectionBefore = selectionFingerprint(selectedAtFreeze);
+        void record(String result, bool started) {
+          final terminal = result.startsWith('FINAL_');
+          if (!terminal) lastDiagnosticResult = result;
+          if (!terminal && diagnosticCount++ >= 8) return;
+          final current = ChatsSvc.loadLogicalDraft(chat);
+          final revision = ChatsSvc.currentLogicalAuthorityRevision;
+          final entry = <String, Object?>{
+            'schema': 'LOGICAL_DRAFT_ADMISSION_DIAGNOSTIC_V1',
+            'operation': operationFingerprint,
+            'logical': logicalActionIdentity('logical', <Object?>[logicalOwner]),
+            'draft': frozenDraft?.actionId,
+            'contentBefore': frozenDraft?.contentFingerprint,
+            'contentFinal': current?.contentFingerprint,
+            'composerContentBefore': logicalActionIdentity('composer', <Object?>[text, subject, replyFingerprint]),
+            'composerContentFinal': mounted
+                ? logicalActionIdentity('composer', <Object?>[
+                    controller.textController.text,
+                    controller.subjectTextController.text,
+                    logicalActionIdentity('reply', <Object?>[_logicalReplyIntent()?.toJson()]),
+                  ])
+                : null,
+            'attachmentSelectionBefore': attachmentSelectionBefore,
+            'attachmentSelectionFinal': mounted ? selectionFingerprint(controller.pickedAttachments) : null,
+            'internalTransition': ChatsSvc.logicalDraftGenerationFor(chat) == generationBefore
+                ? 'NO_SEMANTIC_CHANGE'
+                : (_activeIntentGuard?.draftWasConsumed == true && started
+                      ? 'GENERATION_CHANGED_EXPECTED_INTERNAL'
+                      : 'GENERATION_CHANGED_EXTERNAL'),
+            'draftState': current == null
+                ? (_activeIntentGuard?.draftWasConsumed == true ? 'DRAFT_CONSUMED' : 'DRAFT_DISAPPEARED')
+                : 'PRESENT',
+            'generationBefore': generationBefore,
+            'generationFinal': ChatsSvc.logicalDraftGenerationFor(chat),
+            'authorityBefore': authorityBefore?.authorityRevision,
+            'authorityFinal': revision?.authorityRevision,
+            'certificateBefore': authorityBefore?.certificateRevision,
+            'certificateFinal': revision?.certificateRevision,
+            'result': result,
+            'providerRequestStarted': started,
+            'physicalExecutionProven': false,
+          };
+          Logger.info(jsonEncode(entry), tag: 'LogicalDraftAdmission');
+        }
+
+        _finalAdmissionDiagnostic = () =>
+            record('FINAL_$lastDiagnosticResult', _activeIntentGuard?.providerRequestStarted ?? false);
+        final logicalDraft = await _saveLogicalDraft(
+          effectId: effect,
+          useFrozenIntent: true,
+          frozenText: text,
+          frozenSubject: subject,
+          frozenAttachments: attachments,
+          frozenReply: replyIntent,
+        );
+        frozenDraft = logicalDraft;
+        if (ChatsSvc.isLogicalConversation(chat) && logicalDraft == null) {
+          record(_logicalDraftConsumed ? 'DRAFT_CONSUMED' : 'GENERATION_CHANGED_EXTERNAL', false);
+          showSnackbar('Send paused', 'Draft changed. Review and send again.');
           return;
         }
-        final cleared = await ChatsSvc.clearLogicalDraftIfCurrent(logicalDraft);
-        if (!cleared) return;
-        _logicalDraftConsumed = true;
-        localController.debounceDraftSave?.cancel();
+        if (logicalDraft?.attachments.any((attachment) => !attachment.isRestorable) == true) {
+          record('ATTACHMENT_INTENT_UNAVAILABLE', false);
+          showSnackbar('Send blocked', 'One or more attachments are no longer available. Your draft was preserved.');
+          return;
+        }
+        if (logicalDraft != null) {
+          _activeIntentGuard = LogicalDraftIntentGuard(
+            composerIsCurrent: () => composerChange() == null,
+            validateCurrent: () {
+              final change = composerChange();
+              if (change != null) return change;
+              if (ChatsSvc.logicalDraftGenerationFor(chat) != generationBefore) return 'GENERATION_CHANGED_EXTERNAL';
+              final current = ChatsSvc.loadLogicalDraft(chat);
+              if (current == null) return 'DRAFT_DISAPPEARED';
+              if (current.logicalId != logicalDraft.logicalId ||
+                  current.createdAtEpochMilliseconds != logicalDraft.createdAtEpochMilliseconds) {
+                return 'DRAFT_IDENTITY_CHANGED';
+              }
+              if (logicalActionIdentity('attachments', current.attachments.map((item) => item.toJson())) !=
+                  logicalActionIdentity('attachments', logicalDraft.attachments.map((item) => item.toJson()))) {
+                return 'ATTACHMENT_INTENT_CHANGED';
+              }
+              if (current.contentFingerprint != logicalDraft.contentFingerprint) return 'CONTENT_CHANGED';
+              if (current.actionId != logicalDraft.actionId) return 'DRAFT_IDENTITY_CHANGED';
+              return null;
+            },
+            validateAuthority: () {
+              final revision = ChatsSvc.currentLogicalAuthorityRevision;
+              if (revision?.certificateRevision != logicalDraft.observedCertificateRevision) {
+                return 'CERTIFICATE_CHANGED';
+              }
+              if (revision?.authorityRevision != logicalDraft.observedAuthorityRevision ||
+                  revision?.epoch != logicalDraft.observedAuthorityEpoch) {
+                return 'AUTHORITY_CHANGED';
+              }
+              return null;
+            },
+            record: record,
+          );
+        }
+        try {
+          _activeIntentGuard?.check();
+          await controller.send(
+            SendData(
+              attachments: attachments,
+              text: text,
+              subject: subject,
+              replyGuid: replyGuid,
+              replyPart: replyPart,
+              effectId: effect,
+              logicalDraft: logicalDraft,
+              logicalIntentGuard: _activeIntentGuard,
+            ),
+          );
+        } on LogicalDraftIntentException catch (error) {
+          if (mounted) {
+            await _saveLogicalDraft();
+            showSnackbar(
+              'Send paused',
+              error.reason == 'AUTHORITY_CHANGED' || error.reason == 'CERTIFICATE_CHANGED'
+                  ? 'Conversation route changed. Review and send again.'
+                  : 'Draft changed. Review and send again.',
+            );
+          }
+          return;
+        } on LogicalSendAdmissionException catch (error) {
+          record('BLOCKED_${error.state.name}', _activeIntentGuard?.providerRequestStarted ?? false);
+          if (mounted) showSnackbar('Send paused', logicalSendAdmissionUserMessage(error.state));
+          return;
+        }
+        if (logicalDraft != null) record('COMPLETED', _activeIntentGuard?.providerRequestStarted ?? false);
+        if (logicalDraft != null && composerChange() != null) {
+          _logicalDraftConsumed = false;
+          if (mounted) await _saveLogicalDraft();
+          return;
+        }
+        if (logicalDraft != null && !_logicalDraftConsumed) {
+          if (_logicalIntentEpoch != intentEpoch) {
+            await _saveLogicalDraft();
+            return;
+          }
+          final cleared = await ChatsSvc.clearLogicalDraftIfCurrent(logicalDraft);
+          if (!cleared) return;
+          _activeIntentGuard?.draftConsumed();
+          if (composerChange() != null) {
+            _logicalDraftConsumed = false;
+            if (mounted) await _saveLogicalDraft();
+            return;
+          }
+          _logicalDraftConsumed = true;
+          localController.debounceDraftSave?.cancel();
+        }
       }
-    }
-    controller.pickedAttachments.clear();
-    controller.textController.clear();
-    controller.subjectTextController.clear();
-    controller.replyToMessage = null;
-    controller.scheduledDate.value = null;
-    localController.debounceTyping = null;
-    if (!_isProtectedLogicalSource) {
-      // Clear the ordinary physical-chat draft after queue custody.
-      unawaited(ChatsSvc.setChatTextFieldText(chat, ''));
-      unawaited(ChatsSvc.setChatTextFieldAttachments(chat, []));
+      controller.pickedAttachments.clear();
+      controller.textController.clear();
+      controller.subjectTextController.clear();
+      controller.replyToMessage = null;
+      controller.scheduledDate.value = null;
+      localController.debounceTyping = null;
+      if (!_isProtectedLogicalSource) {
+        // Clear the ordinary physical-chat draft after queue custody.
+        unawaited(ChatsSvc.setChatTextFieldText(chat, ''));
+        unawaited(ChatsSvc.setChatTextFieldAttachments(chat, []));
+      }
+    } on StateError catch (error) {
+      if (error.message.toString().startsWith('LOGICAL_DRAFT_')) {
+        Logger.warn('Logical draft custody blocked; persisted slots preserved', tag: 'LogicalDraftAdmission');
+        if (mounted) showSnackbar('Send paused', 'Draft storage needs review. Your draft was kept.');
+      } else {
+        rethrow;
+      }
+    } finally {
+      _finalAdmissionDiagnostic?.call();
+      _finalAdmissionDiagnostic = null;
+      _activeIntentGuard?.close();
+      _activeIntentGuard = null;
+      _frozenComposerCurrent = null;
+      _admissionEffect = null;
     }
   }
 

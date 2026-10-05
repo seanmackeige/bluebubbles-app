@@ -1,0 +1,127 @@
+SEAN EDITION BUILD 108 LOGICAL DRAFT ADMISSION — ENGINEERING QUALIFICATION
+Baseline: 5ff6846f75b4e02c1cc8f6d8f93c085587346d44, versionCode 20002108.
+Candidate: next repository-verified versionCode 20002109. Not accepted on S24
+until draft-preserving installation and zero-send checks are recorded separately.
+
+EXACT ORIGINAL PREDICATE
+if (ChatsSvc.isLogicalConversation(chat) && logicalDraft == null) {
+  showSnackbar('Send paused', 'The logical draft changed while send intent was being frozen. Please try again.');
+  return;
+}
+logicalDraft is the result of _saveLogicalDraft -> saveLogicalSendIntent ->
+_saveLogicalDraftLocked. Its guarded predicate is:
+expectedDraftGeneration != null &&
+(_logicalDraftGenerations[entry.logicalId.value] ?? 0) != expectedDraftGeneration.
+The composer can also return null early when _logicalDraftConsumed is true.
+Original runtime operands and which null subpath occurred were not logged.
+
+ROOT CAUSE PROVEN OFFLINE
+The generation/lookup reader resolves raw certificate.id; storage/save resolves
+LogicalConversationId.certified(certificate.id).value. These are different keys.
+Legitimate previous consumption increments the serialized canonical draft key.
+The next freeze reads raw generation 0 and compares canonical generation 1,
+returning null before controller.send or queue/operation creation. Source-extracted
+baseline fixture reproduces the exact popup predicate with zero transport calls.
+The same namespace mismatch makes saved drafts unreadable to their own loader
+and creates new action IDs on equivalent republication. Clear omitted actionId,
+allowing an old same-content draft to clear a different replacement identity.
+
+ORIGINAL INCIDENT EVIDENCE AND LIMITS
+Sean reported the pause at approximately 2026-10-05 10:29 PDT and did not retry.
+Installed APK SHA256 8510af1aea89a29b7b8c5b71156efcda91dc17e82c3ba373fa93445d935140c0
+matches immutable Build 108. Its unique popup returns before the send boundary.
+Read-only Apple DB window 10:26–10:33 contained no outbound; observer event count
+was zero. These corroborate zero execution from the reported rejected call.
+DB absence alone is not proof of absent network traffic.
+Sean confirmed the earlier approximately10:11 successful Comcast message came
+from Sean Edition on this same S24. That supports the reproduced event sequence;
+it does not recover the original generation, content, owner, or authority values.
+Original before/final revisions, actual content/attachment change, and exact
+runtime mutating transition remain UNKNOWN. Do not relabel fixture 0/1 as telemetry.
+
+STATE MACHINE
+Tap -> one in-flight composer operation -> logical identity/capability check ->
+freeze text/subject/reply/effect/attachment intent -> read generation -> serialized
+attachment staging/save -> null guard -> current semantic intent guard -> controller
+send -> authority/provider preparation -> durable admission/replay reservation ->
+queue custody -> fresh provider/certificate checks -> synchronous same-owner final
+intent fence -> HTTP API invocation -> outcome tracking -> conditional consumption.
+The observed pause precedes current-tap reserve/consume. It is not a demonstrated
+same-tap N->N+1 self-consumption race. A prior successful consume is sufficient.
+
+GENERATION ADVANCERS
+The service map has one increment site: clearLogicalDraftIfCurrent, classified
+LEGITIMATE_DRAFT_CONSUMPTION. All callers reach this guarded clear rather than
+incrementing elsewhere. Save/merge/rearm and preview publication do not advance
+that guarded map. HUMAN_CONTENT_CHANGE advances contentRevision when merged.
+COMPOSER_LIFECYCLE, CONTROLLER_RECREATION, LOGICAL_PHYSICAL_REBIND, MIGRATION,
+DRAFT_REPOSITORY_REPUBLISH, SEND_RESERVATION, SEND_ADMISSION, CACHE_RECONSTRUCTION,
+REMOTE_SYNC: no direct service-generation increment. Process restart reconstructs
+an empty in-memory generation map; durable action/replay ledger remains separate.
+An awaited freeze can interleave with a different legitimate consume queued
+ahead of it; that is correctly stale. Pure opening/typing/member reconciliation
+cannot itself advance this map. UI preview and restoration counters are separate.
+
+CORRECTION CONTRACT
+Draft-only storage resolver uses one canonical application generation/preview key.
+Read canonical and raw legacy slots; preserve serialized logicalId and actionId.
+Keep occupied slots in place; equivalent dual slots remain equivalent. Conflicting,
+foreign or malformed slots block without overwrite. General certificate/provider
+resolver and routing doctrine remain unchanged. Rearm cannot resurrect absent or
+replaced identity. Clear requires actionId, content and authority equality.
+One tap carries one live same-owner guard through the queue to the last synchronous
+boundary immediately before Dio.post. No await separates validation and invocation.
+Real content, attachment selection, owner, identity or authority changes pause.
+First HTTP API invocation commits the frozen batch; later edits are a new draft
+and survive completion. API invocation is not proof of physical Apple execution.
+Blocked unstarted batches settle all futures and reservations. Cleanup failure
+retains replay evidence and blocks; foreign operations remain untouched.
+Async restore cannot overwrite newer human edits or a disposed owner. Empty
+logical attachments cannot import a physical-member attachment draft.
+
+ATTACHMENT OWNERSHIP / PERFORMANCE
+User selection add/remove/replace/reorder and exact staging-path changes are fenced
+without scanning payload bytes synchronously. Current UI treats selection objects
+as immutable payload ownership; arbitrary future in-place bytes writes require a
+new content-epoch contract. Frozen payload verification remains in existing send
+preparation. No new unbounded sync attachment hashing was added.
+
+DIAGNOSTICS
+At most8 intermediate events plus one final summary per tap. Only fingerprints,
+counter/authority revisions and classifications; no message text, handles or paths.
+CONTENT_CHANGED, ATTACHMENT_INTENT_CHANGED, DRAFT_IDENTITY_CHANGED, OWNER_CHANGED,
+GENERATION_CHANGED_EXPECTED_INTERNAL / EXTERNAL, AUTHORITY_CHANGED,
+CERTIFICATE_CHANGED, DRAFT_CONSUMED, DRAFT_DISAPPEARED, NO_SEMANTIC_CHANGE are
+distinguished. providerRequestStarted identifies HTTP API invocation only;
+physicalExecutionProven stays false. Each blocked intent records one reason.
+
+OFFLINE VALIDATION
+Final source: original full492-test baseline plus27 new tests,519/519 PASS.
+Static analysis: no issues. Release version/AOT/native negative-control preflight PASS.
+Actual-method baseline fixture reproduces false positive. Corrected service matrix
+38checks; actual batch cleanup16 failure-injection cases; actual composer closure
+13cases; delayed restore7cases; diagnostic classification12; post-clear9.
+Independent source review:95 corrected cases PASS, OFFLINE_SOURCE_ACCEPTED_DEVICE_PENDING. Review records distinguish these source-linked
+harnesses from real Flutter device acceptance. Fixture transport calls are zero.
+No stale-provider safety, sender binding, new-group gate or physical route selection
+has been relaxed. Accepted Build108 ANR/UI logic remains intact; full tests include
+its performance and bounded projection tripwires.
+
+REPRODUCTION
+From repository root with its pinned Dart package config:
+dart --packages=.dart_tool/package_config.json docs/qualification/build108-logical-draft/fixtures/<fixture>.dart
+Baseline harness methods are extracted from immutable108, not from the correction.
+Current harnesses are source-linked snapshots; refresh extraction after changing
+the methods. Automated ongoing guards also live in test/logical_draft_*_test.dart.
+
+DEVICE / ROUTE / TLS BOUNDARIES
+S24 current two-character draft fingerprint was captured read-only and privately.
+Build108 is non-debuggable and backup-disabled; persisted private preference
+custody is not proven. In-place upgrade stops the process. Do not install if doing
+so could silently lose the current draft under the user's no-edit requirement.
+Resolve this single draft-custody boundary before upgrade; do not request retry.
+Observer remains independently armed; admission failure is not2155/2156 evidence.
+One SMS generation supported, exclusive physical writer unestablished, selector
+unknown. Stored chat association does not prove network execution provenance.
+Certificate system-trust patch remains offline/uninstalled. Apple validation
+authorization consumed; no repeat. No production Mac routing/account mutations.

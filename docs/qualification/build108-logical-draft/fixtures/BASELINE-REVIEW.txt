@@ -1,0 +1,39 @@
+BUILD 108 INDEPENDENT ADVERSARIAL REVIEW — BASELINE / PRE-CORRECTION
+Baseline: 5ff6846f75b4e02c1cc8f6d8f93c085587346d44
+Scope: source inspection and isolated offline fixture only. No device/provider mutation or real traffic.
+Original 10:29 runtime generation/content/owner operands remain UNKNOWN.
+
+PROVEN REACHABLE FALSE-POSITIVE
+Exact popup predicate: ChatsSvc.isLogicalConversation(chat) && logicalDraft == null.
+Reader logicalConversationIdFor returns certificate.id; writer _saveLogicalDraftLocked uses entry.logicalId.value, a different certified application namespace. Consume increments the serialized draft logicalId. A previous successful canonical-namespace consume advances its generation to 1 while reader stays 0; next unchanged-authority intent freeze compares 0 with 1 and returns null before queue construction.
+The current tap does not itself consume/reserve before this comparison. This is a persistent namespace disagreement after prior consumption, not proven N->N+1 consumption within the rejected tap.
+Verbatim extracted service methods plus real LogicalDraft/LogicalConversationId reproduce the disagreement offline. Fake registry/preferences only; all transport counts zero. This proves a general defect and observed-shape reachability, not undocumented original runtime operands.
+
+OTHER RELEASE BLOCKERS
+1. Same-content save cannot reload its own stored draft and can create a new action identity on every publication.
+2. clearLogicalDraftIfCurrent compares revision/fingerprint/authority but not creation identity/actionId; an old draft can clear a distinct same-content replacement.
+3. Composer intent epoch is compared only after controller.send completes. There is no current live semantic draft guard before queue admission or final network dispatch.
+4. Controller consumption callback can mark draft consumed and bypass the composer's later epoch check, then clear a newer unsaved edit after send completion.
+5. Final UI queue receipt validation precedes a GlobalIsolate handoff, fresh certificate reads, HTTP provider-account read, and further certificate reload. A guard confined to the UI queue does not cover that late pre-POST window.
+6. Async restoration completion is guarded only by UI generation advanced on consume, not a newer human edit; stale attachment/reply restoration can race new input.
+
+DUAL-NAMESPACE COMPATIBILITY REQUIREMENTS
+Use a dedicated canonical application owner key for generations and lookup without changing the general logicalConversationIdFor provider/certificate resolver. Read legacy and canonical slots; preserve serialized logicalId/actionId. Keep the existing slot to avoid non-atomic renames. A canonical slot can legitimately hold a legacy logicalId from Build108. Clear/rearm must resolve that slot. Conflicting slots must remain untouched and block; do not choose by latest timestamp or silently create a new action. Preserve admission ambiguity/replay ledger across restart.
+
+TWELVE REVIEW ATTACKS FOR CANDIDATE
+1. Real content edit after freeze: inject before staging return, preference write, authority observation, ledger commit, dispatch reservation, GlobalIsolate account read, and final transport callback. Zero fake dispatch; newer draft survives; fresh tap required.
+2. Internal bookkeeping: reservation and equivalent same-content publication leave content/action identity stable; previous consume does not poison next genuine draft.
+3. Two taps: same frame/await/second controller paths at most one fake dispatch; lock clears on error.
+4. Blocked tap recovery: no queued item or admitted ledger residue; next explicit unchanged/reviewed tap can reach gate.
+5. Process recreation: admitted/reserved/unknown ledger remains fail closed; no auto retry; legacy IDs do not evade replay matching.
+6. Read events: equivalent websocket/member read and selection-only input do not change semantic draft/authority or falsely block.
+7. Authority drift: certificate/participant/service/account/sender/writer ambiguity still blocks, separate from draft bookkeeping.
+8. Fingerprint completeness: logical owner, text, subject, reply target/provenance, effect and all attachment intent fields included; no equality based solely on numeric revision. Do not expose text or phone identifiers in diagnostics.
+9. Attachments: same name/size but different bytes, reordered/removed/ephemeral items, path staging and delayed restore; no text/subject-only guard.
+10. ANR: no synchronous unbounded attachment hashing or read-side persistent writes/rebuild loops; full baseline stress/performance tests preserved.
+11. Topology: 2155/2156 member presentation switch does not replace logical draft owner, action, or select a different writer; no hard-coded physical IDs introduced.
+12. New-group: draft correction does not relax sender binding or logical capability checks; ordinary/new-group/reply/reaction paths exercised.
+
+CURRENT VERDICT
+BASELINE REJECTED FOR PROVEN GENERAL DRAFT NAMESPACE DEFECT.
+CORRECTED RELEASE REVIEW PENDING; no build/install acceptance granted by this report.
