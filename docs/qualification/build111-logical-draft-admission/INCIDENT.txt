@@ -1,0 +1,90 @@
+SEAN EDITION LOGICAL DRAFT ADMISSION INCIDENT
+Current scope: admission correction and S24 zero-send readiness. Route-selection
+research is suspended until an actual send passes admission. No synthetic send.
+
+EXACT BUILD108 PREDICATE
+if (ChatsSvc.isLogicalConversation(chat) && logicalDraft == null) {
+  showSnackbar('Send paused', 'The logical draft changed while send intent was being frozen. Please try again.');
+  return;
+}
+The generation guard in _saveLogicalDraftLocked is:
+expectedDraftGeneration != null &&
+(_logicalDraftGenerations[entry.logicalId.value] ?? 0) != expectedDraftGeneration
+
+EIGHT REQUESTED INCIDENT ANSWERS
+1. Actual10:29 generation/contentRevision before freeze: NOT RECORDED/UNRECOVERABLE
+   from the preserved evidence. Source-extracted false-positive fixture reads0.
+2. Actual rejection generation/contentRevision: NOT RECORDED. Fixture guard reads1
+   from the canonical key after a legitimate earlier consumption.
+3. Actual before/final content fingerprints: NOT RECORDED. Offline fixture keeps
+   human content unchanged and nevertheless returns null in Build108.
+4. Actual before/final authority revisions: NOT RECORDED. Offline fixture does not
+   change authority. No claim that fixture operands are recovered live telemetry.
+5. Every guarded service-generation advancer: one write site, inside guarded
+   clearLogicalDraftIfCurrent. Its two callers run after await handler/send.
+   Saves, publication, rearm, typing, member reconciliation and read-side refresh
+   do not directly advance it. Content/UI preview counters are separate.
+6. Proven live path: unique null-draft popup then early return. The precise
+   null-producing subpath is unlogged. A preexisting _logicalDraftConsumed flag
+   or identity availability change can also return null. Prior-consume key mismatch
+   is deterministically reproduced; exact10:29 mutator remains UNKNOWN.
+7. THIS tap cannot consume or reserve and then reach that popup: both operations
+   occur later. An EARLIER legitimate consume increments the canonical key while
+   the broken raw-certificate lookup still reads0. Sean confirmed an earlier10:11
+   successful send from this same S24, supporting that reproduced sequence.
+8. Actual human-visible content change at10:29: UNKNOWN. Sean separately confirmed
+   intentionally clearing/changing the paused draft later, before any installation.
+   That later action does not establish what happened during the original tap.
+
+ZERO ORIGINAL DISPATCH
+The installed108 APK was attested exactly; the reported unique branch returns
+before outgoing/queue construction. Apple10:26–10:33 had zero outbounds and the
+passive observer had zero events. Together these prove no physical execution
+from this reported rejected call. DB absence alone is not a general network proof.
+
+GENERAL CORRECTIONS ALREADY BANKED
+Build108 raw-certificate read versus canonical logical save/consume mismatch is
+fixed; same-action publication, replacement protection, latest-human-intent
+restoration/consumption and synchronous final transport fences are retained.
+Build109 was rejected for omitted native registration. Build110 recovered startup
+with required generated source and actual DEX class-definition packaging gates.
+Neither immutable candidate is overwritten.
+
+REMAINING READINESS DEFECT FOUND AND CORRECTED FOR111
+Build110's intentional process-epoch pause is still a false rejection under the
+user's unchanged-intent/authority requirement. Same certificate/authority with
+freshly re-proven tap-time authority must not consume a human retry for bookkeeping.
+111 captures immutable live authority before freeze; every guarded item checks
+that anchor before the already-current fast path. Only matching material hashes
+and exact unchanged tap epoch permit CAS rearm. Missing proof, true changes and
+within-tap A-to-B-to-A remain blocking. The refreshed same-action draft propagates
+through queue items, final guard and CVC/fallback consumption. Global epoch and
+receipt equality remain strict. CAS cannot overwrite a newer human draft.
+A fully empty retained container has no pending intent: its first nonempty human
+intent captures CURRENT authority. Nonempty drafts retain original bindings;
+unavailable current authority is never replaced by a lastObserved shortcut.
+
+REAL DEVICE PROOF DESIGN
+Explicit expansion of existing read-only health diagnostics runs a pure local
+snapshot/policy probe, capped8/process. It reports exact draft generation,
+content/action fingerprints, content revision and draft/current authority values.
+It reads only scoped stored state; it does not refresh provider evidence, save or
+consume a draft, reserve/prepare an operation, mutate queue/ledger or send HTTP.
+Controlled in-memory policy checks are separate from live prerequisite results.
+Actual CAS and transport are not exercised on the phone. Real send always forces
+fresh provider evidence and final same-owner fencing. No network-blocking trick
+or synthetic tap substitutes for admission proof.
+The bounded admission record is also available through release diagnostics without
+private-data access. It distinguishes expected epoch refresh, real intent change,
+material authority/certificate change and expected/external generation transition.
+
+RELEASE CUSTODY
+Next unused version20002111/build111. One candidate only after complete regression,
+independent review and source seal. Established signer, in-place S24 replacement,
+no uninstall/data clear/manual draft edits. Device acceptance is a separate receipt.
+No current request to Sean to retry is valid until that acceptance is complete.
+The previous Build110 'may pause once' recommendation is withdrawn.
+
+The observer remains in the background. No new2155/2156 correlation is part of
+this investigation. No Mac production change, account/sender/SIM/registration
+change, Apple validation retry or certificate-patch installation is authorized.

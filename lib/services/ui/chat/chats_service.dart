@@ -1,3 +1,4 @@
+import 'package:bluebubbles/services/ui/chat/logical_draft_admission_probe.dart';
 import 'package:bluebubbles/services/ui/chat/logical_draft_storage.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -169,6 +170,35 @@ class ChatsService {
   int _logicalPassiveRecheckFailures = 0;
 
   LogicalAuthorityRevision? get currentLogicalAuthorityRevision => _logicalAuthorityRevisionTracker.current;
+
+  int _logicalDraftProbeCount = 0;
+
+  /// Explicit diagnostic expansion only; no work runs from build/projection.
+  void inspectLogicalDraftAdmissionSnapshot(Chat chat) {
+    if (_logicalDraftProbeCount >= 8 || !isLogicalConversation(chat)) return;
+    _logicalDraftProbeCount += 1;
+    LogicalDraft? draft;
+    var coherent = false;
+    try {
+      final storage = _logicalDraftStorageFor(chat);
+      if (storage != null) {
+        draft = storage.read(PrefsSvc.messaging.loadLogicalDraftJson).draft;
+        coherent = true;
+      }
+    } catch (_) {
+      /* Conflicting slots stay untouched. */
+    }
+    final report = logicalDraftAdmissionProbe(
+      draft: draft,
+      authority: logicalWriterAuthorityRevisionFor(chat),
+      generation: logicalDraftGenerationFor(chat),
+      storageCoherent: coherent,
+    );
+    final encoded = jsonEncode(report);
+    Logger.info(encoded, tag: 'LogicalDraftPreflight');
+    // Explicit bounded diagnostics remain observable on a non-debuggable release.
+    debugPrint(encoded);
+  }
 
   LogicalTransportReadinessEvidence? logicalTransportReadinessForSourceRow(int sourceRowId) =>
       _logicalTransportReadinessBySourceRow[sourceRowId];
@@ -2968,7 +2998,13 @@ class ChatsService {
               ? _logicalAuthorityRevisionTracker.lastObserved ?? logicalWriterAuthorityRevisionFor(chat)
               : null,
         );
+    // A completely empty container has no pending human intent to bind to an
+    // old authority. The first real content captures current authority only.
+    final startsNewIntent =
+        !existing.hasUserIntent &&
+        (text.isNotEmpty || subject.isNotEmpty || attachments.isNotEmpty || reply != null || effectId != null);
     final updated = existing.mergeUserIntent(
+      observedRevision: startsNewIntent ? logicalWriterAuthorityRevisionFor(chat) : null,
       text: text,
       subject: subject,
       attachments: attachments,
@@ -3077,6 +3113,35 @@ class ChatsService {
       if (!staging.isCompleted) staging.complete();
     }
   }
+
+  /// Compare-and-set only the authority metadata of the exact frozen intent.
+  /// Admission owns the fresh evidence checks; this lock preserves newer edits.
+  Future<LogicalDraft?> alignLogicalDraftAuthorityIfCurrent(LogicalDraft expected, LogicalAuthorityRevision observed) =>
+      _withLogicalDraftLock(() async {
+        final storage = _logicalDraftStorageForId(expected.logicalId);
+        if (storage == null) return null;
+        final slot = storage.read(PrefsSvc.messaging.loadLogicalDraftJson);
+        final current = slot.draft;
+        final live = currentLogicalAuthorityRevision;
+        if (current == null ||
+            current.actionId != expected.actionId ||
+            current.contentFingerprint != expected.contentFingerprint ||
+            current.observedCertificateRevision != expected.observedCertificateRevision ||
+            current.observedAuthorityRevision != expected.observedAuthorityRevision ||
+            current.observedAuthorityEpoch != expected.observedAuthorityEpoch ||
+            live == null ||
+            live.certificateRevision != observed.certificateRevision ||
+            live.authorityRevision != observed.authorityRevision ||
+            live.epoch != observed.epoch) {
+          return null;
+        }
+        final aligned = current.rearm(observed, updatedAtEpochMilliseconds: DateTime.now().millisecondsSinceEpoch);
+        for (final key in slot.occupiedKeys) {
+          await PrefsSvc.messaging.saveLogicalDraftJson(key, jsonEncode(aligned.toJson()));
+        }
+        _bumpLogicalDraftPreviewRevision(storage.canonicalKey);
+        return aligned;
+      });
 
   Future<void> persistRearmedLogicalDraft(LogicalDraft draft) {
     return _withLogicalDraftLock(() async {

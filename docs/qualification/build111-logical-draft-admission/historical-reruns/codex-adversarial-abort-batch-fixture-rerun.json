@@ -1,0 +1,158 @@
+{
+  "fixture": "codex-adversarial-abort-batch-fixture",
+  "exit_code": 0,
+  "historical_extracted_source": true,
+  "current_imported_models_or_guards": true,
+  "result": {
+    "method_origin": "verbatim correction _abortUnstartedLogicalIntentBatch",
+    "fake_boundaries": "queue objects, prepared cleanup callbacks, durable ledger callbacks",
+    "scenarios": [
+      {
+        "items": 1,
+        "failure_injection": "none",
+        "first_already_reserved": false,
+        "all_futures_settled": true,
+        "other_operation_untouched": true,
+        "durable_custody_expected": true,
+        "physical_requests": 0
+      },
+      {
+        "items": 1,
+        "failure_injection": "none",
+        "first_already_reserved": true,
+        "all_futures_settled": true,
+        "other_operation_untouched": true,
+        "durable_custody_expected": true,
+        "physical_requests": 0
+      },
+      {
+        "items": 1,
+        "failure_injection": "delete",
+        "first_already_reserved": false,
+        "all_futures_settled": true,
+        "other_operation_untouched": true,
+        "durable_custody_expected": true,
+        "physical_requests": 0
+      },
+      {
+        "items": 1,
+        "failure_injection": "delete",
+        "first_already_reserved": true,
+        "all_futures_settled": true,
+        "other_operation_untouched": true,
+        "durable_custody_expected": true,
+        "physical_requests": 0
+      },
+      {
+        "items": 1,
+        "failure_injection": "latest",
+        "first_already_reserved": false,
+        "all_futures_settled": true,
+        "other_operation_untouched": true,
+        "durable_custody_expected": true,
+        "physical_requests": 0
+      },
+      {
+        "items": 1,
+        "failure_injection": "latest",
+        "first_already_reserved": true,
+        "all_futures_settled": true,
+        "other_operation_untouched": true,
+        "durable_custody_expected": true,
+        "physical_requests": 0
+      },
+      {
+        "items": 1,
+        "failure_injection": "ledger",
+        "first_already_reserved": false,
+        "all_futures_settled": true,
+        "other_operation_untouched": true,
+        "durable_custody_expected": true,
+        "physical_requests": 0
+      },
+      {
+        "items": 1,
+        "failure_injection": "ledger",
+        "first_already_reserved": true,
+        "all_futures_settled": true,
+        "other_operation_untouched": true,
+        "durable_custody_expected": true,
+        "physical_requests": 0
+      },
+      {
+        "items": 3,
+        "failure_injection": "none",
+        "first_already_reserved": false,
+        "all_futures_settled": true,
+        "other_operation_untouched": true,
+        "durable_custody_expected": true,
+        "physical_requests": 0
+      },
+      {
+        "items": 3,
+        "failure_injection": "none",
+        "first_already_reserved": true,
+        "all_futures_settled": true,
+        "other_operation_untouched": true,
+        "durable_custody_expected": true,
+        "physical_requests": 0
+      },
+      {
+        "items": 3,
+        "failure_injection": "delete",
+        "first_already_reserved": false,
+        "all_futures_settled": true,
+        "other_operation_untouched": true,
+        "durable_custody_expected": true,
+        "physical_requests": 0
+      },
+      {
+        "items": 3,
+        "failure_injection": "delete",
+        "first_already_reserved": true,
+        "all_futures_settled": true,
+        "other_operation_untouched": true,
+        "durable_custody_expected": true,
+        "physical_requests": 0
+      },
+      {
+        "items": 3,
+        "failure_injection": "latest",
+        "first_already_reserved": false,
+        "all_futures_settled": true,
+        "other_operation_untouched": true,
+        "durable_custody_expected": true,
+        "physical_requests": 0
+      },
+      {
+        "items": 3,
+        "failure_injection": "latest",
+        "first_already_reserved": true,
+        "all_futures_settled": true,
+        "other_operation_untouched": true,
+        "durable_custody_expected": true,
+        "physical_requests": 0
+      },
+      {
+        "items": 3,
+        "failure_injection": "ledger",
+        "first_already_reserved": false,
+        "all_futures_settled": true,
+        "other_operation_untouched": true,
+        "durable_custody_expected": true,
+        "physical_requests": 0
+      },
+      {
+        "items": 3,
+        "failure_injection": "ledger",
+        "first_already_reserved": true,
+        "all_futures_settled": true,
+        "other_operation_untouched": true,
+        "durable_custody_expected": true,
+        "physical_requests": 0
+      }
+    ],
+    "unhandled_errors": [],
+    "real_provider_calls": 0
+  }
+}

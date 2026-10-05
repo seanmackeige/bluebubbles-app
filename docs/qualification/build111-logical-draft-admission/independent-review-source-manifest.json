@@ -1,0 +1,63 @@
+{
+  "scope": "independent offline source-linked fixtures; no APK, device, provider, receipt, queue, or HTTP execution",
+  "headAtReview": "ac60039a8c74edec0d3cc37106414eb4ca1b28c6",
+  "sourceSha256": {
+    "android/app/build.gradle": "59e6f3f6d24a71a1b96f1e35d6342d871ea8754b70dabf560b038f061443e44a",
+    "android/tooling/verify_native_plugin_package.py": "a9e7fb40c877064b5c1dc92c1a81805c3c31a5ffd69b647bf94ad6e66fd7b40f",
+    "lib/app/layouts/conversation_details/widgets/logical_conversation_health_card.dart": "ed712f1c5be36669bb9873f0cd86712f837f14bea59d1b0254eb3d00e823131a",
+    "lib/app/layouts/conversation_view/widgets/text_field/conversation_text_field.dart": "ab364e53b87e1adb8bf0243cff11235776617de5adc4ee33a02c781c2eba3036",
+    "lib/services/backend/actions/send_message_actions.dart": "6bbf87c2c2fb87f16368965888e5f55c6c973e05414a255b60f0a2979862b0ce",
+    "lib/services/backend/outgoing_message_handler.dart": "2c6af26a70ba054539021c0c30eec9c241cd2f0f5542c5be63d52c4247aceaf0",
+    "lib/services/network/api/message_api.dart": "50b72d3947f7f7627359926f627bfc971338fe1ea7532d64c8c50d00a27142ad",
+    "lib/services/ui/chat/chats_service.dart": "f43c20d413eb2d153b7c1a2bc2c68c2d13d062d129f5a51069a48ec28bfdc29e",
+    "lib/services/ui/chat/conversation_view_controller.dart": "ee119fff2bd798fe91329f0f107815db6cf919c09f859ac77c1970e4118feb0b",
+    "lib/services/ui/chat/logical_conversation_identity.dart": "eec2992aee2a0a7cb3f05075fc5e81c3ca71e757c04a38c5f70de0616af71e98",
+    "lib/services/ui/chat/logical_draft.dart": "588b80d8eedfcf169a68d25139a0818117d1df142048e6cc8db640c7fd273d8c",
+    "lib/services/ui/chat/logical_draft_admission_probe.dart": "2ea79f5702c3197d75f7eb0a2be83978bef40d17f5c9cf54b82c04a78b74e8e3",
+    "lib/services/ui/chat/logical_draft_authority_alignment.dart": "133dd0af2c6d4192648b556381deda165a52b4cc7de43464e8b243cd078f5771",
+    "lib/services/ui/chat/logical_draft_intent_guard.dart": "2a2b7f8f96a9846960d799fcfe560cc3b7892d517beb7ef02fe0af9407d21e0c",
+    "lib/services/ui/chat/logical_draft_storage.dart": "ebf4e9b9fdb09ca219e204380217fbff60f268da233584143f4142bd42866184",
+    "test/logical_draft_authority_alignment_test.dart": "ad8d783cf0b7dedc46bcfd792cd1112ed1c07bff6cfd72acedbf4555076513af"
+  },
+  "fixtureSha256": {
+    "fixtures/codex-adversarial-111-cas-handler-consume.dart": "9e53228ca6965bf2e2c16e877597f6150c170a1f6d586cd3dc27623a04c0f62c",
+    "fixtures/codex-adversarial-111-final-fence.dart": "285150b3ff31cc200dfb00835974edc60f4ca39439e93fdf10ea6a38c87c07b9",
+    "fixtures/codex-adversarial-111-matches-fast-path.dart": "3f6ffede833ff96e82e8afc602ed9eaecbd5cc3234520fefa33be297d5ea4166",
+    "fixtures/codex-adversarial-111-probe-boundary.dart": "8b1a4f7ca2d918766f019e92e5ac3049968ce8c30c590a08b3af986805c234ed",
+    "fixtures/codex-adversarial-111-probe-fixture.dart": "d8eac7dfc8d43b7b1094f98b014db52a296fa033fd746deec566ad520640ca7d"
+  },
+  "fixtureResults": {
+    "cas-handler-consume": {
+      "status": "PASS",
+      "result": "fixtures/codex-adversarial-111-cas-handler-consume-result.json"
+    },
+    "matches-fast-path": {
+      "status": "PASS",
+      "result": "fixtures/codex-adversarial-111-matches-fast-path-result.json"
+    },
+    "final-fence": {
+      "status": "PASS",
+      "result": "fixtures/codex-adversarial-111-final-fence-result.json"
+    },
+    "probe-fixture": {
+      "status": "PASS",
+      "result": "fixtures/codex-adversarial-111-probe-fixture-result.json"
+    },
+    "probe-boundary": {
+      "status": "PASS",
+      "result": "fixtures/codex-adversarial-111-probe-boundary-result.json"
+    }
+  },
+  "currentSourceCaseCounts": {
+    "casHandlerConsume": 46,
+    "fastPath": 2,
+    "finalFence": 8,
+    "pureProbe": 11,
+    "probeBoundary": 4,
+    "total": 71
+  },
+  "historicalCases": {
+    "count": 95,
+    "scope": "rerun preserved historical fixture bodies against compatible current imports; not all bodies newly extracted for 111"
+  }
+}

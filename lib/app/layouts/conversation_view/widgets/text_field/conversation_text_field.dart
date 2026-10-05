@@ -740,6 +740,10 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
                 : 'PRESENT',
             'generationBefore': generationBefore,
             'generationFinal': ChatsSvc.logicalDraftGenerationFor(chat),
+            'authorityEpochAtFreeze': authorityBefore?.epoch,
+            'draftAuthorityEpochBefore': frozenDraft?.observedAuthorityEpoch,
+            'draftAuthorityEpochFinal': current?.observedAuthorityEpoch,
+            'authorityEpochFinal': revision?.epoch,
             'authorityBefore': authorityBefore?.authorityRevision,
             'authorityFinal': revision?.authorityRevision,
             'certificateBefore': authorityBefore?.certificateRevision,
@@ -748,7 +752,9 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
             'providerRequestStarted': started,
             'physicalExecutionProven': false,
           };
-          Logger.info(jsonEncode(entry), tag: 'LogicalDraftAdmission');
+          final encoded = jsonEncode(entry);
+          Logger.info(encoded, tag: 'LogicalDraftAdmission');
+          debugPrint(encoded);
         }
 
         _finalAdmissionDiagnostic = () =>
@@ -773,7 +779,10 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
           return;
         }
         if (logicalDraft != null) {
-          _activeIntentGuard = LogicalDraftIntentGuard(
+          late final LogicalDraftIntentGuard intentGuard;
+          intentGuard = LogicalDraftIntentGuard(
+            frozenDraft: logicalDraft,
+            authorityAtFreeze: authorityBefore,
             composerIsCurrent: () => composerChange() == null,
             validateCurrent: () {
               final change = composerChange();
@@ -794,18 +803,24 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
               return null;
             },
             validateAuthority: () {
+              final expected = intentGuard.effectiveDraft!;
               final revision = ChatsSvc.currentLogicalAuthorityRevision;
-              if (revision?.certificateRevision != logicalDraft.observedCertificateRevision) {
+              if (revision?.certificateRevision != expected.observedCertificateRevision) {
                 return 'CERTIFICATE_CHANGED';
               }
-              if (revision?.authorityRevision != logicalDraft.observedAuthorityRevision ||
-                  revision?.epoch != logicalDraft.observedAuthorityEpoch) {
+              if (revision?.authorityRevision != expected.observedAuthorityRevision ||
+                  revision?.epoch != expected.observedAuthorityEpoch ||
+                  (authorityBefore != null &&
+                      (revision?.certificateRevision != authorityBefore.certificateRevision ||
+                          revision?.authorityRevision != authorityBefore.authorityRevision ||
+                          revision?.epoch != authorityBefore.epoch))) {
                 return 'AUTHORITY_CHANGED';
               }
               return null;
             },
             record: record,
           );
+          _activeIntentGuard = intentGuard;
         }
         try {
           _activeIntentGuard?.check();
@@ -848,7 +863,7 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
             await _saveLogicalDraft();
             return;
           }
-          final cleared = await ChatsSvc.clearLogicalDraftIfCurrent(logicalDraft);
+          final cleared = await ChatsSvc.clearLogicalDraftIfCurrent(_activeIntentGuard?.effectiveDraft ?? logicalDraft);
           if (!cleared) return;
           _activeIntentGuard?.draftConsumed();
           if (composerChange() != null) {

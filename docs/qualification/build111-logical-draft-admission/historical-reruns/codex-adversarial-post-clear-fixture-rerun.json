@@ -1,0 +1,67 @@
+{
+  "fixture": "codex-adversarial-post-clear-fixture",
+  "exit_code": 0,
+  "historical_extracted_source": true,
+  "current_imported_models_or_guards": true,
+  "result": {
+    "method": "verbatim composer fallback clear and subsequent UI clear statements",
+    "fake_boundaries": "controller/service delayed clear; composer reason already independently source tested",
+    "cases": {
+      "unchanged": {
+        "savedNewIntent": 0,
+        "uiConsumed": true,
+        "exactConsumptionRecorded": true,
+        "preserved": false
+      },
+      "text during clear": {
+        "savedNewIntent": 1,
+        "uiConsumed": false,
+        "exactConsumptionRecorded": true,
+        "preserved": true
+      },
+      "subject during clear": {
+        "savedNewIntent": 1,
+        "uiConsumed": false,
+        "exactConsumptionRecorded": true,
+        "preserved": true
+      },
+      "attachment during clear": {
+        "savedNewIntent": 1,
+        "uiConsumed": false,
+        "exactConsumptionRecorded": true,
+        "preserved": true
+      },
+      "reply during clear": {
+        "savedNewIntent": 1,
+        "uiConsumed": false,
+        "exactConsumptionRecorded": true,
+        "preserved": true
+      },
+      "owner replacement during clear": {
+        "savedNewIntent": 1,
+        "uiConsumed": false,
+        "exactConsumptionRecorded": true,
+        "preserved": true
+      },
+      "disposed during clear": {
+        "savedNewIntent": 0,
+        "uiConsumed": false,
+        "exactConsumptionRecorded": true,
+        "preserved": true
+      },
+      "clear declined": {
+        "savedNewIntent": 0,
+        "uiConsumed": false,
+        "exactConsumptionRecorded": false,
+        "preserved": true
+      },
+      "clear declined with human edit": {
+        "savedNewIntent": 0,
+        "uiConsumed": false,
+        "exactConsumptionRecorded": false,
+        "preserved": true
+      }
+    },
+    "real_provider_calls": 0
+  }
+}

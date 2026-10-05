@@ -1,0 +1,18 @@
+{
+  "at": "2026-10-05T19:54:20.110744+00:00",
+  "prior_archives": [
+    {
+      "archive": "20261005-build109-logical-draft-admission",
+      "versionCode": 20002109
+    },
+    {
+      "archive": "20261005-build110-logical-draft-admission",
+      "versionCode": 20002110
+    }
+  ],
+  "currently_attested_s24_versionCode": 20002110,
+  "next_unused_versionCode": 20002111,
+  "buildNumber": 111,
+  "one_candidate_authorization": "CURRENT_USER_MISSION_FIX_GENERAL_CAUSE_BUILD_ONE_INSTALL_IN_PLACE",
+  "immutable_108_109_110_preserved": true
+}

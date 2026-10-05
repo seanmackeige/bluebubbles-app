@@ -1,4 +1,5 @@
 import 'package:bluebubbles/services/ui/chat/logical_draft_intent_guard.dart';
+import 'package:bluebubbles/services/ui/chat/logical_draft_authority_alignment.dart';
 import 'package:bluebubbles/models/models.dart' show AttachmentUploadProgress;
 import 'dart:async';
 import 'dart:collection';
@@ -389,16 +390,70 @@ class OutgoingMessageHandler {
       _failLogicalAdmission(items, 'SEND_BLOCKED_PROVIDER_CONTEXT_CHANGED_DURING_EVIDENCE');
     }
 
-    final draft = items.map((item) => item.logicalDraft).whereType<LogicalDraft>().firstOrNull;
+    var draft = items.map((item) => item.logicalDraft).whereType<LogicalDraft>().firstOrNull;
+    // A newly saved draft must not hide authority drift during its own freeze.
+    for (final item in items) {
+      final anchor = item.logicalIntentGuard?.authorityAtFreeze;
+      if (anchor != null && !sameLogicalAuthorityRevision(anchor, revision)) {
+        LogicalDraft? rearmed;
+        if (draft != null && !revision.matchesDraft(draft)) {
+          for (final guarded in items) {
+            guarded.logicalIntentGuard?.check();
+          }
+          if (ChatsSvc.isLogicalEvidenceObservationCurrent(observationEpoch) &&
+              _currentLogicalProviderContextFingerprint() == providerContextAtObservationStart) {
+            rearmed = await ChatsSvc.alignLogicalDraftAuthorityIfCurrent(draft, revision);
+          }
+        }
+        // This tap always pauses. CAS merely prepares the unchanged intent for
+        // the next explicit confirmation; it never grants this operation.
+        _failLogicalAdmission(items, 'SEND_BLOCKED_AUTHORITY_CHANGED_DURING_FREEZE', rearmedDraft: rearmed);
+      }
+    }
     if (draft != null && !revision.matchesDraft(draft)) {
-      final certificateChanged = draft.observedCertificateRevision != revision.certificateRevision;
-      final rearmed = draft.rearm(revision, updatedAtEpochMilliseconds: DateTime.now().millisecondsSinceEpoch);
-      await ChatsSvc.persistRearmedLogicalDraft(rearmed);
-      _failLogicalAdmission(
-        items,
-        certificateChanged ? 'SEND_BLOCKED_MEMBERSHIP_CERTIFICATE_CHANGED' : 'SEND_BLOCKED_AUTHORITY_CHANGED',
-        rearmedDraft: rearmed,
+      final original = draft;
+      final canRefreshEpoch = items.every(
+        (item) =>
+            item.logicalDraft?.actionId == original.actionId &&
+            item.logicalIntentGuard?.frozenDraft?.actionId == original.actionId &&
+            logicalDraftAuthorityAlignment(
+                  draft: original,
+                  frozenAuthority: item.logicalIntentGuard?.authorityAtFreeze,
+                  observedAuthority: revision,
+                ) ==
+                LogicalDraftAuthorityAlignment.refreshEpoch,
       );
+      if (canRefreshEpoch) {
+        for (final item in items) {
+          item.logicalIntentGuard?.check();
+        }
+        if (!ChatsSvc.isLogicalEvidenceObservationCurrent(observationEpoch)) {
+          _failLogicalAdmission(items, 'SEND_BLOCKED_AUTHORITY_CHANGED_DURING_ADMISSION');
+        }
+        final aligned = await ChatsSvc.alignLogicalDraftAuthorityIfCurrent(original, revision);
+        if (aligned == null) throw const LogicalDraftIntentException('DRAFT_IDENTITY_CHANGED');
+        if (!ChatsSvc.isLogicalEvidenceObservationCurrent(observationEpoch) ||
+            !sameLogicalAuthorityRevision(ChatsSvc.currentLogicalAuthorityRevision, revision) ||
+            _currentLogicalProviderContextFingerprint() != providerContextAtObservationStart) {
+          _failLogicalAdmission(items, 'SEND_BLOCKED_AUTHORITY_CHANGED_DURING_ADMISSION');
+        }
+        for (final guard in items.map((item) => item.logicalIntentGuard!).toSet()) {
+          guard.acceptAuthorityRefresh(aligned, revision);
+        }
+        for (final item in items) {
+          item.logicalDraft = aligned;
+        }
+        draft = aligned;
+      } else {
+        final certificateChanged = draft.observedCertificateRevision != revision.certificateRevision;
+        final rearmed = draft.rearm(revision, updatedAtEpochMilliseconds: DateTime.now().millisecondsSinceEpoch);
+        await ChatsSvc.persistRearmedLogicalDraft(rearmed);
+        _failLogicalAdmission(
+          items,
+          certificateChanged ? 'SEND_BLOCKED_MEMBERSHIP_CERTIFICATE_CHANGED' : 'SEND_BLOCKED_AUTHORITY_CHANGED',
+          rearmedDraft: rearmed,
+        );
+      }
     }
 
     // Freeze transport capability only after the forced provider observation.

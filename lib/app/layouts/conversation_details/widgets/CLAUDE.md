@@ -37,3 +37,8 @@ Reusable widgets composing the conversation details / info panel.
 - Parent panel: `../CLAUDE.md` (conversation_details)
 - Dialogs (add participant, leave chat, etc.): `../dialogs/CLAUDE.md`
 - Contact avatar: `lib/app/components/avatars/CLAUDE.md`
+
+Explicit health-card expansion may run the bounded LOCAL admission snapshot/policy
+probe. It reads existing preferences/authority only; no provider refresh, draft
+write, reservation, queue or transport. Optional supplied test snapshots skip it.
+No work is scheduled from build or projection, preserving the Build108 ANR fix.

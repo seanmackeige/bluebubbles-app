@@ -1,0 +1,212 @@
+SEAN EDITION BUILD 111 — INDEPENDENT ADVERSARIAL SOURCE REVIEW
+Reviewer: /root/admission_adversarial
+Date: 2026-10-05
+
+Disposition: SOURCE REVIEW PASS — OFFLINE SCOPE; EXACT APK/S24 ACCEPTANCE PENDING.
+The final five-fixture rerun passed all 71 current-source cases. Both already-
+current-draft negative controls paused with zero metadata writes. The final
+manifest hashes 16 source files; the parent verified all still match before seal.
+No unresolved release blocker was identified in the reviewed source scope.
+
+This review does not accept an APK, installation, live provider observation,
+persisted phone CAS, queue reservation, HTTP call, or physical dispatch. No build,
+installation, device action, provider mutation, or send was performed by this
+reviewer. The parent owns the final immutable source/APK seal and S24 acceptance.
+
+WHAT IS CORRECTED
+
+Build 108's raw/canonical namespace mismatch is independently reproducible from
+its actual methods. After a prior legitimate consume advances canonical generation
+to 1, its raw-key reader still sees 0 and unchanged admission can return null.
+The original phone's exact 10:29 operands were not logged and remain unknown.
+Sean's confirmed 10:11 send from the same S24 supports this causal shape but does
+not retrospectively prove those precise transient values. The original unique
+popup is before this tap's handler/reservation/consume paths; this tap could not
+have consumed its own draft before that popup. The sole tracked generation
+advancer was clearLogicalDraftIfCurrent; its callers follow handler completion.
+
+The corrected storage resolver preserves legacy/canonical identities and occupied
+slots, fails closed on conflicting copies, reads/writes generation consistently,
+and preserves a distinct replacement draft. No non-atomic key rename is added.
+
+Build 110's epoch-only stale-empty pause was intentional old policy, but that
+alone did not meet Part 13 of the user's contract. This review supersedes the
+earlier suggestion that this expected bookkeeping pause was acceptable readiness.
+
+Build 111 aligns only old observed epoch metadata when the original draft has
+proof, material certificate/authority hashes remain equal, and this tap's live
+authority anchor exactly equals the forced fresh result, including epoch. A
+serialized compare-and-swap preserves identity, content, composition metadata,
+and existing storage slots. Live proof, current intent, observation ownership, and
+provider context remain required. Refreshed drafts reach every item, unique guard,
+and both consumption paths. A fully empty retained container captures CURRENT
+authority on its first new human intent; existing nonempty intent keeps its prior
+binding. Cached last-observed proof does not upgrade this empty-to-content path.
+
+The all-items anchor fence precedes the already-current fast path. This matters:
+the independent counterexamples originally showed that a newly saved draft could
+hide authority drift during its own freeze. Both same-material ABA and material
+drift now pause even when the draft already matches the fresh result, with zero
+metadata writes in that case.
+
+For a draft that does not already match fresh authority, the final anchor-drift
+branch may CAS-rearm unchanged persisted intent before unconditionally pausing.
+It never calls acceptAuthorityRefresh for that operation. The next explicit,
+fresh confirmation passes this branch without another metadata write. A human
+edit, stale observation, or newer persisted draft prevents that optional rearm.
+This preserves the real-change rejection without poisoning fresh confirmation.
+
+TWELVE REQUIRED ATTACKS
+
+1. Genuine human change slipping through — PASS OFFLINE.
+   Actual composer semantic closure checks text, subject, reply/effect, owner,
+   attachment selection/order/metadata, and exact permitted staging-path change.
+   Real changes before transport pause. Post-await clear/restore checks preserve
+   later human work. Final same-owner callback is synchronous immediately before
+   invoking the HTTP API, after preparatory awaits; no asynchronous owner-port
+   permission gap remains. This is not a live server or delivery assertion.
+
+2. Internal consumption self-invalidating — PASS OFFLINE.
+   Canonical generation is shared; action and semantic identity are stable across
+   unchanged republishing. Effective refreshed authority is consumed by exact CAS.
+   Expected consumption is recorded explicitly, even if later editing clears the
+   composer's consumed flag. Successful consume -> next freeze passes.
+
+3. Two taps dispatching twice — PASS OFFLINE / LIVE NOT EXERCISED.
+   Existing operation/receipt identity and first-HTTP-invocation batch commitment
+   remain intact. Shared guards accept the epoch refresh once. Preserved admission,
+   duplicate-operation, and abort/settlement regressions pass. The review does not
+   infer real idempotence solely from a hash or a local UI state.
+
+4. Blocked first tap poisoning second — PASS OFFLINE.
+   Failed untouched batches settle all completion kinds, restore/delete prepared
+   state before ledger rollback, and retain receipts if cleanup fails. No absent
+   draft is resurrected. Five final cases cover first real-change pause -> fresh
+   confirmation and three reasons optional rearm must not mutate stored state.
+
+5. Process recreation duplicating execution — PASS OFFLINE / DEVICE PENDING.
+   Existing durable action/receipt contracts are unchanged. Epoch refresh preserves
+   action, content, and composition identity rather than manufacturing a new send.
+   Missing original proof fails closed. This review did not kill/restart the app
+   or execute a real post-recreation send.
+
+6. Read-side event falsely blocking valid send — PASS OFFLINE.
+   Semantically unchanged republish/member presentation does not change human
+   intent. Epoch-only persisted bookkeeping with identical fresh material proof
+   can align without bothering Sean. A genuine provider/certificate/context or
+   tap-anchor change still pauses. No global epoch-ignore rule was introduced.
+
+7. Authority drift mistaken for bookkeeping — PASS OFFLINE.
+   Tests cover null/missing proof, material change, certificate change, same-hash
+   ABA epoch drift, changed observation owner, changed provider context, drift
+   during CAS, already-current fast-path attacks, and the final composer fence.
+   All-items tap anchor and final fence include certificate, authority, and epoch.
+
+8. Fingerprints colliding or omitted — PASS WITH STATED LIMIT.
+   Identity, content, attachments, and action metadata are distinct diagnostic
+   classes; tested semantic fields feed the guard. SHA-256 is not a mathematical
+   collision impossibility proof. Hash-only diagnostic payloads are bounded and
+   do not print raw message, recipient, attachment name, or selected bytes.
+
+9. Attachment change escaping — PASS FOR OBSERVABLE HUMAN INTENT.
+   Replacement object, changed metadata, reorder, removal, and payload staging
+   identity are covered. Exact expected staged-path normalization is permitted;
+   broad directory equivalence is not. Staged-file hashing protects frozen payload.
+   Arbitrary in-place mutation of bytes inside the identical selected object,
+   without an observable selection change, remains a stated model limitation;
+   no current human-edit mutator establishing that path was found. Final UI guard
+   does not scan arbitrarily large byte buffers.
+
+10. Build 101 ANR returning — SOURCE/REGRESSION PASS; S24 PENDING.
+    Existing projection/performance boundaries remain unchanged outside bounded
+    composer restoration/admission work. New probe runs only after explicit
+    health expansion, at most eight times per process; it uses cached metadata,
+    fixed policy cases, and no attachment payload I/O. Worker timings are not a
+    phone latency benchmark. Responsiveness/no-ANR still requires installed S24
+    zero-send acceptance of the exact candidate.
+
+11. 2155/2156 topology rebinding draft — PASS OFFLINE WITH PHYSICAL LIMIT.
+    Logical identity and source ownership remain guarded; same-key physical member
+    reconciliation is not itself a new human intent. Raw/canonical compatibility
+    does not rewrite saved identity or action. No routing selection doctrine was
+    changed. These tests do not establish a physical writer or network execution.
+
+12. Unsafe new-group reachability — NO NEW PATH / REGRESSION PASS.
+    The correction operates on certified logical drafts and preserves existing
+    provider/new-group gates. It does not authorize unproven sender binding,
+    registration, account changes, or synthetic traffic. No live group was created.
+
+EVIDENCE
+
+Current source-linked fixtures are under fixtures/:
+  codex-adversarial-111-cas-handler-consume.dart         46 cases
+  codex-adversarial-111-matches-fast-path.dart            2 cases
+  codex-adversarial-111-final-fence.dart                  8 cases
+  codex-adversarial-111-probe-fixture.dart               11 cases
+  codex-adversarial-111-probe-boundary.dart               4 cases
+  Total                                               71 cases
+
+Each has a matching -result.json. These use actual imported pure models/policy
+and verbatim extracted production method/branch/closure bodies. Fake boundaries
+are registry, cached preferences, provider snapshot, composer, and logging. No
+queue, receipt reservation, or transport implementation exists in these fixtures.
+Their scope is the tested local transitions, not complete live app execution.
+
+The earlier 95 independent regression checks were rerun successfully where their
+imports remain compatible. historical-95-rerun-summary.json and historical-reruns/
+retain the receipts. Their historical extracted bodies are preserved rather than
+relabeled as freshly extracted Build 111 code. Current changed paths have the new
+71-case coverage above. Baseline 108 failure fixtures remain historical evidence.
+
+The parent reports the final full 538-test suite and handler analysis passed after
+the optional-CAS branch change. This is separately supplied parent evidence, not
+a claim that this reviewer independently ran all 538 tests again.
+
+independent-review-source-manifest.json binds reviewed source and portable fixture
+hashes. Any later change to those production source hashes requires focused review
+of that change; committing these already reviewed bytes does not invalidate them.
+
+READ-ONLY PROBE AND RELEASE BOUNDARY
+
+The explicit health probe reads the current logical draft/generation and scoped
+current writer authority, runs shared pure policy cases, and emits bounded hashed
+metadata. Ten fake expansions yield eight reports; a nonlogical conversation
+produces none; a read-only owner does not inherit unrelated global authority;
+dual-slot conflicts report incoherent custody without modification. Probe fake
+boundary tests perform zero preference writes. Pure cases include a large declared
+attachment size without loading payload bytes and no raw sentinel data leakage.
+
+The probe explicitly reports fresh provider observation, persistence, reservation,
+and transport as NOT EXERCISED. policyChecksPass alone cannot establish live send
+readiness: live storage coherence, scoped authority, empty-intent/new-intent policy,
+and local alignment fields must also be assessed. No synthetic send-path invocation
+or deliberately failed network call is an acceptable substitute for this boundary.
+
+A client HTTP invocation marker proves that the client crossed its transport
+boundary, not that Apple created a message, selected a physical chat, or delivered
+anything. Original rejected admission and later physical-route provenance must
+remain separate evidence categories.
+
+Single/dual-slot storage-write failures fail closed and do not grant a refreshed
+guard. A partial metadata write to equal dual slots can leave a custody conflict;
+both content copies survive, subsequent reads refuse the conflict, and no automatic
+retry is authorized. This is a bounded recovery limitation, not successful send.
+
+The rejected Build 109 packaging incident and its native registrant gates remain
+separate. Build 108/110 accepted artifacts and Build 109 rejected artifact remain
+immutable. Source approval cannot replace native package checks, signed APK hash,
+in-place custody verification, real startup, and S24 zero-send acceptance.
+
+Do not ask Sean to retry based on this source report alone. After the exact final
+candidate passes packaging, installation, scoped read-only probe and real S24 UI
+acceptance, report the remaining live-admission/dispatch boundary honestly. The
+review does not authorize a message. Any later natural send needs the parent's
+bounded user authorization and must not be automatically retried.
+
+TOOL EXECUTION PROVENANCE
+
+The reviewer's final remote tool call was blocked by an authentication failure in
+automatic approval review before execution, not a safety rejection. The parent
+ran the independently authored, preserved final fixture runner through its own
+functioning authorized tool and returned results. No approval bypass was used.
+Runner: finish_111_independent_review.py (bank with this report for reproducibility).

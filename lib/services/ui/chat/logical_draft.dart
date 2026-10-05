@@ -184,6 +184,9 @@ class LogicalDraft {
   final String? compositionAuthorityRevision;
   final int? compositionAuthorityEpoch;
 
+  bool get hasUserIntent =>
+      text.isNotEmpty || subject.isNotEmpty || attachments.isNotEmpty || reply != null || effectId != null;
+
   String get actionId {
     final input = utf8.encode(
       '$logicalDraftSchema\u0000$logicalId\u0000$createdAtEpochMilliseconds\u0000'

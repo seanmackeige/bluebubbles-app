@@ -43,3 +43,8 @@ All composer state lives in `ConversationViewController` (`lib/services/ui/chat/
 - Send → `OutgoingMsgHandler` (`OutgoingMessageHandler`)
 - Reply selection rendered by `widgets/message/reply/`
 - Mention autocomplete → `custom_text_editing_controllers.dart` in `lib/app/components/`
+
+The composer carries a frozen authority anchor and retains original diagnostic
+before-state while an operation-bound effective draft can receive a verified
+epoch refresh. Late authority fencing and consumption use that effective draft.
+Diagnostics include draft/freeze/final epochs without content or participant PII.

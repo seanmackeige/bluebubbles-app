@@ -1,0 +1,30 @@
+{
+  "scope": "Prior source-extracted bodies preserved historically; current compatible model/guard imports exercised, not claimed as fresh extraction. New111fixtures separately cover changed bodies.",
+  "prior_check_count": 95,
+  "runs": [
+    {
+      "fixture": "codex-adversarial-corrected-service-fixture",
+      "exit_code": 0
+    },
+    {
+      "fixture": "codex-adversarial-abort-batch-fixture",
+      "exit_code": 0
+    },
+    {
+      "fixture": "codex-adversarial-composer-closure-fixture",
+      "exit_code": 0
+    },
+    {
+      "fixture": "codex-adversarial-delayed-restore-fixture",
+      "exit_code": 0
+    },
+    {
+      "fixture": "codex-adversarial-diagnostic-reasons-fixture",
+      "exit_code": 0
+    },
+    {
+      "fixture": "codex-adversarial-post-clear-fixture",
+      "exit_code": 0
+    }
+  ]
+}

@@ -32,6 +32,9 @@ class LogicalConversationHealthCard extends StatelessWidget {
         child: ExpansionTile(
           leading: Icon(Icons.health_and_safety_outlined, color: _stateColor(context, projection.state)),
           title: const Text('Logical conversation health'),
+          onExpansionChanged: (expanded) {
+            if (expanded && snapshot == null) ChatsSvc.inspectLogicalDraftAdmissionSnapshot(chat);
+          },
           subtitle: Text(_stateLabel(projection.state)),
           childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
           children: <Widget>[

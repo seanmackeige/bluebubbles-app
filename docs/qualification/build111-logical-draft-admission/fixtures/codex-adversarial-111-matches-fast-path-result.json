@@ -1,0 +1,19 @@
+{
+  "method": "verbatim handler provider-context/authority alignment block",
+  "counterexample": "draft created/reloaded after authority changes during await already matches fresh revision",
+  "results": {
+    "same hashes ABA": {
+      "result": "SEND_BLOCKED_AUTHORITY_CHANGED_DURING_FREEZE",
+      "draft_already_matches_fresh": true,
+      "classifier": "changedDuringFreeze",
+      "metadata_writes": 0
+    },
+    "material drift": {
+      "result": "SEND_BLOCKED_AUTHORITY_CHANGED_DURING_FREEZE",
+      "draft_already_matches_fresh": true,
+      "classifier": "changedDuringFreeze",
+      "metadata_writes": 0
+    }
+  },
+  "real_provider_calls": 0
+}

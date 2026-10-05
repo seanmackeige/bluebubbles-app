@@ -34,3 +34,8 @@ Each resource has an interface and a concrete action file → `interfaces/CLAUDE
 - `setup/` — first-run server connection orchestration → `setup/CLAUDE.md`
 - `web/listeners.dart` — web-platform socket listeners (exported from `services.dart`)
 - `descriptors/attachment_query_descriptor.dart` — typed query descriptor for attachment lookups
+
+Guarded batches check every tap authority anchor before even the current-draft
+fast path. Only freshly re-proven epoch bookkeeping may use CAS alignment; each
+unique guard and every batch item receive the same aligned intent. All receipt,
+durable commit, preparation and final transport checks remain strict.

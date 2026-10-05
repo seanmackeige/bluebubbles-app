@@ -1,0 +1,30 @@
+{
+  "fixture": "codex-adversarial-composer-closure-fixture",
+  "exit_code": 0,
+  "historical_extracted_source": true,
+  "current_imported_models_or_guards": true,
+  "result": {
+    "method": "verbatim composerChange closure",
+    "fake_boundaries": "controller/selection descriptors only",
+    "cases": {
+      "unchanged": null,
+      "text": "CONTENT_CHANGED",
+      "subject": "CONTENT_CHANGED",
+      "reply": "CONTENT_CHANGED",
+      "owner replaced": "OWNER_CHANGED",
+      "owner unmounted": "OWNER_CHANGED",
+      "logical identity changed": "DRAFT_IDENTITY_CHANGED",
+      "same logical physical member rebind": null,
+      "exact staged path normalization": null,
+      "different staged path blocked": "ATTACHMENT_INTENT_CHANGED",
+      "same metadata replacement": "ATTACHMENT_INTENT_CHANGED",
+      "reorder": "ATTACHMENT_INTENT_CHANGED",
+      "remove": "ATTACHMENT_INTENT_CHANGED"
+    },
+    "huge_attachment_declared_bytes": 100000000,
+    "byte_access": "throws if touched; no access occurred",
+    "repeated_checks": 10000,
+    "elapsed_ms": 271,
+    "real_provider_calls": 0
+  }
+}

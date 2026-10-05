@@ -1,3 +1,6 @@
+import 'logical_draft.dart';
+import 'logical_draft_authority_alignment.dart';
+
 /// Same-owner fence: final semantic check and HTTP API invocation cannot yield.
 class LogicalDraftIntentGuard {
   LogicalDraftIntentGuard({
@@ -5,11 +8,40 @@ class LogicalDraftIntentGuard {
     required this.record,
     required this.composerIsCurrent,
     this.validateAuthority,
+    this.frozenDraft,
+    this.authorityAtFreeze,
   });
   final String? Function() validateCurrent;
   final String? Function()? validateAuthority;
   final bool Function() composerIsCurrent;
   final void Function(String result, bool providerRequestStarted) record;
+  final LogicalDraft? frozenDraft;
+  final LogicalAuthorityRevision? authorityAtFreeze;
+  LogicalDraft? _refreshedDraft;
+  LogicalDraft? get effectiveDraft => _refreshedDraft ?? frozenDraft;
+
+  void acceptAuthorityRefresh(LogicalDraft refreshed, LogicalAuthorityRevision observed) {
+    check();
+    final original = frozenDraft;
+    if (providerRequestStarted ||
+        _refreshedDraft != null ||
+        original == null ||
+        logicalDraftAuthorityAlignment(
+              draft: original,
+              frozenAuthority: authorityAtFreeze,
+              observedAuthority: observed,
+            ) !=
+            LogicalDraftAuthorityAlignment.refreshEpoch ||
+        refreshed.actionId != original.actionId ||
+        refreshed.contentFingerprint != original.contentFingerprint ||
+        refreshed.logicalId != original.logicalId ||
+        !observed.matchesDraft(refreshed)) {
+      _reject('AUTHORITY_CHANGED');
+    }
+    _refreshedDraft = refreshed;
+    record('AUTHORITY_EPOCH_REFRESHED_EXPECTED_INTERNAL', false);
+  }
+
   bool _closed = false;
   bool providerRequestStarted = false;
   bool draftWasConsumed = false;

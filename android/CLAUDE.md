@@ -109,3 +109,11 @@ See docs/qualification/build108-logical-draft/device-build110/HANDOFF.txt and
 BUILD110-STALE-EMPTY-REVIEW.txt. Build109 remains immutable/rejected. No additional
 APK authorized by the one-build110 recovery exception. Apple validation/TLS patch
 and all production Mac/routing protections remain separate and unchanged.
+
+### Build111 admission readiness correction
+Current mission authorizes one further immutable candidate after complete proof.
+Next verified unused version20002111/build111. Build110 starts but is not accepted
+for first-tap admission: its epoch-only pause violates the unchanged-intent contract.
+Release gates now require the shared-policy local preflight and expected epoch
+alignment markers as well as every prior AOT/native/plugin constraint.
+Build108/109/110 archive bytes remain immutable. No synthetic send is permitted.

@@ -174,3 +174,18 @@ and focus lookups must never rebind presentation during a widget build.
 **Lifecycle:** Created when a conversation opens, closed when it pops. A conversation can remain "alive" in the background when in tablet mode.
 
 **Rule:** Never hold a direct reference to `ConversationViewController` across navigations — always re-fetch via `cvc(chat)`.
+
+### Frozen-intent authority alignment
+The guarded composer captures an immutable live authority anchor for each tap.
+Fresh provider observation must match that anchor including epoch. An older
+persisted draft epoch may then be CAS-aligned only when material authority and
+certificate hashes match, owner/content/action/generation remain unchanged, and
+provider observation/context stay current. This refresh propagates to final
+fencing AND consumption; global matchesDraft/receipt epoch checks stay strict.
+The previous unconditional new-process human rearm policy is superseded only
+under these conditions. Material change, missing proof and within-tap ABA block.
+A strictly empty container (all text/subject/attachments/reply/effect absent)
+captures CURRENT authority on its first nonempty intent, never lastObserved.
+Nonempty drafts retain their original binding. logical_draft_authority_alignment
+and logical_draft_admission_probe are pure; probe has no persistence/transport.
+Explicit health expansion logs at most8 probes/process, not from widget build.
