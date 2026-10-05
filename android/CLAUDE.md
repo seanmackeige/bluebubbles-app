@@ -93,3 +93,19 @@ interpreter used by the package gate.
 Sean explicitly authorized one additional immutable recovery candidate,
 version20002110/build110, after the Build109 packaging rejection. Build110
 remains pending real S24 zero-send acceptance; no automatic message is allowed.
+
+
+### 2026-10-05 Build110 recovery device receipt
+Build110/20002110 from66d12ad68 is installed in place on the attested S24 and
+starts successfully. Established signer; package hash and UID/first-install
+continuity verified. No uninstall, data clear or assistant Send tap.
+Zero-send UI acceptance passed with one logical Comcast row and no new bounded
+ANR/crash/OOM. Current empty composer was preserved after Sean confirmed his
+intentional earlier clear/change. Retained draft authority is STALE and needs
+revalidation; typing alone retains it. Live admission remains untested and a
+first natural tap may pause to rearm. Stop/read back before any retry.
+Do not classify full end-to-end resolution or first-tap send readiness as proven.
+See docs/qualification/build108-logical-draft/device-build110/HANDOFF.txt and
+BUILD110-STALE-EMPTY-REVIEW.txt. Build109 remains immutable/rejected. No additional
+APK authorized by the one-build110 recovery exception. Apple validation/TLS patch
+and all production Mac/routing protections remain separate and unchanged.

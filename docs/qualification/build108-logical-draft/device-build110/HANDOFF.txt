@@ -1,0 +1,65 @@
+SEAN EDITION LOGICAL DRAFT ADMISSION — BUILD110 INSTALLED; LIVE ADMISSION PENDING
+Source: 66d12ad68a9b1f06c4f8bf8bc871576d58d5dfab
+VersionCode20002110. APK SHA256: c87697b105bfdcdd8a819dd9d88b4e937489f922fe63def2b4b50f30714ede32
+
+Build108 defect proven offline: generation lookup used the raw certificate key,
+while save/consume used the canonical logical key. A legitimate earlier consume
+could make the next unchanged freeze compare reader0 with stored generation1 and
+falsely pause. Sean confirmed the earlier10:11 send came from this same S24.
+Exact10:29 runtime revisions/content/authority/mutator remain UNKNOWN; fixture0/1
+are not phone telemetry. The unique reported popup returns before outgoing
+construction. Read-only Apple10:26–10:33 and zero observer events corroborate zero
+physical execution from that rejected call; DB absence alone is not network proof.
+Opening, typing and physical-member reconciliation do not directly advance the
+guarded generation. Its sole increment is guarded legitimate draft consumption.
+
+Correction: canonical generation ownership; preserved legacy draft/action identity;
+final same-owner semantic check immediately before HTTP invocation; newer-edit
+preservation through restore/consume; bounded fingerprint diagnostics. Genuine
+content/owner/attachment/authority change still blocks. No routing or sender,
+account, new-group or provider safety protection was relaxed.
+Validation:519/519 regression;95 independent source-linked checks; clean analysis;
+release negative controls; established signer. Build108 source/APK unchanged.
+
+Build109 failed startup because packaging omitted the generated native plugin
+registrant. It remains immutable and rejected. Sean explicitly authorized one
+Build110 recovery. Offline generation and prebuild/actual DEX-definition gates
+fixed packaging;57 required native definitions passed. Build110 installed in place
+and starts. UID/first-install time preserved; no uninstall/data clear/draft edit.
+
+S24 ZERO-SEND BOUND: responsive Comcast timeline/composer/details/media and reopens;
+one visible logical Comcast row; no new ANR/crash/OOM in the bounded acceptance.
+Sean intentionally cleared/changed the old paused draft before installation.
+Current EMPTY composer preserved; old private text was not reconstructed.
+Health:3/3 members available, writer Ready, provider Current; retained draft STALE.
+This requires real revalidation, not merely a cosmetic label. Fresh typing keeps
+that retained authority metadata. Three exact-source offline scenarios confirm
+first-attempt rearm preserves content/action and pauses before receipt/HTTP;
+later confirmation passes that revision branch when authority stays unchanged.
+Phone private comparison operands are unavailable: process-epoch-only versus
+real authority change remains UNKNOWN. No safe device dry-run hook was found.
+Live admission remains UNTESTED. First-tap readiness/full resolution NOT claimed.
+
+ONE SEAN ACTION: when a legitimate Comcast update is ready, enter it in the combined
+conversation and tap Send ONCE. There is no old text to retry because it was
+intentionally cleared. A route-review pause is possible: if it appears, STOP
+without retrying so the exact diagnostic can be inspected.
+No synthetic traffic, automatic send/retry or assistant Send tap occurred.
+
+Observer: ARMED_WAITING_NATURAL_OUTBOUND; events=0; selector UNKNOWN.
+15-second snapshots,24-snapshot pre-window, bounded automatic post-event capture.
+Route-Observatory.cmd supports status/arm. It survives chat/SSH closure, not worker
+reboot; bound7days/12events/128MiB. No repeated manual start/stop is needed.
+2155:5distinct GUIDs/2clean stored records;2156:36/35 in the original comparison.
+ONE SMS generation supported; exclusive physical writer NOT established. The
+provider-selected-representation model remains a hypothesis, selector UNKNOWN.
+Stored chat association is not network execution provenance. This admission
+failure supplied no new2155/2156 dispatch evidence.
+
+Certificate system-trust patch remains offline/uninstalled; TLS verification kept.
+No new Apple validation attempt; prior authorization consumed. Production Mac
+Messages/BlueBubbles/helper, accounts/sender/SIM/registration remain unchanged.
+
+Evidence: admission-incident-20261005T1729Z/correction-build110/
+Older FINDINGS/rejection receipts are historical snapshots. Build/install receipts
+retain creation-time pending fields; ZERO_SEND_RECEIPT records the later outcome.
