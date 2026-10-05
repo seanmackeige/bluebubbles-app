@@ -1,0 +1,11 @@
+{
+  "at": "2026-10-05T20:43:34.599693+00:00",
+  "since": "2026-10-05T20:37:17.997974+00:00",
+  "pid": "23267",
+  "anr_events": 0,
+  "crash_events": 0,
+  "kill_events": 0,
+  "fatal_or_oom_lines": 0,
+  "scope": "BOUNDED_POSTINSTALL_LOGCAT_AND_EVENTS",
+  "log_buffers_cleared": false
+}

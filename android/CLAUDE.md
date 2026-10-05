@@ -117,3 +117,27 @@ for first-tap admission: its epoch-only pause violates the unchanged-intent cont
 Release gates now require the shared-policy local preflight and expected epoch
 alignment markers as well as every prior AOT/native/plugin constraint.
 Build108/109/110 archive bytes remain immutable. No synthetic send is permitted.
+
+
+### 2026-10-05 Build111 installed; live admission readiness BLOCKED
+Build111/20002111 from e031e98e39 is installed in place on the same attested S24.
+Exact APK hash, original package UID and first-install continuity verified. No
+uninstall, clear-data, assistant typing or Send tap. A new nonempty human Comcast
+ draft appeared on110 during packaging and survived reopen,111 installation and
+reopen with identical fingerprint. The original1029 draft had earlier been
+cleared/changed by Sean and was not recreated.
+538 full regression and71 current-source independent adversarial cases PASS.
+Historical95 separately labeled. Startup/UI and bounded no-ANR/crash/OOM PASS.
+Live read-only probe BLOCKED: coherent nonempty draft generation0/contentRevision11
+has null observed certificate/authority/epoch, while current scoped proof exists.
+This is missing proof, not evidence of actual certificate drift or an epoch-only
+exception. Nine pure policy cases PASS cannot establish live send readiness.
+Runtime diagnostic truncates at1023UTF8 bytes; only complete prefix fields are
+banked and its suffix is unobserved. Do not invent complete JSON/no-write fields.
+No non-sending review/rebind control exists in111. Do not ask Send, silently rebind,
+clear/retype, or auto-retry. The one-candidate limit is consumed. A separate extra
+candidate requires new authorization; first prepare/review an explicit non-sending
+Review draft CAS confirmation and independently framed bounded diagnostics.
+Source review PASS is preserved; whole-device admission acceptance is NOT PASS.
+Read device/HANDOFF.txt and INDEPENDENT-LIVE-ADDENDUM.txt. No route investigation,
+Mac production mutation, synthetic outbound or Apple validation retry occurred.

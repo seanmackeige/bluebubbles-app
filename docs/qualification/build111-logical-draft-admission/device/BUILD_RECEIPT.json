@@ -1,0 +1,17 @@
+{
+  "schema": "SEAN_IMMUTABLE_ADMISSION_CANDIDATE_V1",
+  "source_commit": "e031e98e39a53afaa6e3b1f7204c7825a651d44e",
+  "versionCode": 20002111,
+  "buildNumber": 111,
+  "package": "com.mackeige.bluebubbles",
+  "sha256": "f23d385c205d0054bfaa37682b6e31c61595620bfa9d98dda1f946160a0aae9a",
+  "bytes": 114815648,
+  "signer_sha256": "3b119f884bb6f4ffa1f05505a260f8f9f7c70d099ec386535dabadae932e0403",
+  "build_attempts": 1,
+  "apk_candidates": 1,
+  "static_verification": "PASS",
+  "installation": "NOT_YET_ATTEMPTED",
+  "s24_acceptance": "PENDING",
+  "archive": "/home/sean/projects/android/bluebubbles/builds/20261005-build111-logical-draft-admission",
+  "finished_at": "2026-10-05T20:34:27.347853+00:00"
+}

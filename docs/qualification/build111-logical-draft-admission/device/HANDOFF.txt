@@ -1,0 +1,76 @@
+SEAN EDITION LOGICAL DRAFT ADMISSION INCIDENT — BUILD111
+Updated 2026-10-05T20:46:01.092240+00:00
+STATUS: INSTALLED_AND_CUSTODY_VERIFIED; SEND_NOT_READY
+
+PROVEN DEFECT AND CORRECTION
+Build108's exact predicate is isLogicalConversation(chat) && logicalDraft == null
+immediately after _saveLogicalDraft. The popup returns before this tap's outgoing
+handler, reservation or consumption. This tap did not consume then reject itself.
+Source-extracted reproduction proves an EARLIER legitimate consume advances the
+canonical generation to1 while the raw-key reader sees0; unchanged content is
+false-rejected. Canonical storage/generation resolution corrects the general cause.
+Original10:29 transient operands and precise null subpath were not logged and
+remain UNKNOWN. Fixture0/1 is not recovered runtime telemetry. Prior10:11 same-S24
+send supports the reproduced sequence. Original zero-dispatch proof stays banked.
+Ordinary publishing/member reconciliation does not advance the guarded generation.
+
+ENGINEERING COMPLETED
+538 complete regression/property/failure/performance tests PASS;71 current-source
+independent adversarial checks PASS. Historical95 reruns are separately labeled.
+Real human content/attachment/owner/authority changes still block. Unchanged
+bookkeeping and prior consume -> next freeze do not self-reject. At-most-once,
+provider authority, receipts and final synchronous fencing remain enforced.
+Build111 also safely aligns old epoch metadata only when material authority and
+the tap-time/fresh authority anchor agree; missing proof is intentionally excluded.
+One immutable candidate built. Signature, native plugin class definitions, AOT
+markers and release gates PASS. In-place install on exact attested S24 PASS.
+Package UID and first-install history preserved; no uninstall or data clear.
+
+LIVE DEVICE RESULT — ACTUAL SAFETY BLOCKER
+A new human draft appeared on110 during packaging, after the earlier confirmed
+clear/change of the original paused draft. It was persisted through normal reopen,
+fingerprinted, and preserved unchanged across111 installation and reopening.
+Startup/navigation responsive; one logical Comcast row; writer Ready; current
+provider revision;3/3 members. No new bounded ANR/crash/fatal/OOM observed.
+Read-only probe: storage coherent, nonempty current draft; generation0,
+contentRevision11. Its SAVED certificate, authority and epoch are ALL NULL.
+Current scoped certificate/authority/epoch are present. This does NOT prove a
+real certificate change: the current classifier also labels missing proof as
+certificateChanged. It proves absence of the original binding needed to classify
+an unchanged-authority exception. Pure in-memory9/9 PASS does not override it.
+No separate non-sending review/rebind control exists in111. Reopen/read-only
+refresh cannot bless missing proof. Clearing/retyping and a knowingly blocked
+Send are not used as workarounds. Draft remains preserved; SEND_NOT_READY.
+
+DIAGNOSTIC LIMITATION
+Android emitted only1023 UTF8 bytes of the JSON diagnostic. Complete prefix fields
+above are retained; the suffix is unobserved. No complete JSON record or missing
+false-valued fields are invented. Future correction should emit independently
+valid bounded records shorter than the native line limit and distinguish missing
+proof from actual certificate/authority drift. Static no-write/no-transport probe
+review remains separate from the truncated runtime suffix.
+
+BOUNDARY AND NEXT REQUIRED WORK
+Your one-forward-candidate limit is consumed. No second APK has been built and no
+Send/retry is requested. A separate candidate needs explicit authorization; its
+narrow correction is a non-sending Review draft confirmation using fresh scoped
+proof and exact unchanged owner/action/content CAS, preserving text/action/receipts
+and excluding queue/reservation/transport. Prepare/review that correction before
+requesting its build/install permission. Current111 remains immutable.
+The former Build110 'may pause once' recommendation is superseded. This result is
+NOT full zero-send admission acceptance or end-to-end messaging success.
+
+CUSTODY
+APK source: e031e98e39a53afaa6e3b1f7204c7825a651d44e
+APK SHA256: f23d385c205d0054bfaa37682b6e31c61595620bfa9d98dda1f946160a0aae9a
+Signer SHA256: 3b119f884bb6f4ffa1f05505a260f8f9f7c70d099ec386535dabadae932e0403
+Build108 source/APK, rejected109 and superseded110 remain immutable.
+See source-evidence/INCIDENT.txt for eight bounded original incident answers and
+the source review/tests; S24-ADMISSION-PREFLIGHT.json, ZERO_SEND_RECEIPT.json and
+INDEPENDENT-LIVE-ADDENDUM.txt contain the current blocked device evidence.
+
+SEAN ACTION: Do not tap Send or clear/retype the draft.
+No synthetic outbound, production Mac/routing/account/sender/SIM/registration
+change, Messages/BlueBubbles/helper restart, chat.db write, Apple validation retry
+or trust-patch installation. Existing passive observer left in background;
+no new2155/2156 correlation was performed. Primary mission remains admission.
