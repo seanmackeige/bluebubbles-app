@@ -1,0 +1,52 @@
+{
+  "source_inventory": {
+    "daily-driver": {
+      "android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java": {
+        "exists": true,
+        "sha256": "12d7da545a4e3138c8469b18149c8dae707c8de8a4ee5750897ad6119ce6b256"
+      },
+      ".flutter-plugins-dependencies": {
+        "exists": true,
+        "sha256": "bea50f981746650dbe72bc1096124f394994cecec396e850b96296029cd0512f"
+      },
+      ".dart_tool/package_config.json": {
+        "exists": true,
+        "sha256": "078c52331a8def96a9b9be9695773acdcb6559c5c0ddd400c9abdeb43447ce36"
+      },
+      "android/app/src/main/AndroidManifest.xml": {
+        "exists": true,
+        "sha256": "041f7fed9d82b7f23f6c4a90badbb8a109f22c3bbbf553a96e06e9fae4db41c3"
+      }
+    },
+    "admission-correction": {
+      "android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java": {
+        "exists": true,
+        "sha256": "12d7da545a4e3138c8469b18149c8dae707c8de8a4ee5750897ad6119ce6b256"
+      },
+      ".flutter-plugins-dependencies": {
+        "exists": true,
+        "sha256": "bea50f981746650dbe72bc1096124f394994cecec396e850b96296029cd0512f"
+      },
+      ".dart_tool/package_config.json": {
+        "exists": true,
+        "sha256": "078c52331a8def96a9b9be9695773acdcb6559c5c0ddd400c9abdeb43447ce36"
+      },
+      "android/app/src/main/AndroidManifest.xml": {
+        "exists": true,
+        "sha256": "041f7fed9d82b7f23f6c4a90badbb8a109f22c3bbbf553a96e06e9fae4db41c3"
+      }
+    }
+  },
+  "defined_only_in_accepted108": [
+    "Lio/flutter/plugins/GeneratedPluginRegistrant;"
+  ],
+  "defined_only_in_rejected109": [],
+  "meaning": "DEX class definitions, not references or incidental strings",
+  "source_inventory_stage": "AFTER_PARENT_OFFLINE_REGENERATION; candidate registrant now matches baseline source SHA256",
+  "initial_read_only_observation_before_regeneration": {
+    "candidate_generated_java_exists": false,
+    "baseline_generated_java_exists": true,
+    "dependency_metadata_and_package_config_identical": true
+  },
+  "captured_at_utc": "2026-10-05T19:01:58.022585+00:00"
+}

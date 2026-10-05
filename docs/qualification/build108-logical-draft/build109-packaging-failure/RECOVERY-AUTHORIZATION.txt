@@ -1,0 +1,5 @@
+Sean explicitly authorized Build 110 recovery after disclosure of the Build109 startup failure.
+Exact response: Authorize Build 110 recovery.
+Scope: one additional immutable Build110 APK, established signer, in-place install,
+no uninstall/data clear, zero-send S24 checks, no automatic message or retry.
+Build109 remains archived, unchanged and rejected.

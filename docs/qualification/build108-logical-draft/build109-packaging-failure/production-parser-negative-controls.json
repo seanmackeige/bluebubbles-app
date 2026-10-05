@@ -1,0 +1,79 @@
+{
+  "production_gate_script_sha256": "a9e7fb40c877064b5c1dc92c1a81805c3c31a5ffd69b647bf94ad6e66fd7b40f",
+  "controls": [
+    {
+      "case": "accepted108",
+      "exit_code": 0,
+      "report": {
+        "apk_sha256": "8510af1aea89a29b7b8c5b71156efcda91dc17e82c3ba373fa93445d935140c0",
+        "class_definition_count": 37020,
+        "device_mutations": 0,
+        "dex_files": 7,
+        "errors": [],
+        "expected_registration_count": 56,
+        "gate": "NATIVE_PLUGIN_REGISTRATION_PACKAGE_V1",
+        "generated_registrant_defined": true,
+        "missing_plugin_implementations": [],
+        "path_provider_defined": true,
+        "registered_plugin_classes_present": 56,
+        "registrant_source_sha256": "12d7da545a4e3138c8469b18149c8dae707c8de8a4ee5750897ad6119ce6b256",
+        "runtime_registration_proven": false,
+        "source_registration_count": 56,
+        "status": "PASS",
+        "unique_registered_plugins": 56
+      }
+    },
+    {
+      "case": "rejected109",
+      "exit_code": 1,
+      "report": {
+        "apk_sha256": "720ada4753e5f551dfed17d15dcc3320c37de215a99863587f0e4124cb98ef65",
+        "class_definition_count": 37019,
+        "device_mutations": 0,
+        "dex_files": 7,
+        "errors": [
+          "GENERATED_REGISTRANT_CLASS_NOT_PACKAGED"
+        ],
+        "expected_registration_count": 56,
+        "gate": "NATIVE_PLUGIN_REGISTRATION_PACKAGE_V1",
+        "generated_registrant_defined": false,
+        "missing_plugin_implementations": [],
+        "path_provider_defined": true,
+        "registered_plugin_classes_present": 56,
+        "registrant_source_sha256": "12d7da545a4e3138c8469b18149c8dae707c8de8a4ee5750897ad6119ce6b256",
+        "runtime_registration_proven": false,
+        "source_registration_count": 56,
+        "status": "FAIL",
+        "unique_registered_plugins": 56
+      }
+    },
+    {
+      "case": "missingSource108",
+      "exit_code": 1,
+      "report": {
+        "apk_sha256": "8510af1aea89a29b7b8c5b71156efcda91dc17e82c3ba373fa93445d935140c0",
+        "class_definition_count": 37020,
+        "device_mutations": 0,
+        "dex_files": 7,
+        "errors": [
+          "GENERATED_REGISTRANT_SOURCE_MISSING",
+          "GENERATED_REGISTRANT_ENTRYPOINT_INVALID",
+          "LOCKED_PLUGIN_REGISTRATION_COUNT_MISMATCH"
+        ],
+        "expected_registration_count": 56,
+        "gate": "NATIVE_PLUGIN_REGISTRATION_PACKAGE_V1",
+        "generated_registrant_defined": true,
+        "missing_plugin_implementations": [],
+        "path_provider_defined": true,
+        "registered_plugin_classes_present": 0,
+        "registrant_source_sha256": null,
+        "runtime_registration_proven": false,
+        "source_registration_count": 0,
+        "status": "FAIL",
+        "unique_registered_plugins": 0
+      }
+    }
+  ],
+  "zero_new_apks": true,
+  "device_mutations": 0
+}

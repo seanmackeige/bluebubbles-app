@@ -1,0 +1,4 @@
+> Task :app:verifySeanProdReleaseAot FAILED
+Execution failed for task ':app:verifySeanProdReleaseAot'.
+> SEAN_RELEASE_NATIVE_PLUGIN_DEFINITIONS_MISSING: {"apk_sha256": "720ada4753e5f551dfed17d15dcc3320c37de215a99863587f0e4124cb98ef65", "class_definition_count": 37019, "device_mutations": 0, "dex_files": 7, "errors": ["GENERATED_REGISTRANT_CLASS_NOT_PACKAGED"], "expected_registration_count": 56, "gate": "NATIVE_PLUGIN_REGISTRATION_PACKAGE_V1", "generated_registrant_defined": false, "missing_plugin_implementations": [], "path_provider_defined": true, "registered_plugin_classes_present": 56, "registrant_source_sha256": "12d7da545a4e3138c8469b18149c8dae707c8de8a4ee5750897ad6119ce6b256", "runtime_registration_proven": false, "source_registration_count": 56, "status": "FAIL", "unique_registered_plugins": 56}
+BUILD FAILED in 1m 10s

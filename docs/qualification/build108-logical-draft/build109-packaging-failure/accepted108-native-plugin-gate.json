@@ -1,0 +1,18 @@
+{
+  "gate": "NATIVE_PLUGIN_REGISTRATION_PACKAGE_V1",
+  "status": "PASS",
+  "apk_sha256": "8510af1aea89a29b7b8c5b71156efcda91dc17e82c3ba373fa93445d935140c0",
+  "registrant_source_sha256": "12d7da545a4e3138c8469b18149c8dae707c8de8a4ee5750897ad6119ce6b256",
+  "dex_files": 7,
+  "class_definition_count": 37020,
+  "generated_registrant_defined": true,
+  "expected_registration_count": 56,
+  "source_registration_count": 56,
+  "unique_registered_plugins": 56,
+  "registered_plugin_classes_present": 56,
+  "missing_plugin_implementations": [],
+  "path_provider_defined": true,
+  "errors": [],
+  "runtime_registration_proven": false,
+  "device_mutations": 0
+}

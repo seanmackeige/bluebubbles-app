@@ -1,0 +1,32 @@
+BUILD 109 STARTUP FAILURE — INDEPENDENT PACKAGING REVIEW
+Date: 2026-10-05
+Reviewer: /root/admission_adversarial
+Status: ROOT CAUSE PROVEN; BUILD 109 REJECTED. NO SECOND APK BUILT BY REVIEWER.
+
+Exact immutable artifacts
+Accepted Build 108: 8510af1aea89a29b7b8c5b71156efcda91dc17e82c3ba373fa93445d935140c0
+Rejected Build 109: 720ada4753e5f551dfed17d15dcc3320c37de215a99863587f0e4124cb98ef65
+Both APKs contain seven DEX files and all 56 native plugin implementation classes expected by the accepted generated registrant, including PathProviderPlugin.
+Build 108 defines 37,020 native classes. Build 109 defines 37,019. Exact set difference: Build 109 omits ONLY Lio/flutter/plugins/GeneratedPluginRegistrant; and adds no native class definitions.
+This proves a missing registration entrypoint, not a missing path_provider implementation. Runtime ClassNotFoundException for that registrant and subsequent missing path_provider channel are consistent with this exact packaging defect. Source release config disables minification/resource shrinking; this is not evidence of an R8 stripping regression.
+
+Causal build boundary
+Initial read-only observation found GeneratedPluginRegistrant.java present in the baseline (15,414 bytes, SHA256 12d7da545a4e3138c8469b18149c8dae707c8de8a4ee5750897ad6119ce6b256) and absent in the isolated correction checkout. The file is ignored by android/.gitignore. Candidate .flutter-plugins-dependencies and .dart_tool/package_config.json were byte-identical to baseline, but copying those ignored metadata files does not copy or regenerate the ignored Java registration source.
+Installed Flutter tooling establishes the execution path: flutter_command.dart shouldRunPub is false with --no-pub; regeneratePlatformSpecificToolingIfApplicable returns immediately at lines 2007-2010 in that case. flutter_plugins.dart injectPlugins writes the Android registrant at lines 1327-1331. A fresh worktree built with --no-pub can therefore link all native plugin libraries while omitting the registration entrypoint.
+Parent subsequently ran locked offline generation. The candidate's generated Java now matches the accepted baseline hash exactly, without changing the immutable Build 109 APK. The source inventory artifact explicitly labels this later regenerated state separately from the initial absence.
+
+Offline gate evidence, requiring no additional APK
+verify_native_plugin_package.py reads actual DEX class_defs rather than counting strings/references. With the accepted generated Java as its 56-plugin expectation, accepted108-native-plugin-gate.json is PASS. rejected109-native-plugin-gate.json is FAIL solely for GENERATED_REGISTRANT_CLASS_NOT_PACKAGED. runtime_registration_proven is explicitly false.
+The source gate pins the freshly generated Java hash to the accepted locked dependency set, rejecting missing/stale source. The postpackage gate requires the registrant class plus all 56 plugin implementation class definitions. Gate failure denies qualification; it does not retroactively repair an APK.
+Final wiring review PASS: preProdReleaseBuild now depends on verifySeanCandidateVersionInput, which depends on source definitions. Gradle assemble --dry-run places source definitions and candidate input checks before preProdReleaseBuild, release Java compilation, packageProdRelease and assembly. No package task executed in that dry run. Actual zero-package source/version negative controls PASS. Actual verifySeanProdReleaseAot rejects the unchanged Build 109 APK for GENERATED_REGISTRANT_CLASS_NOT_PACKAGED. The production parser CLI independently passes Build 108 and rejects Build 109 and missing-source input. Postassembly verification remains necessary to catch absent or stale packaged classes.
+A new candidate still needs its own exact package/signature/version checks, native gate, immutable hash custody, and real S24 startup/zero-send acceptance. Static class presence does not prove all plugin methods register or that the application initializes successfully.
+
+Authorization and data-preserving recovery boundary
+The explicitly bounded one-final-candidate allowance has been consumed by rejected Build 109. Offline regeneration, gate repair and negative controls can finish without creating another APK. Another numbered immutable candidate requires the specific user exception identified by the parent.
+Preferred recovery after that explicit exception is one newly qualified higher-version package, same application ID and signing key, installed in place with data retention. Do not uninstall, clear data, patch/repack immutable 109, or retry a send. Parent reports that no applicable Android rollback is available and that this release is not debuggable; this reviewer did not independently query or mutate the phone. A downgrade is not an assumed recovery path.
+No proof of private application data persistence or original paused-draft survival follows from this packaging diagnosis. Preserve existing device/data custody and treat post-recovery state as a required acceptance check.
+
+Scope receipt
+Reviewer read existing source/APKs/tooling and wrote only authorized qualification evidence. No application source, device, account, sender, provider, Mac production state, message, or relay mutation occurred. No second APK, Apple validation request, send or retry occurred. The Build 108 draft-admission diagnosis and offline correction review remain distinct from this newly discovered packaging failure; neither establishes physical 2155/2156 route selection.
+
+FINAL GATE REVIEW: ACCEPTED FOR A SPECIFIC NEXT-CANDIDATE AUTHORIZATION DECISION. The packaging cause and preventive gate are proven offline. No second APK was produced; Build 109 remains unchanged and rejected. Another candidate and device recovery still require the stated user exception.

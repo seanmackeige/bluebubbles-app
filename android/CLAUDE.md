@@ -74,3 +74,22 @@ Flutter side: `lib/services/backend/java_dart_interop/`
   mutation or network dispatch. Keep the reaction `PendingIntent` immutable and
   change its versioned intent action whenever this contract changes; extras are not
   part of Android `PendingIntent` identity and cannot distinguish a stale token.
+
+## Build 109 packaging rejection and proposed Build 110
+
+Build 109 is immutable and rejected: the first clean-worktree `--no-pub` build
+omitted ignored `GeneratedPluginRegistrant.java`. Its56 plugin classes existed,
+but the registration entrypoint did not. S24 startup failed before file-system
+initialization. No message was sent. Do not reuse version20002109 or its APK.
+
+Regenerate tooling with `flutter pub get --offline --enforce-lockfile` before
+building. The preassembly gate now requires the exact accepted generated source
+for the locked56-plugin set. Packaged verification parses DEX class definitions
+and requires the registrant and all56 implementation classes; string references
+are insufficient. Update that pinned source hash only with reviewed dependency
+or toolchain changes. `BLUEBUBBLES_PYTHON` can select the standard-library Python
+interpreter used by the package gate.
+
+Sean explicitly authorized one additional immutable recovery candidate,
+version20002110/build110, after the Build109 packaging rejection. Build110
+remains pending real S24 zero-send acceptance; no automatic message is allowed.

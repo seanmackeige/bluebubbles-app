@@ -1,0 +1,33 @@
+{
+  "at": "2026-10-05T19:04:24.598984+00:00",
+  "status": "BUILD109_REJECTED_STARTUP_PACKAGING_DEFECT",
+  "versionCode": 20002109,
+  "apk_sha256": "720ada4753e5f551dfed17d15dcc3320c37de215a99863587f0e4124cb98ef65",
+  "source_commit": "9014b32aead8a1577ebe5ed510e26bf5284bc52c",
+  "installation": "IN_PLACE_PASS",
+  "zero_send_acceptance": "FAIL_STARTUP_NO_COMPOSER_AVAILABLE",
+  "native_error": "ClassNotFoundException: io.flutter.plugins.GeneratedPluginRegistrant",
+  "downstream_error": "PathProviderApi.getApplicationDocumentsPath channel unavailable",
+  "root_cause": "CLEAN_WORKTREE_IGNORED_GENERATED_JAVA_ABSENT; --no-pub skipped generation",
+  "dex_comparison": "108 has37020classes;109 has37019; only missingclass isGeneratedPluginRegistrant; all56pluginimplementations present",
+  "regeneration": "OFFLINE_LOCKFILE_ENFORCED; GENERATED_SOURCE_BYTE_IDENTICAL_TO108",
+  "packaging_fix": "PREASSEMBLY_GENERATED_SOURCE_GATE_AND_POSTPACKAGE_ACTUAL_DEX_CLASS_DEFINITION_GATE",
+  "candidate109_immutable": true,
+  "second_apk_built": false,
+  "forward_version_prepared": 20002110,
+  "forward_authorization": "PENDING_EXCEPTION_TO_USER_ONE_CANDIDATE_LIMIT",
+  "downgrade": "NOT_ATTEMPTED; adb documents debuggable packages only",
+  "os_rollback_for_this_package": "NONE_AVAILABLE",
+  "uninstall": false,
+  "data_clear": false,
+  "manual_draft_edit": false,
+  "send_attempts": 0,
+  "user_current_draft": "SEAN_CONFIRMED_INTENTIONAL_CLEAR_OR_CHANGE_BEFORE_INSTALL; EMPTY_COMPOSER_CAPTURED",
+  "device_state": "BUILD109_INSTALLED_BUT_STARTUP_BLOCKED",
+  "technical_excerpt": [
+    "1791226573.351 10846 10846 E GeneratedPluginsRegister: java.lang.ClassNotFoundException: io.flutter.plugins.GeneratedPluginRegistrant",
+    "1791226573.351 10846 10846 E GeneratedPluginsRegister: Caused by: java.lang.ClassNotFoundException: io.flutter.plugins.GeneratedPluginRegistrant",
+    "1791226573.418 10846 10846 I flutter : Failure during app initialization: PlatformException(channel-error, Unable to establish connection on channel: \"dev.flutter.pigeon.path_provider_android.PathProviderApi.getApplicationDocumentsPath\"., null, null)",
+    "1791226573.418 10846 10846 I flutter : #2      FilesystemService.init (package:bluebubbles/services/backend/filesystem/filesystem_service.dart:134)"
+  ]
+}

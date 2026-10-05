@@ -290,7 +290,7 @@ def seanRequiredDailyDriverAotMarkers = [
     SEAN_RELEASE_AOT_NEW_GROUP_SAFETY_CONTRACT_MISSING:
         seanRequiredNewGroupSafetyContract,
 ]
-def seanRequiredCandidateVersionCode = 20002109
+def seanRequiredCandidateVersionCode = 20002110
 def seanRequiredCandidateFlutterBuildNumber = seanRequiredCandidateVersionCode - seanVersionCodeBase
 def seanRequiredNativePolicyMarkers = [
     SEAN_RELEASE_NATIVE_WORKER_COMPLETION_POLICY_MISSING:
@@ -406,6 +406,33 @@ def verifySeanLogicalRouteAot = { File apk ->
     }
 }
 
+// Generated Android registration is ignored by Git. A fresh worktree must run
+// flutter pub get --offline --enforce-lockfile before any --no-pub release.
+// This source contract is pinned to the accepted locked 56-plugin dependency set.
+def seanRegistrantFile = file('src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java')
+def seanExpectedRegistrantSha256 = '12d7da545a4e3138c8469b18149c8dae707c8de8a4ee5750897ad6119ce6b256'
+def verifySeanRegistrantPayload = { byte[] payload ->
+    String digest = java.security.MessageDigest.getInstance('SHA-256').digest(payload).encodeHex().toString()
+    if (digest != seanExpectedRegistrantSha256) {
+        throw new GradleException('SEAN_RELEASE_GENERATED_PLUGIN_SOURCE_MISSING_OR_STALE: run flutter pub get --offline --enforce-lockfile; do not copy only package metadata')
+    }
+}
+def verifySeanRegistrantSource = {
+    verifySeanRegistrantPayload(seanRegistrantFile.isFile() ? seanRegistrantFile.bytes : new byte[0])
+}
+def verifySeanPackagedPluginDefinitions = { File apk ->
+    verifySeanRegistrantSource()
+    String python = System.getenv('BLUEBUBBLES_PYTHON') ?: (System.getProperty('os.name').toLowerCase().contains('windows') ? 'python' : 'python3')
+    def command = [python, rootProject.file('tooling/verify_native_plugin_package.py').absolutePath,
+        '--apk', apk.absolutePath, '--registrant-source', seanRegistrantFile.absolutePath, '--expected-count', '56']
+    def process = new ProcessBuilder(command).redirectErrorStream(true).start()
+    String output = process.inputStream.getText('UTF-8')
+    if (process.waitFor() != 0) {
+        throw new GradleException("SEAN_RELEASE_NATIVE_PLUGIN_DEFINITIONS_MISSING: ${output.trim()}")
+    }
+    logger.lifecycle('SEAN_RELEASE_NATIVE_PLUGIN_DEFINITIONS_PASS: 57 required class definitions')
+}
+
 def verifySeanNativePolicyContracts = { File apk ->
     if (!apk.isFile()) {
         throw new GradleException("SEAN_RELEASE_APK_MISSING: ${apk}")
@@ -424,6 +451,7 @@ def verifySeanNativePolicyContracts = { File apk ->
             new String(payload, java.nio.charset.StandardCharsets.ISO_8859_1)
         }.join('\u0000')
         verifySeanRequiredMarkers(dexPayload, seanRequiredNativePolicyMarkers, 'classes*.dex')
+        verifySeanPackagedPluginDefinitions(apk)
     } finally {
         archive.close()
     }
@@ -500,6 +528,7 @@ tasks.register('verifySeanReleaseGateDefinitions') {
     group = 'verification'
     description = 'Checks that every daily-driver release marker is declared by its authoritative source.'
     doLast {
+        verifySeanRegistrantSource()
         seanReleaseMarkerSources.each { requirement ->
             if (!requirement.source.isFile()) {
                 throw new GradleException("SEAN_RELEASE_GATE_SOURCE_MISSING: ${requirement.source}")
@@ -546,10 +575,17 @@ tasks.register('verifySeanReleaseGateRegression') {
             }
         }
 
+        verifySeanRegistrantSource()
+        [new byte[0], 'stale generated registration'.getBytes('UTF-8')].each { invalidSource ->
+            boolean rejected = false
+            try { verifySeanRegistrantPayload(invalidSource) }
+            catch (GradleException error) { rejected = error.message.startsWith('SEAN_RELEASE_GENERATED_PLUGIN_SOURCE_MISSING_OR_STALE:') }
+            if (!rejected) throw new GradleException('SEAN_RELEASE_PLUGIN_SOURCE_NEGATIVE_CONTROL_NOT_REJECTED')
+        }
         proveMarkerRequirements(seanRequiredDailyDriverAotMarkers, 'aot')
         proveMarkerRequirements(seanRequiredNativePolicyMarkers, 'native')
         verifySeanCandidateVersionCode(seanRequiredCandidateVersionCode)
-        [20002101, 20002102, 20002103, 20002104, 20002105, 20002106, 20002107, 20002108, 20002110].each { invalidVersionCode ->
+        [20002101, 20002102, 20002103, 20002104, 20002105, 20002106, 20002107, 20002108, 20002109, 20002111].each { invalidVersionCode ->
             boolean rejected = false
             try {
                 verifySeanCandidateVersionCode(invalidVersionCode)
@@ -570,8 +606,9 @@ tasks.register('verifySeanReleaseGateRegression') {
 }
 
 def verifySeanCandidateVersionInput = tasks.register('verifySeanCandidateVersionInput') {
+    dependsOn('verifySeanReleaseGateDefinitions')
     group = 'verification'
-    description = 'Rejects a Sean candidate unless Flutter supplied build-number 109 (versionCode 20002109).'
+    description = 'Rejects a Sean candidate unless Flutter supplied build-number 110 (versionCode 20002110).'
     doLast {
         int configuredVersionCode = seanVersionCodeBase + flutterVersionCode.toInteger()
         try {
@@ -616,6 +653,10 @@ tasks.register('verifySeanPreNMemberAotRegression') {
         }
         throw new GradleException('BUILD_93_PAIR_CERTIFICATE_AOT_REGRESSION_NOT_REPRODUCED')
     }
+}
+
+tasks.matching { task -> task.name == 'preProdReleaseBuild' }.configureEach {
+    dependsOn(verifySeanCandidateVersionInput)
 }
 
 tasks.matching { task -> task.name == 'assembleProdRelease' }.configureEach {

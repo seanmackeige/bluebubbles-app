@@ -1,0 +1,21 @@
+{
+  "reviewed_at_utc": "2026-10-05T19:04:35.178432+00:00",
+  "preflight": "PASS",
+  "negative_source_and_version_controls": "PASS",
+  "dry_run_task_order": [
+    ":app:verifySeanReleaseGateDefinitions SKIPPED",
+    ":app:verifySeanCandidateVersionInput SKIPPED",
+    ":app:preProdReleaseBuild SKIPPED",
+    ":app:compileProdReleaseJavaWithJavac SKIPPED",
+    ":app:packageProdRelease SKIPPED",
+    ":app:assembleProdRelease SKIPPED",
+    ":app:verifySeanProdReleaseAot SKIPPED"
+  ],
+  "task_order": "PASS",
+  "dry_run_executed_package_tasks": false,
+  "build_gradle_sha256": "a43039fbec17797c6261937406cf7028a07414daf2f65c7eadf13f4c8941eb6f",
+  "parser_sha256": "a9e7fb40c877064b5c1dc92c1a81805c3c31a5ffd69b647bf94ad6e66fd7b40f",
+  "existing109_apk_sha256": "720ada4753e5f551dfed17d15dcc3320c37de215a99863587f0e4124cb98ef65",
+  "postpackage_runtime_acceptance": false,
+  "actual_gradle_postpackage_negative_control": "PASS: immutable109 rejected for GENERATED_REGISTRANT_CLASS_NOT_PACKAGED"
+}
