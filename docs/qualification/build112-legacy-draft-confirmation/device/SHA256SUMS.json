@@ -1,0 +1,34 @@
+[
+  {
+    "path": "HANDOFF.txt",
+    "sha256": "5b2767c5a960317435f88cd931c388ccd2489b293cd874afd0706097320aeb62"
+  },
+  {
+    "path": "BUILD_RECEIPT.json",
+    "sha256": "0c21ff511e99d3e70885475f3e77f11b925ef8a49094c3b9b42762ebdbe54d10"
+  },
+  {
+    "path": "INSTALL_RECEIPT.json",
+    "sha256": "0bce67786de5291398bdd3137e2bf9c45e910cfd36d171f31f9cebaf606480db"
+  },
+  {
+    "path": "ZERO_SEND_RECEIPT.json",
+    "sha256": "f85df19f91923cb2878e8f977a9b12fa0e46b9402c2db7bf8283a212ae99d026"
+  },
+  {
+    "path": "S24-ADMISSION-PREFLIGHT.json",
+    "sha256": "b36a539436f1357385ef95aff5be7fdb7e158ddd7c177a5e3619ecd7ccd0060a"
+  },
+  {
+    "path": "CRASH_CHECK.json",
+    "sha256": "95c9437782213fe22153fd132fb2877998d339a35d4ea9e85417e0e52a78a3b4"
+  },
+  {
+    "path": "PREINSTALL-CUSTODY-CHANGE.json",
+    "sha256": "11629680309c306f70a16ba90b4b36fe8d2890912a50251bf16e051b41a3c773"
+  },
+  {
+    "path": "OBSERVER-STATUS.json",
+    "sha256": "81e2a0c46bbaa54ef888997bc40b8879f8e0e3e0fd296fdaa9a8a8638d1ed83f"
+  }
+]

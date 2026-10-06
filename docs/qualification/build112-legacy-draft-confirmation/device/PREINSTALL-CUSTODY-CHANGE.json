@@ -1,0 +1,19 @@
+{
+  "at": "2026-10-06T00:37:53.555683+00:00",
+  "status": "PREINSTALL_DRAFT_CUSTODY_CHANGED_AWAITING_HUMAN_CONTEXT",
+  "installedVersionCode": 20002111,
+  "appPid": "23267",
+  "apkInstallationStarted": false,
+  "assistantEdits": 0,
+  "assistantSendTaps": 0,
+  "lastKnownDraftLength": 51,
+  "currentVisibleDraftLength": 0,
+  "currentVisibleDraftSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "boundedMarkers": [],
+  "rawLogSha256": "40aa17032d50aff2430ed3d0b605e88fb887db57a6661171ff8256f048d3fb67",
+  "cause": "USER_CONFIRMED_INTENTIONAL_CLEAR_OR_CHANGE",
+  "human_response": "Yes, I cleared or changed it",
+  "installation_authorization": "Existing in-place update remains authorized; preserve current empty state",
+  "cleared_draft_will_not_be_retyped_or_restored": true,
+  "updated_at": "2026-10-06T00:39:37.402707+00:00"
+}

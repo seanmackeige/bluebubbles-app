@@ -1,0 +1,20 @@
+{
+  "at": "2026-10-06T00:39:41.759683+00:00",
+  "finished_at": "2026-10-06T00:39:50.914708+00:00",
+  "method": "ADB_INSTALL_R_IN_PLACE",
+  "result": "PASS",
+  "previous_versionCode": 20002111,
+  "installed_versionCode": 20002112,
+  "installed_sha256": "9c5d5753e6698b25370a25706a6c69552a9e97e013061f623caa5f29316c1a71",
+  "first_install_time_preserved": true,
+  "package_uid_preserved": true,
+  "uninstall": false,
+  "clear_data": false,
+  "manual_draft_edit": false,
+  "current_draft_before": "HUMAN_CONFIRMED_CLEAR_CHANGE_EMPTY_COMPOSER_PRESERVED",
+  "current_draft_length": 0,
+  "current_draft_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "original_draft_restored": false,
+  "send_taps": 0,
+  "launch_and_acceptance": "PENDING"
+}
