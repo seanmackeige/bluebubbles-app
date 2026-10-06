@@ -1,0 +1,29 @@
+{
+  "at": "2026-10-06T00:16:05.540695+00:00",
+  "apkInventory": [
+    {
+      "archive": "20260928-215337-beba92b6fef7/rejected-pre-candidate/REJECTED-versionCode-20002088.apk",
+      "package": "com.mackeige.bluebubbles",
+      "versionCode": 20002088
+    },
+    {
+      "archive": "20261005-build109-logical-draft-admission/sean-edition-build109.apk",
+      "package": "com.mackeige.bluebubbles",
+      "versionCode": 20002109
+    },
+    {
+      "archive": "20261005-build110-logical-draft-admission/sean-edition-build110.apk",
+      "package": "com.mackeige.bluebubbles",
+      "versionCode": 20002110
+    },
+    {
+      "archive": "20261005-build111-logical-draft-admission/sean-edition-build111.apk",
+      "package": "com.mackeige.bluebubbles",
+      "versionCode": 20002111
+    }
+  ],
+  "nextUnusedVersionCode": 20002112,
+  "nextBuildNumber": 112,
+  "installed_before": 20002111,
+  "one_candidate_authorization": "EXPLICIT_USER_NON_SENDING_LEGACY_DRAFT_CONFIRMATION"
+}

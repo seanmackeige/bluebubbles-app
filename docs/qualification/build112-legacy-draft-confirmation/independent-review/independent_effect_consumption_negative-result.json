@@ -1,0 +1,7 @@
+{
+  "exitCode": 255,
+  "expectedFailure": "unchanged retained effect custody mismatch",
+  "compiledSuccessfully": true,
+  "notAProductionDispatch": true,
+  "rawReceipt": "independent_effect_consumption_negative-result.txt"
+}

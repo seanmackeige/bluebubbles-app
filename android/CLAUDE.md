@@ -141,3 +141,9 @@ Review draft CAS confirmation and independently framed bounded diagnostics.
 Source review PASS is preserved; whole-device admission acceptance is NOT PASS.
 Read device/HANDOFF.txt and INDEPENDENT-LIVE-ADDENDUM.txt. No route investigation,
 Mac production mutation, synthetic outbound or Apple validation retry occurred.
+
+### Build112 legacy confirmation candidate
+Verified unused version20002112/Flutter112. One authorized immutable candidate only.
+Retain locked native plugin registration, actual DEX definitions, all historical
+release checks and new confirmation/send guard/diagnostic-frame AOT markers.
+Build111 and earlier APKs remain immutable. No synthetic send or machine confirmation.

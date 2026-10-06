@@ -100,6 +100,16 @@ Map<String, Object?> logicalDraftAdmissionProbe({
     'draftAction': draft?.actionId,
     'contentFingerprint': draft?.contentFingerprint,
     'draftContentRevision': draft?.contentRevision,
+    'draftClass': draft?.metadataClass.diagnosticName,
+    'logicalFingerprint': draft?.logicalFingerprint,
+    'confirmationRevision': draft?.confirmation?.revision,
+    'confirmationInvalidated': draft?.confirmation?.invalidated,
+    'compositionCertificate': draft?.compositionCertificateRevision,
+    'compositionAuthority': draft?.compositionAuthorityRevision,
+    'compositionEpoch': draft?.compositionAuthorityEpoch,
+    'sendAdmissionResult': draft?.metadataClass == LogicalDraftMetadataClass.legacyUnboundDraft
+        ? 'BLOCKED_MISSING_METADATA'
+        : 'NOT_EXERCISED',
     'draftCertificate': draft?.observedCertificateRevision,
     'liveCertificate': authority?.certificateRevision,
     'draftAuthority': draft?.observedAuthorityRevision,

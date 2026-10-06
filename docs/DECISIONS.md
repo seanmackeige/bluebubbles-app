@@ -301,3 +301,12 @@ Obx(() => Column(children: [
 - New UI features must be built as small composable widgets from the start — retrofitting decomposition is expensive.
 - Prefer creating a new file per logical widget over adding private classes to an existing large file.
 - The `lib/app/layouts/conversation_view/widgets/message/` directory is the canonical example of correct decomposition: 54+ files, each handling one narrow responsibility.
+
+## Legacy draft confirmation (Build112)
+Historical drafts with all execution metadata absent require explicit human
+review of the currently displayed conversation and intent. Confirmation is a
+non-sending serialized content/proof transaction, not an admission or operation.
+Partial/malformed proof is ineligible. Review-time and fresh provider authority
+anchors must match, and all bound facts are checked again on a later Send.
+Human edits invalidate the legacy confirmation; harmless republishing and
+permitted same-material process epoch alignment retain it.

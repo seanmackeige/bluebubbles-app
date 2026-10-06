@@ -189,3 +189,16 @@ captures CURRENT authority on its first nonempty intent, never lastObserved.
 Nonempty drafts retain their original binding. logical_draft_authority_alignment
 and logical_draft_admission_probe are pure; probe has no persistence/transport.
 Explicit health expansion logs at most8 probes/process, not from widget build.
+
+### Human-only legacy confirmation
+Missing observed AND composition tuples are legacy. Partial, blank, malformed,
+or contradictory proof fails closed. Only confirmLegacyLogicalDraft may bind a
+legacy human draft. It requires a human Review & Confirm action, exact displayed
+owner/content/action/generation and review-time authority anchor, then forced
+read-only scoped provider evidence. All12 proof hashes are consumed by later
+normal Send admission. Confirmation has no queue, reservation or transport.
+Persist content+proof as one JSON value under the draft-save lock; dual slots
+are ineligible. Readback/context failure revokes only the exact just-written
+record, preserving newer intent. Edits invalidate; harmless republication does
+not. Same-proof process epoch alignment still follows111; within-tap ABA blocks.
+Bounded diagnostics use complete indexed/checksummed UTF8-safe frames.

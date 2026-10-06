@@ -1,0 +1,199 @@
+SEAN EDITION — NON-SENDING LEGACY DRAFT CONFIRMATION
+Independent adversarial review: /root/admission_adversarial
+Date: 2026-10-05
+
+DISPOSITION: SOURCE REVIEW PASS — OFFLINE SCOPE; ALL 286 INDEPENDENT CASES PASS.
+The reviewed safety, custody and failure-diagnostic source has no unresolved
+blocker. Final receipts and source/fixture hashes are banked with this review.
+No APK, device confirmation, Send, provider write, or installation was
+performed by this reviewer. Sean alone owns the real confirmation action.
+
+AUTHORIZATION AND LIVE FIXTURE
+
+This review follows the user's explicit one-forward-candidate authorization from
+Build 111. It does not extend that authorization to any second candidate or to
+machine activation of Review & Confirm. Build 111 remains immutable.
+
+The parent verified the existing S24 draft persisted across reopening and the
+111 install. Public fixtures retain only its observed shape: 51 characters,
+contentRevision 11, nonempty intent, and all original saved authority proof absent.
+Fixture text is generated x characters. No actual message content is copied.
+Original 111 classification cannot establish unchanged authority; the new path
+makes confirmation available while keeping ordinary Send blocked. A simulated
+human confirmation produces a bound draft; material authority drift invalidates
+that confirmation. This is an offline fixture, never a real human authorization.
+
+TEN REQUIRED ADVERSARIAL DISPOSITIONS
+
+1. Confirmation accidentally sends — PASS OFFLINE.
+   The dedicated UI callback ends after flushing visible intent and calling the
+   confirmation service. The service reads scoped provider evidence and invokes a
+   single-record metadata transaction. It cannot call the outgoing queue, ledger,
+   reservation, draft consumption, or transport. The shared route resolver is a
+   read-only provider observation/policy calculation, despite its request enum
+   being named newMessage. That enum does not dispatch. The banner has no Send
+   callback and keeps a separate confirmed row; Send is suppressed while the
+   confirmation operation is pending. A second, distinct human Send is required.
+
+2. Missing proof silently treated as current — PASS OFFLINE.
+   All-missing legacy intent requires explicit confirmation. The ordinary Send
+   entry checks class before provider work or binding writes. The service's other
+   authority-rearm APIs refuse legacy/invalid drafts, closing the old two-Send-tap
+   silent-upgrade bypass. Harmless save/reopen and the diagnostic probe do not
+   manufacture missing proof. Empty containers cannot be human-confirmed.
+
+3. Contradictory proof using legacy shortcut — PASS OFFLINE.
+   Raw JSON tests cover all 64 observed/composition tuple-presence combinations,
+   blank fields, nonintegral/wrong-type epochs, required proof hashes, and corrupted
+   records. Complete historical composition may legitimately differ from current
+   observed authority; individually missing composition fields are not filled from
+   observed fields. Invalidated records retain immutable logical-owner consistency.
+   Cross-owner invalidated proof is rejected rather than relabeled legacy.
+
+4. Confirmation surviving semantic edits — PASS OFFLINE.
+   Confirmation is tied to exact action, content fingerprint and logical owner.
+   Text, subject, reply, effect and attachment changes invalidate it durably;
+   same-content republishing preserves it. Confirmed legacy intent cannot silently
+   acquire fresh confirmation by clearing and retyping. Ordinary modern bound
+   drafts keep normal one-step admission. Actual UI closure cases cover controller
+   replacement, owner, generation, consumption, disposal, attachment identity,
+   ordering, name, size and bundle changes during asynchronous work. Existing
+   effects are preserved during confirmation, restore, save and disposal; exact
+   successful consumption clears them so they do not leak into the next draft.
+
+5. Stale authority executing — PASS OFFLINE.
+   The UI captures a nonnull scoped certificate/authority/epoch at the human tap,
+   before draft-flush awaits. The service requires that anchor to match both its
+   entry state and the forced fresh result; material drift and same-hash ABA pause.
+   Owner, generation, observation ownership and provider context remain current
+   through persistence. Normal later Send compares all twelve confirmation facts
+   against fresh scoped proof, then continues through existing authority fences.
+   A verified epoch-only bookkeeping refresh preserves human confirmation under
+   the already accepted 111 rule; material changes require reconfirmation.
+
+6. Double taps executing twice — PASS OFFLINE / LIVE SEND NOT EXERCISED.
+   A per-owner confirmation-in-flight set and the existing serialized draft lock
+   reject/serialize duplicates. Two confirmations produce at most one metadata
+   upgrade and zero sends. Send entry refuses confirmation-in-flight state; it is
+   not queued for later execution. A later separate Send still uses existing
+   action identity, receipt and at-most-once admission rules. Confirmation neither
+   clears nor replaces those operation records.
+
+7. Restart forgetting confirmation incorrectly — PASS OFFLINE.
+   Confirmation proof, revision and invalidation survive exact JSON roundtrips.
+   Semantic edits remain unconfirmed after recreation. Confirmation does not
+   change actionId, contentRevision, creation identity or content fingerprint.
+   The actual app's in-place installation and startup remain separate parent gates;
+   this reviewer did not restart or confirm the live S24 draft.
+
+8. Binding the wrong logical conversation — PASS OFFLINE.
+   Review freezes displayed controller and logical owner. Service storage, scoped
+   definition/certificate, writer capability and current facts must agree. Actual
+   owner changes and same-content distinct replacement drafts are rejected. Raw
+   and canonical storage aliases preserve serialized identity; no key rename or
+   silent identity rewrite is used. Logical fingerprint is immutable in proof.
+
+9. Irrelevant 2155/2156 activity invalidating confirmation — PASS OFFLINE.
+   A physical-member change with the same logical owner and authority passes the
+   actual visible closure/service fixture. Read-side activity is not itself a
+   human edit. Real membership, writer, generation, account, service or authority
+   changes still matter. This review makes no physical-writer or route-selector
+   inference, and confirmation is not physical route evidence.
+
+10. Unsafe new-group reachability — NO NEW PATH; SOURCE/REGRESSION GATE.
+    The new service requires certified logical storage and current writer proof.
+    The correction adds no new-group, registration, sender, account or Apple
+    validation action. Existing group/provider gates remain required. No live
+    group, message, attachment, reply or reaction was generated.
+
+ATOMIC CUSTODY AND FAILURE HANDLING
+
+Confirmation requires exactly one occupied draft slot. Equal dual slots and
+conflicting slots are rejected untouched; sequential two-key writes are never
+represented as atomic. One preference value holds exact content and confirmation
+metadata. Before writing, the transaction compares the entire expected draft and
+current context; after writing it checks the same slot and exact encoded record.
+
+A write exception after taking effect, or a post-write context/readback failure,
+revokes only the exact just-written confirmation record. Newer content/another
+slot is not overwritten. The composer suppresses readiness on failed confirmation.
+Storage errors remain failures; they never authorize a send or automatic retry.
+
+The parent verified the locked shared_preferences 2.5.5 implementation uses
+SharedPreferencesWithCache.setString returning Future<void>, not the old bool API.
+The existing awaited adapter propagates native write exceptions. An earlier
+question about a discarded bool was therefore resolved as not applicable; no
+unnecessary adapter change was requested. Keep its dependency excerpt/hash with
+the evidence. Cached readback alone is not claimed as a power-loss durability test.
+
+DIAGNOSTICS AND PERFORMANCE
+
+Each diagnostic frame is independently valid JSON, below 900 UTF-8 bytes, and has
+capture ID, part/count and SHA-256. Complete reassembly verifies all indexed frames
+and the checksum. Unicode, large bounded inputs, missing-tail detection, size
+rejection and capture independence are exercised. Do not reconstruct absent parts
+of a truncated record and label them captured data. Payload fields are bounded
+hashes/classifications; no message, recipient or attachment name is logged.
+
+Failed confirmation attempts emit a separate bounded result with last-captured
+draft/authority scope, PAUSED, NOT_ENTERED, and zero dispatch. Only eleven exact
+fixed StateError reasons are allowed; arbitrary exception text and private paths
+map to a fixed fallback without calling error.toString. Failure diagnostics are
+limited to eight attempts per composer and cannot alter admission if logging fails.
+
+The explicit health probe remains cached/read-only and at most eight uses per
+process. No provider observation, preference write, reservation or transport runs
+from probe expansion. The confirmation action alone forces fresh provider reads.
+Existing background projection/ANR boundaries are unchanged; new fingerprint work
+uses metadata, not an arbitrary scan of selected byte buffers on each UI frame.
+Actual S24 responsiveness and framed-log completeness are parent acceptance gates.
+
+EVIDENCE AND SCOPE
+
+New independent executable checks:
+  independent_model_fixture.dart                       120 PASS
+  independent_transaction_frames_fixture.dart           28 PASS
+  independent_integration_fixture.dart                  58 PASS
+  independent_effect_consumption_fixture.dart             9 PASS
+  Updated historical-equivalents/ fixtures              71 PASS
+  Total                                                286 PASS
+
+The first effect negative-control attempt did not compile and is not behavioral
+evidence. After fixing only the fake host's omitted parent brace, the negative
+compiled and failed the expected retained-effect custody assertion; the corrected
+source passes all nine delayed-consumption scenarios. The valid negative removes
+only the final fallback effect-clear line from the extracted source snippet.
+
+The model, transaction and framing tests import actual candidate implementations.
+Integration fixtures extract actual coordinator, shared-proof builder/predicate,
+Send-entry guards and visible-composer closure. The 71 historical equivalents
+refresh changed service/handler/final-fence/probe bodies from final source rather
+than relabel old bodies. Fake boundaries are provider snapshots, controller state
+and preferences. No real provider, outgoing queue, ledger or transport exists in
+these fixtures. They do not prove live dispatch or delivery.
+
+The parent owns full Flutter regression, analysis, release/native packaging gates,
+signing, exact APK hash, version allocation and installation. The earlier 538
+tests and fifteen new permanent tests are separate parent suite evidence, not
+another 553 tests independently run by this reviewer. Source approval does not
+replace those gates. Source and fixture hashes are in independent-review-manifest.
+
+REAL-DEVICE STOP BOUNDARY
+
+After exactly one authorized candidate is built and installed in place, the exact
+preserved Comcast draft must visibly need confirmation. It must not be lost or
+silently shown ready. The machine must not press Review & Confirm, even through a
+test hook. Stop for this one human action:
+
+Review the existing Comcast draft and tap Review & Confirm once. Do not tap Send yet.
+
+After Sean acts, machine verification may inspect bound metadata, unchanged draft,
+zero dispatch and readiness, then stop again before Send. Keep the passive route
+observatory armed; confirmation neither consumes it nor supplies route provenance.
+
+EXECUTION PROVENANCE
+
+The reviewer authored and inspected the fixtures locally. The parent executed them
+through its functioning authorized remote tool after the reviewer's remote approval
+service had failed authentication. Results were returned and read locally; no
+approval bypass was used. No production/device work was performed by this reviewer.

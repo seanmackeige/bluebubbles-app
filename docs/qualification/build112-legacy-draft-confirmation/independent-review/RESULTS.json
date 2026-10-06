@@ -1,0 +1,52 @@
+{
+  "cases": 286,
+  "fixtures": [
+    {
+      "fixture": "codex-adversarial-legacy-cas-handler-consume.dart",
+      "count": 46,
+      "exitCode": 0
+    },
+    {
+      "fixture": "codex-adversarial-legacy-final-fence.dart",
+      "count": 8,
+      "exitCode": 0
+    },
+    {
+      "fixture": "codex-adversarial-legacy-matches-fast-path.dart",
+      "count": 2,
+      "exitCode": 0
+    },
+    {
+      "fixture": "codex-adversarial-legacy-probe-boundary.dart",
+      "count": 4,
+      "exitCode": 0
+    },
+    {
+      "fixture": "codex-adversarial-legacy-probe-fixture.dart",
+      "count": 11,
+      "exitCode": 0
+    },
+    {
+      "fixture": "independent_model_fixture.dart",
+      "count": 120,
+      "exitCode": 0
+    },
+    {
+      "fixture": "independent_transaction_frames_fixture.dart",
+      "count": 28,
+      "exitCode": 0
+    },
+    {
+      "fixture": "independent_integration_fixture.dart",
+      "count": 58,
+      "exitCode": 0
+    },
+    {
+      "fixture": "independent_effect_consumption_fixture.dart",
+      "count": 9,
+      "exitCode": 0
+    }
+  ],
+  "effectNegativeControl": "EXPECTED_RUNTIME_CUSTODY_ASSERTION",
+  "independentScope": "Source extracted service/composer/handler plus actual pure models; fake provider/preferences; no live transport"
+}

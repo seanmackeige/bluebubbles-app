@@ -1,0 +1,60 @@
+{
+  "disposition": "SOURCE_REVIEW_PASS_OFFLINE_SCOPE",
+  "sourceBaseline": "Immutable Build 111; next authorized single candidate not built or accepted by reviewer",
+  "independentCases": 286,
+  "caseBreakdown": {
+    "model": 120,
+    "transactionAndDiagnostics": 28,
+    "actualIntegration": 58,
+    "historicalEquivalents": 71,
+    "effectConsumption": 9
+  },
+  "sourceSha256": {
+    "lib/app/layouts/conversation_view/widgets/text_field/conversation_text_field.dart": "fdb044767bc629088cb944814f9119afb48c9f862cda33e93d7d6013b34fcf2a",
+    "lib/app/layouts/conversation_view/widgets/text_field/logical_draft_confirmation_banner.dart": "6bcd027ab9e6efb6230d5955e58804cb73a5a5d1c196a5b538920f2fa7dcd1d5",
+    "lib/app/layouts/conversation_view/widgets/text_field/send_button.dart": "a48212942bbe088a61ced55619eccfec37e7f05217b2c2e2ac31fa234dfa7c9b",
+    "lib/app/layouts/conversation_view/widgets/text_field/text_field_component.dart": "39fd93d255d1da3b60b3a0f7571c391f3e8ca725f6bbc98c57ec5d636a99788b",
+    "lib/helpers/ui/dialog_helpers.dart": "d810a73ffcdd9d882768a16c4846accc33f2a86616cc3273e446ec62f89bb1b7",
+    "lib/services/backend/outgoing_message_handler.dart": "287a11752dc05e43d268fbd772b8887a954a2b3848d48ff982add4998e3d0ce3",
+    "lib/services/ui/chat/chats_service.dart": "d63e15e44e059989d7f5a519d4f83c94e5f541ecbad4d56afd8bfe191fff8ae9",
+    "lib/services/ui/chat/conversation_view_controller.dart": "ee119fff2bd798fe91329f0f107815db6cf919c09f859ac77c1970e4118feb0b",
+    "lib/services/ui/chat/logical_draft.dart": "a75afec98ebd50cee5d9c4299ff85c8559ecca664d74392a739ae8ca43f0210e",
+    "lib/services/ui/chat/logical_draft_admission_probe.dart": "1ba2a316196b1234fde6549ee95266cb9a38c11b03c833b86b8f11f35cb9c6c6",
+    "lib/services/ui/chat/logical_draft_authority_alignment.dart": "133dd0af2c6d4192648b556381deda165a52b4cc7de43464e8b243cd078f5771",
+    "lib/services/ui/chat/logical_draft_confirmation_transaction.dart": "09d1c1385a1b6c7c9c9ab0dd7c5ead63e0b5e3da8667febd6f584469543f577b",
+    "lib/services/ui/chat/logical_draft_diagnostics.dart": "e8f8a07c96d88e66409c61e3b0a81c16b22b8fac32707cfdf463e1eaee239c80",
+    "lib/services/ui/chat/logical_draft_intent_guard.dart": "2a2b7f8f96a9846960d799fcfe560cc3b7892d517beb7ef02fe0af9407d21e0c",
+    "lib/services/ui/chat/logical_draft_storage.dart": "ebf4e9b9fdb09ca219e204380217fbff60f268da233584143f4142bd42866184",
+    "test/logical_draft_confirmation_banner_test.dart": "e1ec0fcb282a0ab70bfdd0375e4e455cca4a935c6a489d1140a1fad0e26cf6ee",
+    "test/logical_draft_confirmation_test.dart": "d6471aafb5b3c26f20689358acd2d9799bf46b2a3d8f25a0d4eb5378cdc22224"
+  },
+  "fixtureSha256": {
+    "historical-equivalents/codex-adversarial-legacy-cas-handler-consume.dart": "0d5fe6ba80739ea0ca5d040abed1f27f1ea870b5400560caf56d35f8dbb2d3cb",
+    "historical-equivalents/codex-adversarial-legacy-final-fence.dart": "40af6362a0ea2dea0ba58a9fe4243fe5ff0244ef1149c933d7def8888ea5df5b",
+    "historical-equivalents/codex-adversarial-legacy-matches-fast-path.dart": "018699c745b4ad7733434d0a9869fe3fe2af2cac3eb2b93df8679a696d12927c",
+    "historical-equivalents/codex-adversarial-legacy-probe-boundary.dart": "c380f856ef5a8ddcc75713cb8b78c064b0d7a92db30cc0f2c49cb3777b4f3fbc",
+    "historical-equivalents/codex-adversarial-legacy-probe-fixture.dart": "3049d7695ff7c358d6ae8994dd9b27d3a1012f7f1fb05614777d41cdf95d84d7",
+    "independent_effect_consumption_fixture.dart": "6fc9ad292a59b6119cab77526926a04cc0ce9c2035b8a1908fdd66f31fad40aa",
+    "independent_effect_consumption_negative.dart": "397f5a75a96e8c0196b7d41b3ba911431e22623fc1747f7659bae3ec4aef4172",
+    "independent_integration_fixture.dart": "ac936515441475cfa415e717d14a7fc076ef92caf3a78190224aeba3aa85463a",
+    "independent_model_fixture.dart": "21155a28768fb3ae47ecd2cd8febd4be9c3e35a2ac2981d57f4d302605638e6d",
+    "independent_transaction_frames_fixture.dart": "5fa2ad460d3bd7c83c19322707b377d17e50ca85d35b6ec48bdb1cf5458f97ff"
+  },
+  "resultSha256": {
+    "independent_effect_consumption_fixture-result.json": "9dace4b145ebf0781469e565375c21a64421454b58cab0539ab1c39041bc6510",
+    "independent_effect_consumption_negative-result.json": "59d6258fd8a9beba19c4c9c0a1ff8abeed8e69327ff912ec90755ac4be8517c3",
+    "independent_integration_fixture-result.json": "82bb631102f8f74af1f58a6c683ddc7620db910541239c2f6106c326a42cd07b",
+    "independent_model_fixture-result.json": "382a70dc876d27eeb7faefe1c0122eba23ebd08a41597f3ebadfd7845937c16b",
+    "independent_transaction_frames_fixture-result.json": "4c4302a79bb647d42b7d87fc4be0394a85743ea4cd2f44a4741e105302e2df6a",
+    "legacy-historical-results.json": "4be92ee96f40b6ed2d9b4ee2f1b793a096150a650a62cb70ae0fe9362e7b7843",
+    "RESULTS.json": "eb0c8da60469527354aad113aafd3dc73a898874c36b5efacf785c92ff1b2a55"
+  },
+  "reviewSha256": "78cc5efcbb648981e7a3189784d7690e6a9be57726c564adc63bb8592105f48a",
+  "exclusions": [
+    "No APK acceptance",
+    "No real S24 confirmation",
+    "No send/physical dispatch",
+    "No claim of independently executing parent full Flutter suite"
+  ],
+  "parentFullRegression": "Separate required gate; parent receipt is authoritative for final 553-test result"
+}

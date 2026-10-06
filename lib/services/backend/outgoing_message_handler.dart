@@ -345,6 +345,18 @@ class OutgoingMessageHandler {
       item.logicalIntentGuard?.check();
     }
     final presentationChat = items.first.chat;
+    if (ChatsSvc.isLogicalDraftConfirmationInFlight(presentationChat)) {
+      _failLogicalAdmission(items, 'SEND_BLOCKED_CONFIRMATION_IN_PROGRESS');
+    }
+    for (final item in items) {
+      final metadata = item.logicalDraft?.metadataClass;
+      if (metadata == LogicalDraftMetadataClass.legacyUnboundDraft) {
+        _failLogicalAdmission(items, 'SEND_BLOCKED_DRAFT_NEEDS_HUMAN_CONFIRMATION');
+      }
+      if (metadata == LogicalDraftMetadataClass.partiallyBoundInvalidDraft) {
+        _failLogicalAdmission(items, 'SEND_BLOCKED_INVALID_DRAFT_METADATA');
+      }
+    }
     final replyDraft = items.map((item) => item.logicalDraft?.reply).whereType<LogicalReplyIntent>().firstOrNull;
     if (replyDraft != null && items.length != 1) {
       _failLogicalAdmission(items, 'SEND_BLOCKED_REPLY_TARGET_INVALID_MULTI_OPERATION');
@@ -391,6 +403,12 @@ class OutgoingMessageHandler {
     }
 
     var draft = items.map((item) => item.logicalDraft).whereType<LogicalDraft>().firstOrNull;
+    if (draft?.confirmation != null &&
+        !ChatsSvc.logicalDraftConfirmationMatchesCurrentProof(presentationChat, draft!)) {
+      final invalidated = draft.invalidateConfirmation();
+      await ChatsSvc.persistRearmedLogicalDraft(invalidated);
+      _failLogicalAdmission(items, 'SEND_BLOCKED_CONFIRMATION_AUTHORITY_CHANGED', rearmedDraft: invalidated);
+    }
     // A newly saved draft must not hide authority drift during its own freeze.
     for (final item in items) {
       final anchor = item.logicalIntentGuard?.authorityAtFreeze;

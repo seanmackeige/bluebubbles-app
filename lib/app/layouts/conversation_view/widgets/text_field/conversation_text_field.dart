@@ -1,3 +1,5 @@
+import 'logical_draft_confirmation_banner.dart';
+import 'package:bluebubbles/services/ui/chat/logical_draft_diagnostics.dart';
 import 'package:flutter/foundation.dart';
 import 'dart:convert';
 import 'package:bluebubbles/services/ui/chat/logical_draft_intent_guard.dart';
@@ -56,8 +58,115 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
   int _logicalIntentEpoch = 0;
   int _logicalUiGeneration = 0;
   Future<void>? _sendInFlight;
+  final RxBool _confirmationBusy = false.obs;
+  final RxBool _legacyConfirmationPresent = false.obs;
+  final RxBool _confirmationFailed = false.obs;
+  int _confirmationFailureDiagnosticCount = 0;
+  final Rxn<LogicalDraftMetadataClass> _draftMetadataClass = Rxn<LogicalDraftMetadataClass>();
+
+  void _refreshDraftConfirmationState() {
+    if (!mounted || !_hasLogicalDraftIdentity) return;
+    _draftMetadataClass.value = ChatsSvc.logicalDraftMetadataClassFor(chat);
+    _legacyConfirmationPresent.value = ChatsSvc.loadLogicalDraft(chat)?.confirmation != null;
+  }
+
+  Future<void> _reviewAndConfirmDraft() async {
+    if (_confirmationBusy.value || _sendInFlight != null || !_hasLogicalWriterCapability) return;
+    _confirmationBusy.value = true;
+    final ownerController = controller;
+    final owner = ChatsSvc.conversationKeyFor(chat);
+    final generation = ChatsSvc.logicalDraftGenerationFor(chat);
+    final authorityAtReview = ChatsSvc.logicalWriterAuthorityRevisionFor(chat);
+    var confirmationDraft = ChatsSvc.loadLogicalDraft(chat);
+    final effectAtReview = confirmationDraft?.effectId;
+    final text = controller.textController.text;
+    final subject = controller.subjectTextController.text;
+    final reply = jsonEncode(_logicalReplyIntent()?.toJson());
+    final attachments = controller.pickedAttachments.toList(growable: false);
+    final names = attachments.map((item) => item.name).toList(growable: false);
+    final sizes = attachments.map((item) => item.size).toList(growable: false);
+    final bundles = attachments.map((item) => item.balloonBundleId).toList(growable: false);
+    bool visibleIsCurrent() =>
+        mounted &&
+        identical(controller, ownerController) &&
+        ChatsSvc.conversationKeyFor(chat) == owner &&
+        ChatsSvc.logicalDraftGenerationFor(chat) == generation &&
+        !_logicalDraftConsumed &&
+        controller.textController.text == text &&
+        controller.subjectTextController.text == subject &&
+        jsonEncode(_logicalReplyIntent()?.toJson()) == reply &&
+        controller.pickedAttachments.length == attachments.length &&
+        List.generate(attachments.length, (index) => index).every(
+          (index) =>
+              identical(controller.pickedAttachments[index], attachments[index]) &&
+              attachments[index].name == names[index] &&
+              attachments[index].size == sizes[index] &&
+              attachments[index].balloonBundleId == bundles[index],
+        );
+    try {
+      if (authorityAtReview == null ||
+          ChatsSvc.logicalDraftMetadataClassFor(chat) != LogicalDraftMetadataClass.legacyUnboundDraft) {
+        throw StateError('CONFIRMATION_NOT_ELIGIBLE');
+      }
+      localController.debounceDraftSave?.cancel();
+      // Flush the exact currently visible intent before observing authority.
+      // This saves content only; it cannot bind missing authority.
+      final expected = await _saveLogicalDraft(effectId: effectAtReview);
+      confirmationDraft = expected ?? confirmationDraft;
+      if (!visibleIsCurrent() ||
+          expected == null ||
+          expected.text != text ||
+          expected.subject != subject ||
+          expected.effectId != effectAtReview ||
+          expected.attachments.length != attachments.length ||
+          expected.attachments.any((item) => !item.isRestorable)) {
+        throw StateError('CONFIRMATION_VISIBLE_DRAFT_CHANGED');
+      }
+      final paths = attachments.map((item) => item.path).toList(growable: false);
+      await ChatsSvc.confirmLegacyLogicalDraft(
+        chat,
+        expected: expected,
+        authorityAtReview: authorityAtReview,
+        composerIsCurrent: () =>
+            visibleIsCurrent() &&
+            List.generate(
+              attachments.length,
+              (index) => index,
+            ).every((index) => attachments[index].path == paths[index]),
+      );
+      _confirmationFailed.value = false;
+      if (mounted) showSnackbar('Draft confirmed', 'Nothing was sent. Send requires a separate tap.');
+    } catch (error) {
+      // Failure diagnostics are bounded and contain only hashes/fixed reasons.
+      // A logger failure cannot promote readiness or touch the draft.
+      if (_confirmationFailureDiagnosticCount++ < 8) {
+        try {
+          final report = logicalDraftConfirmationFailureRecord(
+            draft: confirmationDraft,
+            authorityAtReview: authorityAtReview,
+            error: error,
+          );
+          for (final frame in logicalDraftDiagnosticFrames(report)) {
+            Logger.info(frame, tag: 'LogicalDraftConfirmation');
+            debugPrint(frame);
+          }
+        } catch (_) {
+          /* Diagnostics are not an admission capability. */
+        }
+      }
+      _confirmationFailed.value = true;
+      if (mounted) showSnackbar('Confirmation paused', 'Your draft was preserved. Review it again before confirming.');
+    } finally {
+      if (mounted) {
+        _confirmationBusy.value = false;
+        _refreshDraftConfirmationState();
+      }
+    }
+  }
+
   LogicalDraftIntentGuard? _activeIntentGuard;
   String? _admissionEffect;
+  String? _retainedLogicalEffectId;
   void Function()? _finalAdmissionDiagnostic;
   bool Function()? _frozenComposerCurrent;
 
@@ -117,19 +226,22 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
     if (_logicalDraftConsumed) return null;
     final expectedDraftGeneration = ChatsSvc.logicalDraftGenerationFor(chat);
     final selectedAttachments = useFrozenIntent ? frozenAttachments! : controller.pickedAttachments.toList();
-    return ChatsSvc.saveLogicalSendIntent(
+    final saved = await ChatsSvc.saveLogicalSendIntent(
       chat,
       text: useFrozenIntent ? frozenText! : controller.textController.text,
       subject: useFrozenIntent ? frozenSubject! : controller.subjectTextController.text,
       attachments: selectedAttachments,
       reply: useFrozenIntent ? frozenReply : _logicalReplyIntent(),
-      effectId: effectId ?? (_frozenComposerCurrent?.call() == true ? _admissionEffect : null),
+      effectId: effectId ?? (_frozenComposerCurrent?.call() == true ? _admissionEffect : _retainedLogicalEffectId),
       expectedDraftGeneration: expectedDraftGeneration,
     );
+    _refreshDraftConfirmationState();
+    return saved;
   }
 
   void _markLogicalDraftConsumed() {
     _logicalDraftConsumed = true;
+    _retainedLogicalEffectId = null;
     _logicalIntentEpoch += 1;
     _logicalUiGeneration += 1;
     _retainedLogicalReplyIntent = null;
@@ -225,12 +337,14 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
 
   Future<void> getDrafts() async {
     if (_hasLogicalDraftIdentity) {
+      _refreshDraftConfirmationState();
       final generation = _logicalUiGeneration;
       bool isCurrent() => mounted && !_logicalDraftConsumed && generation == _logicalUiGeneration;
       _restoringLogicalDraft = true;
       try {
         final draft = ChatsSvc.loadLogicalDraft(chat);
         if (draft == null || !isCurrent()) return;
+        _retainedLogicalEffectId = draft.effectId;
         if (draft.text.isNotEmpty) controller.textController.text = draft.text;
         if (draft.subject.isNotEmpty) controller.subjectTextController.text = draft.subject;
         // Suppress only synchronous restoration writes. Human events during
@@ -520,6 +634,7 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
             subject: subject,
             attachments: controller.pickedAttachments.toList(),
             reply: logicalReply,
+            effectId: _retainedLogicalEffectId,
             expectedDraftGeneration: ChatsSvc.logicalDraftGenerationFor(chat),
           ),
         );
@@ -550,6 +665,9 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
   }
 
   Future<void> sendMessage({String? effect}) {
+    if (_confirmationFailed.value || _confirmationBusy.value || ChatsSvc.isLogicalDraftConfirmationInFlight(chat)) {
+      return Future<void>.value();
+    }
     final existing = _sendInFlight;
     if (existing != null) return existing;
     late final Future<void> operation;
@@ -561,10 +679,25 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
   }
 
   Future<void> _sendMessageOnce({String? effect}) async {
+    effect ??= _retainedLogicalEffectId;
     try {
       if (_isProtectedLogicalSource && !_hasLogicalWriterCapability) {
         showSnackbar('Send unavailable', 'This conversation is read-only while its identity is being verified.');
         return;
+      }
+      if (_hasLogicalDraftIdentity) {
+        final metadata = ChatsSvc.logicalDraftMetadataClassFor(chat);
+        if (metadata == LogicalDraftMetadataClass.legacyUnboundDraft ||
+            metadata == LogicalDraftMetadataClass.partiallyBoundInvalidDraft) {
+          _refreshDraftConfirmationState();
+          showSnackbar(
+            'Send paused',
+            metadata == LogicalDraftMetadataClass.legacyUnboundDraft
+                ? 'Review and confirm this draft before a separate Send tap.'
+                : 'This draft has inconsistent safety information. Your draft was preserved.',
+          );
+          return;
+        }
       }
       final text = controller.textController.text;
       if (_logicalReplyResolutionPending.value ||
@@ -752,9 +885,10 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
             'providerRequestStarted': started,
             'physicalExecutionProven': false,
           };
-          final encoded = jsonEncode(entry);
-          Logger.info(encoded, tag: 'LogicalDraftAdmission');
-          debugPrint(encoded);
+          for (final frame in logicalDraftDiagnosticFrames(entry)) {
+            Logger.info(frame, tag: 'LogicalDraftAdmission');
+            debugPrint(frame);
+          }
         }
 
         _finalAdmissionDiagnostic = () =>
@@ -872,6 +1006,7 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
             return;
           }
           _logicalDraftConsumed = true;
+          _retainedLogicalEffectId = null;
           localController.debounceDraftSave?.cancel();
         }
       }
@@ -947,6 +1082,15 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              LogicalDraftConfirmationBanner(
+                metadataClass:
+                    _confirmationFailed.value && _draftMetadataClass.value == LogicalDraftMetadataClass.modernBoundDraft
+                    ? LogicalDraftMetadataClass.partiallyBoundInvalidDraft
+                    : _draftMetadataClass.value,
+                previouslyConfirmed: _legacyConfirmationPresent.value,
+                busy: _confirmationBusy.value,
+                onConfirm: () => unawaited(_reviewAndConfirmDraft()),
+              ),
               if (_logicalReplyResolutionPending.value)
                 ListTile(
                   dense: true,

@@ -1,0 +1,10 @@
+{
+  "at": "2026-10-06T00:26:52.126636+00:00",
+  "command": "flutter test --no-pub",
+  "exitCode": 0,
+  "sourceUnchangedAcrossRun": true,
+  "sourceFiles": 659,
+  "historicalTests": 538,
+  "newPermanentTests": 15,
+  "totalTests": 553
+}

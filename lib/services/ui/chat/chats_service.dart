@@ -1,3 +1,5 @@
+import 'logical_draft_confirmation_transaction.dart';
+import 'logical_draft_diagnostics.dart';
 import 'package:bluebubbles/services/ui/chat/logical_draft_admission_probe.dart';
 import 'package:bluebubbles/services/ui/chat/logical_draft_storage.dart';
 import 'dart:async';
@@ -194,16 +196,193 @@ class ChatsService {
       generation: logicalDraftGenerationFor(chat),
       storageCoherent: coherent,
     );
-    final encoded = jsonEncode(report);
-    Logger.info(encoded, tag: 'LogicalDraftPreflight');
-    // Explicit bounded diagnostics remain observable on a non-debuggable release.
-    debugPrint(encoded);
+    for (final frame in logicalDraftDiagnosticFrames(report)) {
+      Logger.info(frame, tag: 'LogicalDraftPreflight');
+      debugPrint(frame);
+    }
   }
 
   LogicalTransportReadinessEvidence? logicalTransportReadinessForSourceRow(int sourceRowId) =>
       _logicalTransportReadinessBySourceRow[sourceRowId];
 
   bool isLogicalEvidenceObservationCurrent(int epoch) => _logicalEvidenceObservationEpochTracker.isCurrent(epoch);
+
+  final Set<String> _logicalConfirmationInFlight = <String>{};
+
+  bool isLogicalDraftConfirmationInFlight(Chat chat) => _logicalConfirmationInFlight.contains(conversationKeyFor(chat));
+
+  LogicalDraftMetadataClass? logicalDraftMetadataClassFor(Chat chat) {
+    try {
+      final draft = _logicalDraftStorageFor(chat)?.read(PrefsSvc.messaging.loadLogicalDraftJson).draft;
+      return draft?.hasUserIntent == true ? draft!.metadataClass : null;
+    } catch (_) {
+      return LogicalDraftMetadataClass.partiallyBoundInvalidDraft;
+    }
+  }
+
+  String _confirmationProviderContext() => logicalProviderContextFingerprint(
+    origin: HttpSvc.origin,
+    authKey: SettingsSvc.settings.guidAuthKey.value,
+    isMinBigSur: SettingsSvc.serverDetails.isMinBigSur,
+    isMinVentura: SettingsSvc.serverDetails.isMinVentura,
+    isMinSonoma: SettingsSvc.serverDetails.isMinSonoma,
+    enablePrivateAPI: SettingsSvc.settings.enablePrivateAPI.value,
+    privateAPISend: SettingsSvc.settings.privateAPISend.value,
+    privateAPIAttachmentSend: SettingsSvc.settings.privateAPIAttachmentSend.value,
+  );
+
+  Map<String, String> _currentLogicalConfirmationFacts(Chat chat, LogicalDraft draft) {
+    final evidence = _logicalRouteEvidence;
+    final definition = _logicalDefinitionForChat(chat);
+    final certificate = evidence?.executionGenerationCertificate;
+    final revision = logicalWriterAuthorityRevisionFor(chat);
+    final authority = evidence == null ? null : LogicalConversationOutboundRoutePolicy.executionAuthority(evidence);
+    if (!hasBuild99WriterCapability(chat) ||
+        evidence == null ||
+        certificate == null ||
+        revision == null ||
+        definition?.id != evidence.certificateId ||
+        definition?.revision != revision.certificateRevision ||
+        authority?.isReady != true ||
+        evidence.accountSnapshotBeforeSha256 != evidence.accountSnapshotAfterSha256) {
+      throw StateError('CONFIRMATION_CURRENT_PROOF_UNAVAILABLE');
+    }
+    return {
+      'action': draft.actionId,
+      'content': draft.contentFingerprint,
+      'logical': draft.logicalFingerprint,
+      'certificate': revision.certificateRevision,
+      'authority': revision.authorityRevision,
+      'participants': certificate.expectedExternalParticipantSetSha256,
+      'account': evidence.accountSnapshotAfterSha256,
+      'providerContract': certificate.providerFactContractRevision,
+      'providerContext': _confirmationProviderContext(),
+      'generation': logicalActionIdentity('confirmed-generation', [authority!.currentGenerationId]),
+      'writer': logicalActionIdentity('confirmed-writer', [authority.revisionMaterial, authority.writerRowId]),
+      'service': logicalActionIdentity('confirmed-service', [certificate.currentService]),
+    };
+  }
+
+  bool logicalDraftConfirmationMatchesCurrentProof(Chat chat, LogicalDraft draft) {
+    final record = draft.confirmation;
+    if (record == null) return true;
+    if (record.invalidated) return false;
+    try {
+      final fresh = _currentLogicalConfirmationFacts(chat, draft);
+      return LogicalDraftConfirmation.requiredFacts.every((key) => fresh[key] == record.facts[key]);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Only the distinct human Review & Confirm callback calls this method.
+  /// Fresh provider observation is read-only. No outgoing handler, operation
+  /// ledger, reservation, draft consumption, or transport is reachable here.
+  Future<LogicalDraft> confirmLegacyLogicalDraft(
+    Chat chat, {
+    required LogicalDraft expected,
+    required LogicalAuthorityRevision authorityAtReview,
+    required bool Function() composerIsCurrent,
+  }) async {
+    final owner = conversationKeyFor(chat);
+    if (!_logicalConfirmationInFlight.add(owner)) throw StateError('CONFIRMATION_ALREADY_IN_PROGRESS');
+    try {
+      return await _withLogicalDraftLock(() async {
+        final storage = _logicalDraftStorageFor(chat);
+        if (storage == null ||
+            !hasBuild99WriterCapability(chat) ||
+            !composerIsCurrent() ||
+            expected.metadataClass != LogicalDraftMetadataClass.legacyUnboundDraft ||
+            !expected.hasUserIntent ||
+            logicalWriterAuthorityRevisionFor(chat)?.certificateRevision != authorityAtReview.certificateRevision ||
+            logicalWriterAuthorityRevisionFor(chat)?.authorityRevision != authorityAtReview.authorityRevision ||
+            logicalWriterAuthorityRevisionFor(chat)?.epoch != authorityAtReview.epoch) {
+          throw StateError('CONFIRMATION_NOT_ELIGIBLE');
+        }
+        final before = storage.read(PrefsSvc.messaging.loadLogicalDraftJson);
+        if (before.occupiedKeys.length != 1 ||
+            before.draft == null ||
+            jsonEncode(before.draft!.toJson()) != jsonEncode(expected.toJson()) ||
+            expected.attachments.any((item) => !item.isRestorable)) {
+          throw StateError('CONFIRMATION_CUSTODY_UNAVAILABLE');
+        }
+        final generation = logicalDraftGenerationFor(chat);
+        final providerContext = _confirmationProviderContext();
+        final result = await resolveLogicalMutationBatch(chat, const [
+          LogicalMutationRequest(mutationClass: LogicalMutationClass.newMessage),
+        ], force: true);
+        final revision = result.revision;
+        final observation = result.observationEpoch;
+        final evidence = _logicalRouteEvidence;
+        final certificate = evidence?.executionGenerationCertificate;
+        final authority = evidence == null ? null : LogicalConversationOutboundRoutePolicy.executionAuthority(evidence);
+        if (revision == null ||
+            observation == null ||
+            certificate == null ||
+            authority?.isReady != true ||
+            revision.certificateRevision != authorityAtReview.certificateRevision ||
+            revision.authorityRevision != authorityAtReview.authorityRevision ||
+            revision.epoch != authorityAtReview.epoch ||
+            result.decisions.length != 1 ||
+            !result.decisions.single.isSingleTarget ||
+            result.transportReadiness.length != 1 ||
+            result.transportReadiness.single.sendDispositionAt(DateTime.now().millisecondsSinceEpoch) ==
+                LogicalTransportSendDisposition.blocked ||
+            result.providerAccountSnapshotSha256 == null ||
+            result.providerFactContractRevision == null ||
+            evidence!.accountSnapshotBeforeSha256 != result.providerAccountSnapshotSha256) {
+          throw StateError('CONFIRMATION_CURRENT_AUTHORITY_UNAVAILABLE');
+        }
+        bool contextIsCurrent() {
+          final live = logicalWriterAuthorityRevisionFor(chat);
+          return composerIsCurrent() &&
+              conversationKeyFor(chat) == owner &&
+              hasBuild99WriterCapability(chat) &&
+              logicalDraftGenerationFor(chat) == generation &&
+              isLogicalEvidenceObservationCurrent(observation) &&
+              live?.certificateRevision == revision.certificateRevision &&
+              live?.authorityRevision == revision.authorityRevision &&
+              live?.epoch == revision.epoch &&
+              _confirmationProviderContext() == providerContext;
+        }
+
+        final proof = LogicalDraftConfirmation(
+          revision: (expected.confirmation?.revision ?? 0) + 1,
+          invalidated: false,
+          authorityEpoch: revision.epoch,
+          facts: _currentLogicalConfirmationFacts(chat, expected),
+        );
+        final confirmed = await confirmLogicalDraftAtomically(
+          expected: expected,
+          proof: proof,
+          read: () => storage.read(PrefsSvc.messaging.loadLogicalDraftJson),
+          write: PrefsSvc.messaging.saveLogicalDraftJson,
+          contextIsCurrent: contextIsCurrent,
+          nowEpochMilliseconds: DateTime.now().millisecondsSinceEpoch,
+        );
+        _bumpLogicalDraftPreviewRevision(storage.canonicalKey);
+        for (final frame in logicalDraftDiagnosticFrames(<String, Object?>{
+          'schema': 'LOGICAL_DRAFT_CONFIRMATION_RESULT_V1',
+          'draftClass': confirmed.metadataClass.diagnosticName,
+          'contentFingerprint': confirmed.contentFingerprint,
+          'logicalFingerprint': confirmed.logicalFingerprint,
+          'confirmationRevision': proof.revision,
+          'certificateRevision': revision.certificateRevision,
+          'authorityRevision': revision.authorityRevision,
+          'epoch': revision.epoch,
+          'confirmationResult': 'READY_TO_SEND_SEPARATE_HUMAN_TAP_REQUIRED',
+          'sendAdmissionResult': 'NOT_ENTERED',
+          'physicalDispatchCount': 0,
+        })) {
+          Logger.info(frame, tag: 'LogicalDraftConfirmation');
+          debugPrint(frame);
+        }
+        return confirmed;
+      });
+    } finally {
+      _logicalConfirmationInFlight.remove(owner);
+    }
+  }
 
   Future<T> _withLogicalDraftLock<T>(Future<T> Function() operation) => _logicalDraftTransactions.run(operation);
 
@@ -3124,6 +3303,7 @@ class ChatsService {
         final current = slot.draft;
         final live = currentLogicalAuthorityRevision;
         if (current == null ||
+            current.metadataClass != LogicalDraftMetadataClass.modernBoundDraft ||
             current.actionId != expected.actionId ||
             current.contentFingerprint != expected.contentFingerprint ||
             current.observedCertificateRevision != expected.observedCertificateRevision ||
@@ -3150,6 +3330,7 @@ class ChatsService {
       final slot = storage.read(PrefsSvc.messaging.loadLogicalDraftJson);
       final current = slot.draft;
       if (current == null ||
+          current.metadataClass != LogicalDraftMetadataClass.modernBoundDraft ||
           current.actionId != draft.actionId ||
           current.contentFingerprint != draft.contentFingerprint) {
         return;

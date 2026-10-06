@@ -1,0 +1,6 @@
+Unhandled exception:
+Bad state: unchanged retained effect custody mismatch
+#0      main.check (file:///tmp/independent_effect_consumption_negative.dart:54:81)
+<asynchronous suspension>
+#1      main (file:///tmp/independent_effect_consumption_negative.dart:57:2)
+<asynchronous suspension>

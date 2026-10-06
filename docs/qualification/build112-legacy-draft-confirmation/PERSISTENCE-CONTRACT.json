@@ -1,0 +1,7 @@
+{
+  "package": "shared_preferences2.5.5",
+  "type": "SharedPreferencesWithCache",
+  "source_sha256": "85d6d33e94b745365919e09ea614aea303baca07d4c766df7d6c991f44e6007b",
+  "excerpt": "Future<void> setString(String key, String value) async {\n    if (!_isValidKey(key)) {\n      throw ArgumentError(\n        '$key is not included in the PreferencesFilter allowlist',\n      );\n    }\n    _cache[key] = value;\n    return _platformMethods.setString(key, value);\n  }",
+  "verdict": "Future<void> native persistence failure propagates; cached after-effect failure revocation tested"
+}

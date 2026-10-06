@@ -48,3 +48,12 @@ The composer carries a frozen authority anchor and retains original diagnostic
 before-state while an operation-bound effective draft can receive a verified
 epoch refresh. Late authority fencing and consumption use that effective draft.
 Diagnostics include draft/freeze/final epochs without content or participant PII.
+
+LogicalDraftConfirmationBanner has only a human confirmation callback, no Send.
+Cache its state outside build. Review captures visible text/subject/reply/effect,
+attachment ownership and logical owner/generation/authority BEFORE awaits, flushes
+exact content, then asks the service to confirm. Rapid Send while confirming
+blocks; success returns without send. Keep the confirmed row in place so another
+tap cannot become Send by a layout shift. Retain effect metadata through restore
+and harmless disposal. Machine device acceptance MUST leave Review & Confirm
+untapped; that semantic authorization belongs to Sean.

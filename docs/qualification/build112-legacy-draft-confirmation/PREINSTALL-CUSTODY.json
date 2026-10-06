@@ -1,0 +1,79 @@
+{
+  "installed": {
+    "versionCode": "20002111",
+    "uid": "10806",
+    "apkSha256": "f23d385c205d0054bfaa37682b6e31c61595620bfa9d98dda1f946160a0aae9a"
+  },
+  "ui": {
+    "at": "2026-10-06T00:13:09.526142+00:00",
+    "snapshot": "legacy-comcast-draft",
+    "packages": [
+      "com.mackeige.bluebubbles"
+    ],
+    "composer_fields": [
+      {
+        "index": 20,
+        "length": 51,
+        "sha256": "93f0e3dc51072b53b8185152644b5e41369ec670bbae59eccb546f8671f2113e",
+        "bounds": "[180,1070][1050,1226]"
+      }
+    ],
+    "comcast_title_nodes": 1,
+    "nodes": [
+      {
+        "index": 11,
+        "class": "android.view.View",
+        "bounds": "[60,106][129,271]",
+        "enabled": "true",
+        "label": null,
+        "label_length": 1,
+        "label_sha256": "676ac2aeb6fe7063288cfb2a5435a02aefb8ddb7d0637cc442653f2e6feff177"
+      },
+      {
+        "index": 12,
+        "class": "android.view.View",
+        "bounds": "[294,101][786,356]",
+        "enabled": "true",
+        "label": "COMCAST_MATCH",
+        "label_length": 33,
+        "label_sha256": "7c19bffd499b08945a50197cc45b27ea6ad8c8da53d78f7c39f25f5212471fec"
+      },
+      {
+        "index": 19,
+        "class": "android.widget.Button",
+        "bounds": "[30,1106][150,1226]",
+        "enabled": "true",
+        "label": null,
+        "label_length": 0,
+        "label_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "index": 20,
+        "class": "android.widget.EditText",
+        "bounds": "[180,1070][1050,1226]",
+        "enabled": "true",
+        "label": null,
+        "label_length": 51,
+        "label_sha256": "93f0e3dc51072b53b8185152644b5e41369ec670bbae59eccb546f8671f2113e"
+      },
+      {
+        "index": 21,
+        "class": "android.view.View",
+        "bounds": "[945,1100][1041,1196]",
+        "enabled": "true",
+        "label": null,
+        "label_length": 0,
+        "label_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "index": 22,
+        "class": "android.widget.Button",
+        "bounds": "[945,1100][1041,1196]",
+        "enabled": "true",
+        "label": null,
+        "label_length": 0,
+        "label_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ]
+  }
+}

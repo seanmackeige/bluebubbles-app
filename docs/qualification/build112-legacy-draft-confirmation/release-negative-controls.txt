@@ -1,0 +1,43 @@
+Starting a Gradle Daemon, 1 incompatible Daemon could not be reused, use --status for details
+
+> Configure project :gradle
+WARNING: Unsupported Kotlin plugin version.
+The `embedded-kotlin` and `kotlin-dsl` plugins rely on features of Kotlin `2.0.21` that might work differently than in the requested version `2.2.20`.
+
+> Task :gradle:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :gradle:compileKotlin UP-TO-DATE
+> Task :gradle:compileJava NO-SOURCE
+> Task :gradle:compileGroovy NO-SOURCE
+> Task :gradle:pluginDescriptors UP-TO-DATE
+> Task :gradle:processResources UP-TO-DATE
+> Task :gradle:classes UP-TO-DATE
+> Task :gradle:jar UP-TO-DATE
+WARNING: Your Android app project: app located at: /home/sean/projects/android/bluebubbles/admission-correction/android/app/build.gradle
+applies the Kotlin Gradle Plugin, which will cause build failures in future versions of Flutter. 
+Please migrate your app to Built-in Kotlin using this guide: https://docs.flutter.dev/release/breaking-changes/migrate-to-built-in-kotlin/for-app-developers
+
+WARNING: Your app uses the following plugins that apply Kotlin Gradle Plugin (KGP): app_install_date, audio_waveforms, cronet_http, desktop_drop, desktop_webview_auth, device_info_plus, dynamic_color, emoji_picker_flutter, file_picker, flutter_contacts, flutter_image_compress_common, flutter_timezone, flutter_user_certificates_android, fluttertoast, google_sign_in_android, in_app_review, local_auth_android, maps_launcher, mobile_scanner, network_info_plus, objectbox_flutter_libs, package_info_plus, pasteboard, photo_manager, receive_intent, record_android, saver_gallery, secure_application, share_plus, shared_preferences_android, unifiedpush_android, video_player_android, wakelock_plus
+Future versions of Flutter will fail to build if your app uses plugins that apply KGP.
+
+Please check the changelogs of these plugins and upgrade to a version that supports Built-in Kotlin.
+If no such version exists, report the issue to the plugin. If necessary, here is a guide on filing 
+an issue against a plugin: https://docs.flutter.dev/release/breaking-changes/migrate-to-built-in-kotlin/for-app-developers#report-incompatible-kotlin-gradle-plugin-usage-to-plugin-authors
+
+If you are a plugin author, please migrate your plugin to Built-in Kotlin using this guide: https://docs.flutter.dev/release/breaking-changes/migrate-to-built-in-kotlin/for-plugin-authors
+
+> Task :app:verifySeanReleaseGateDefinitions
+SEAN_RELEASE_GATE_DEFINITIONS_PASS: buildNumber=112, versionCode=20002112
+
+> Task :app:verifySeanReleaseGateRegression
+SEAN_RELEASE_GATE_NEGATIVE_CONTROLS_PASS
+
+[Incubating] Problems report is available at: file:///home/sean/projects/android/bluebubbles/admission-correction/build/reports/problems/problems-report.html
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 9.0.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/8.14/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+
+BUILD SUCCESSFUL in 1m 12s
+6 actionable tasks: 2 executed, 4 up-to-date

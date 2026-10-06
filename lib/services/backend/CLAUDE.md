@@ -39,3 +39,9 @@ Guarded batches check every tap authority anchor before even the current-draft
 fast path. Only freshly re-proven epoch bookkeeping may use CAS alignment; each
 unique guard and every batch item receive the same aligned intent. All receipt,
 durable commit, preparation and final transport checks remain strict.
+
+Legacy/invalid drafts and in-flight confirmation block at logical admission
+entry before provider observation or re-arm. Nonhuman re-arm methods cannot
+upgrade them. A confirmed legacy draft must match every freshly scoped proof
+fact (including server/transport settings); drift revokes confirmation and
+pauses. Existing operation identity, ledger, provider and transport guards remain.

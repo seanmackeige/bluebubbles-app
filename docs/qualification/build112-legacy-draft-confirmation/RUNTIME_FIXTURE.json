@@ -1,0 +1,57 @@
+{
+  "schema": "LEGACY_DRAFT_RUNTIME_SHAPE_V1",
+  "banked_at": "2026-10-06T00:19:57.302152+00:00",
+  "installed_before": {
+    "versionCode": "20002111",
+    "uid": "10806",
+    "apkSha256": "f23d385c205d0054bfaa37682b6e31c61595620bfa9d98dda1f946160a0aae9a"
+  },
+  "live_ui_reverified_at": "2026-10-06T00:13:09.526142+00:00",
+  "visible_draft_length": 51,
+  "visible_draft_sha256": "93f0e3dc51072b53b8185152644b5e41369ec670bbae59eccb546f8671f2113e",
+  "same_logical_conversation_header_sha256": "7c19bffd499b08945a50197cc45b27ea6ad8c8da53d78f7c39f25f5212471fec",
+  "previous_build111_probe_at": "2026-10-05T20:43:34.599693+00:00",
+  "previous_complete_observed_fields": {
+    "schema": "LOGICAL_DRAFT_PREFLIGHT_V1",
+    "scope": "LOCAL_SNAPSHOT_AND_SHARED_POLICY_ONLY",
+    "policyChecksPass": true,
+    "policyCases": {
+      "epoch_only": true,
+      "already_current": true,
+      "missing_freeze_blocks": true,
+      "missing_observation_blocks": true,
+      "aba_blocks": true,
+      "material_change_blocks": true,
+      "certificate_change_blocks": true,
+      "same_action_preserved": true,
+      "human_change_blocks": true
+    },
+    "storageCoherent": true,
+    "draftPresent": true,
+    "emptyIntent": false,
+    "nextNonemptyIntentUsesCurrentAuthority": false,
+    "generation": 0,
+    "draftAction": "46ecfd07be3b21612aecb7611ef0459655e349660beb823584968fae6bcafe12",
+    "contentFingerprint": "6d946db2817cf735224c35351609826cb7ca9657729c1c15c40b1579641515ee",
+    "draftContentRevision": 11,
+    "draftCertificate": null,
+    "liveCertificate": "24af6e3d87d241343cc8bc3dc368183febea0597eb3b94efae91e71ff6beafc8",
+    "draftAuthority": null,
+    "liveAuthority": "83f34b96bc8c191ad1418bea036900f4ed323f9c49bb9b0920a96840f112f31e",
+    "draftEpoch": null,
+    "liveEpoch": 1791232667297040,
+    "localAlignment": "certificateChanged"
+  },
+  "composition_metadata_before_forward_probe": "NOT_EXPOSED_BY_BUILD111_PROBE; NOT_INFERRED",
+  "original_probe_valid_complete_json": false,
+  "runtime_fixture_text": "51 generated x characters, never the private message content",
+  "known_missing_metadata": [
+    "observedCertificateRevision",
+    "observedAuthorityRevision",
+    "observedAuthorityEpoch"
+  ],
+  "human_confirmation_actions": 0,
+  "assistant_send_actions": 0,
+  "expected_after_install": "DRAFT_NEEDS_CONFIRMATION; HUMAN_CONFIRMATION_NOT_EXERCISED",
+  "fixture_scope": "Offline fixture preserves observed shape/revision; values not observed in the old truncated probe remain explicitly unknown until complete forward diagnostics"
+}

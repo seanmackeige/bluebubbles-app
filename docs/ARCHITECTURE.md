@@ -206,3 +206,12 @@ If adding a new service, place it at the correct position in `startup_tasks.dart
 ## Event Bus
 
 `lib/services/backend_ui_interop/event_dispatcher.dart` is a broadcast `StreamController<Tuple2<String, dynamic>>`. Backend services emit named events; UI widgets subscribe in `initState()` and cancel in `dispose()`. This decouples the backend from the UI without needing shared observable state for one-off cross-cutting events (e.g., "chat-updated"). Use sparingly, only when absolutely necessary.
+
+## Legacy draft confirmation (Build112)
+Historical drafts with all execution metadata absent require explicit human
+review of the currently displayed conversation and intent. Confirmation is a
+non-sending serialized content/proof transaction, not an admission or operation.
+Partial/malformed proof is ineligible. Review-time and fresh provider authority
+anchors must match, and all bound facts are checked again on a later Send.
+Human edits invalidate the legacy confirmation; harmless republishing and
+permitted same-material process epoch alignment retain it.

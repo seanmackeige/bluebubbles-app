@@ -1,0 +1,427 @@
+[
+  {
+    "file": "codex-adversarial-legacy-cas-handler-consume.dart",
+    "exit": 0,
+    "result": {
+      "method_origin": "verbatim CAS/save/load/clear/persist methods + handler alignment block + CVC consumption tail; actual policy/guard/models",
+      "fake_boundaries": "registry/preferences/provider snapshot/composer callback only; transport absent",
+      "checks": {
+        "CAS same": {
+          "aligned": true,
+          "rejectedWithoutMutation": false,
+          "storageException": false
+        },
+        "CAS updated timestamp": {
+          "aligned": true,
+          "rejectedWithoutMutation": false,
+          "storageException": false
+        },
+        "CAS missing": {
+          "aligned": false,
+          "rejectedWithoutMutation": true,
+          "storageException": false
+        },
+        "CAS replacement": {
+          "aligned": false,
+          "rejectedWithoutMutation": true,
+          "storageException": false
+        },
+        "CAS content": {
+          "aligned": false,
+          "rejectedWithoutMutation": true,
+          "storageException": false
+        },
+        "CAS observed changed": {
+          "aligned": false,
+          "rejectedWithoutMutation": true,
+          "storageException": false
+        },
+        "CAS live null": {
+          "aligned": false,
+          "rejectedWithoutMutation": true,
+          "storageException": false
+        },
+        "CAS live epoch changed": {
+          "aligned": false,
+          "rejectedWithoutMutation": true,
+          "storageException": false
+        },
+        "CAS live authority changed": {
+          "aligned": false,
+          "rejectedWithoutMutation": true,
+          "storageException": false
+        },
+        "CAS unknown owner": {
+          "aligned": false,
+          "rejectedWithoutMutation": true,
+          "storageException": false
+        },
+        "CAS dual identical": {
+          "aligned": true,
+          "rejectedWithoutMutation": false,
+          "storageException": false
+        },
+        "CAS dual conflict": {
+          "aligned": false,
+          "rejectedWithoutMutation": true,
+          "storageException": true
+        },
+        "slot legacy=false": "PRESERVED",
+        "slot legacy=true": "PRESERVED",
+        "handler single": {
+          "result": "PASS",
+          "epochRefreshRecords": 1,
+          "consumerPropagationVerified": true
+        },
+        "handler shared three": {
+          "result": "PASS",
+          "epochRefreshRecords": 1,
+          "consumerPropagationVerified": true
+        },
+        "handler two distinct guards": {
+          "result": "PASS",
+          "epochRefreshRecords": 2,
+          "consumerPropagationVerified": true
+        },
+        "handler human change during CAS": {
+          "result": "CONTENT_CHANGED",
+          "epochRefreshRecords": 0,
+          "consumerPropagationVerified": false
+        },
+        "handler authority ABA during CAS": {
+          "result": "SEND_BLOCKED_AUTHORITY_CHANGED_DURING_ADMISSION",
+          "epochRefreshRecords": 0,
+          "consumerPropagationVerified": false
+        },
+        "handler observation superseded during CAS": {
+          "result": "SEND_BLOCKED_AUTHORITY_CHANGED_DURING_ADMISSION",
+          "epochRefreshRecords": 0,
+          "consumerPropagationVerified": false
+        },
+        "handler provider context during CAS": {
+          "result": "SEND_BLOCKED_AUTHORITY_CHANGED_DURING_ADMISSION",
+          "epochRefreshRecords": 0,
+          "consumerPropagationVerified": false
+        },
+        "handler missing anchor": {
+          "result": "SEND_BLOCKED_AUTHORITY_CHANGED",
+          "epochRefreshRecords": 0,
+          "consumerPropagationVerified": false
+        },
+        "handler missing prior proof": {
+          "result": "SEND_BLOCKED_DRAFT_NEEDS_HUMAN_CONFIRMATION",
+          "epochRefreshRecords": 0,
+          "consumerPropagationVerified": false
+        },
+        "handler missing old epoch": {
+          "result": "SEND_BLOCKED_INVALID_DRAFT_METADATA",
+          "epochRefreshRecords": 0,
+          "consumerPropagationVerified": false
+        },
+        "handler material authority changed": {
+          "result": "SEND_BLOCKED_AUTHORITY_CHANGED_DURING_FREEZE",
+          "epochRefreshRecords": 0,
+          "consumerPropagationVerified": false
+        },
+        "first pause then confirmation material drift": {
+          "firstTap": "SEND_BLOCKED_AUTHORITY_CHANGED_DURING_FREEZE",
+          "firstGuardNotGranted": true,
+          "optionalRearm": true,
+          "nextFreshConfirmationPassesWithoutRearm": true,
+          "transportAbsent": true
+        },
+        "first pause then confirmation ABA epoch drift": {
+          "firstTap": "SEND_BLOCKED_AUTHORITY_CHANGED_DURING_FREEZE",
+          "firstGuardNotGranted": true,
+          "optionalRearm": true,
+          "nextFreshConfirmationPassesWithoutRearm": true,
+          "transportAbsent": true
+        },
+        "first pause then confirmation human edit blocks optional rearm": {
+          "firstTap": "CONTENT_CHANGED",
+          "firstGuardNotGranted": true,
+          "optionalRearm": false,
+          "nextFreshConfirmationPassesWithoutRearm": false,
+          "transportAbsent": true
+        },
+        "first pause then confirmation observation stale skips optional rearm": {
+          "firstTap": "SEND_BLOCKED_AUTHORITY_CHANGED_DURING_FREEZE",
+          "firstGuardNotGranted": true,
+          "optionalRearm": false,
+          "nextFreshConfirmationPassesWithoutRearm": false,
+          "transportAbsent": true
+        },
+        "first pause then confirmation newer persisted draft skips optional rearm": {
+          "firstTap": "SEND_BLOCKED_AUTHORITY_CHANGED_DURING_FREEZE",
+          "firstGuardNotGranted": true,
+          "optionalRearm": false,
+          "nextFreshConfirmationPassesWithoutRearm": false,
+          "transportAbsent": true
+        },
+        "empty policy new text": {
+          "capturesCurrent": true,
+          "priorHumanIntent": false,
+          "actionChanged": true
+        },
+        "empty policy new subject": {
+          "capturesCurrent": true,
+          "priorHumanIntent": false,
+          "actionChanged": true
+        },
+        "empty policy new attachment": {
+          "capturesCurrent": true,
+          "priorHumanIntent": false,
+          "actionChanged": true
+        },
+        "empty policy new reply": {
+          "capturesCurrent": true,
+          "priorHumanIntent": false,
+          "actionChanged": true
+        },
+        "empty policy new effect": {
+          "capturesCurrent": true,
+          "priorHumanIntent": false,
+          "actionChanged": true
+        },
+        "empty policy still empty": {
+          "capturesCurrent": false,
+          "priorHumanIntent": false,
+          "actionChanged": false
+        },
+        "empty policy existing text": {
+          "capturesCurrent": false,
+          "priorHumanIntent": true,
+          "actionChanged": true
+        },
+        "empty policy existing whitespace": {
+          "capturesCurrent": false,
+          "priorHumanIntent": true,
+          "actionChanged": true
+        },
+        "empty policy existing subject": {
+          "capturesCurrent": false,
+          "priorHumanIntent": true,
+          "actionChanged": true
+        },
+        "empty policy existing attachment": {
+          "capturesCurrent": false,
+          "priorHumanIntent": true,
+          "actionChanged": true
+        },
+        "empty policy existing reply": {
+          "capturesCurrent": false,
+          "priorHumanIntent": true,
+          "actionChanged": true
+        },
+        "empty policy existing effect": {
+          "capturesCurrent": false,
+          "priorHumanIntent": true,
+          "actionChanged": true
+        },
+        "empty policy missing current": {
+          "capturesCurrent": false,
+          "priorHumanIntent": false,
+          "actionChanged": true
+        },
+        "empty policy missing prior": {
+          "capturesCurrent": true,
+          "priorHumanIntent": false,
+          "actionChanged": true
+        },
+        "storage failure dual=false": {
+          "blocked": true,
+          "guardUnrefreshed": true,
+          "contentRetained": true,
+          "partialMetadataConflictPossible": false
+        },
+        "storage failure dual=true": {
+          "blocked": true,
+          "guardUnrefreshed": true,
+          "contentRetained": true,
+          "partialMetadataConflictPossible": true
+        }
+      },
+      "real_provider_calls": 0
+    }
+  },
+  {
+    "file": "codex-adversarial-legacy-final-fence.dart",
+    "exit": 0,
+    "result": {
+      "method": "verbatim final composer validateAuthority closure plus actual guard/model",
+      "cases": {
+        "stale before refresh": "AUTHORITY_CHANGED",
+        "aligned stable": "PASS",
+        "late epoch ABA": "AUTHORITY_CHANGED",
+        "late authority": "AUTHORITY_CHANGED",
+        "late certificate": "CERTIFICATE_CHANGED",
+        "late null": "CERTIFICATE_CHANGED",
+        "already current hides anchor drift": "AUTHORITY_CHANGED",
+        "closed owner": "OWNER_CHANGED"
+      },
+      "real_provider_calls": 0
+    }
+  },
+  {
+    "file": "codex-adversarial-legacy-matches-fast-path.dart",
+    "exit": 0,
+    "result": {
+      "method": "verbatim handler provider-context/authority alignment block",
+      "counterexample": "draft created/reloaded after authority changes during await already matches fresh revision",
+      "results": {
+        "same hashes ABA": {
+          "result": "SEND_BLOCKED_AUTHORITY_CHANGED_DURING_FREEZE",
+          "draft_already_matches_fresh": true,
+          "classifier": "changedDuringFreeze",
+          "metadata_writes": 0
+        },
+        "material drift": {
+          "result": "SEND_BLOCKED_AUTHORITY_CHANGED_DURING_FREEZE",
+          "draft_already_matches_fresh": true,
+          "classifier": "changedDuringFreeze",
+          "metadata_writes": 0
+        }
+      },
+      "real_provider_calls": 0
+    }
+  },
+  {
+    "file": "codex-adversarial-legacy-probe-boundary.dart",
+    "exit": 0,
+    "result": {
+      "method": "verbatim inspectLogicalDraftAdmissionSnapshot + actual pure probe/guard/models; fake cached prefs/logger only",
+      "cases": {
+        "bounded repeated expansion": {
+          "reports": 8,
+          "storageWrites": 0,
+          "generationUnchanged": true,
+          "authorityUnchanged": true,
+          "rowsUnchanged": true
+        },
+        "not logical": {
+          "reports": 0,
+          "storageWrites": 0,
+          "generationUnchanged": true,
+          "authorityUnchanged": true,
+          "rowsUnchanged": true
+        },
+        "other certified read-only owner": {
+          "reports": 1,
+          "storageWrites": 0,
+          "generationUnchanged": true,
+          "authorityUnchanged": true,
+          "rowsUnchanged": true
+        },
+        "conflicting storage": {
+          "reports": 1,
+          "storageWrites": 0,
+          "generationUnchanged": true,
+          "authorityUnchanged": true,
+          "rowsUnchanged": true
+        }
+      },
+      "real_provider_calls": 0
+    }
+  },
+  {
+    "file": "codex-adversarial-legacy-probe-fixture.dart",
+    "exit": 0,
+    "result": {
+      "source": "imports actual logicalDraftAdmissionProbe",
+      "cases": {
+        "no draft": {
+          "policyChecksPass": true,
+          "localAlignment": "UNAVAILABLE",
+          "emptyIntent": null,
+          "nextNonemptyIntentUsesCurrentAuthority": false,
+          "rawContentAbsent": true,
+          "inputUnchanged": true
+        },
+        "empty current": {
+          "policyChecksPass": true,
+          "localAlignment": "current",
+          "emptyIntent": true,
+          "nextNonemptyIntentUsesCurrentAuthority": true,
+          "rawContentAbsent": true,
+          "inputUnchanged": true
+        },
+        "empty old epoch": {
+          "policyChecksPass": true,
+          "localAlignment": "refreshEpoch",
+          "emptyIntent": true,
+          "nextNonemptyIntentUsesCurrentAuthority": true,
+          "rawContentAbsent": true,
+          "inputUnchanged": true
+        },
+        "empty material changed": {
+          "policyChecksPass": true,
+          "localAlignment": "authorityChanged",
+          "emptyIntent": true,
+          "nextNonemptyIntentUsesCurrentAuthority": true,
+          "rawContentAbsent": true,
+          "inputUnchanged": true
+        },
+        "empty no observed proof": {
+          "policyChecksPass": true,
+          "localAlignment": "certificateChanged",
+          "emptyIntent": true,
+          "nextNonemptyIntentUsesCurrentAuthority": true,
+          "rawContentAbsent": true,
+          "inputUnchanged": true
+        },
+        "nonempty current": {
+          "policyChecksPass": true,
+          "localAlignment": "current",
+          "emptyIntent": false,
+          "nextNonemptyIntentUsesCurrentAuthority": false,
+          "rawContentAbsent": true,
+          "inputUnchanged": true
+        },
+        "nonempty old epoch": {
+          "policyChecksPass": true,
+          "localAlignment": "refreshEpoch",
+          "emptyIntent": false,
+          "nextNonemptyIntentUsesCurrentAuthority": false,
+          "rawContentAbsent": true,
+          "inputUnchanged": true
+        },
+        "nonempty material changed": {
+          "policyChecksPass": true,
+          "localAlignment": "authorityChanged",
+          "emptyIntent": false,
+          "nextNonemptyIntentUsesCurrentAuthority": false,
+          "rawContentAbsent": true,
+          "inputUnchanged": true
+        },
+        "live missing": {
+          "policyChecksPass": true,
+          "localAlignment": "authorityChanged",
+          "emptyIntent": false,
+          "nextNonemptyIntentUsesCurrentAuthority": false,
+          "rawContentAbsent": true,
+          "inputUnchanged": true
+        },
+        "storage conflict": {
+          "policyChecksPass": true,
+          "localAlignment": "UNAVAILABLE",
+          "emptyIntent": null,
+          "nextNonemptyIntentUsesCurrentAuthority": false,
+          "rawContentAbsent": true,
+          "inputUnchanged": true
+        },
+        "large attachment metadata": {
+          "policyChecksPass": true,
+          "localAlignment": "refreshEpoch",
+          "emptyIntent": false,
+          "nextNonemptyIntentUsesCurrentAuthority": false,
+          "rawContentAbsent": true,
+          "inputUnchanged": true
+        }
+      },
+      "elapsed_ms": 50,
+      "large_attachment_declared_bytes": 100000000,
+      "byte_payload_exists": false,
+      "real_provider_calls": 0
+    }
+  }
+]

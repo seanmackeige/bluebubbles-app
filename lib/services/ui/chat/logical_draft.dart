@@ -144,6 +144,78 @@ class LogicalReplyIntent {
 bool logicalReplyExecutionReady({required LogicalReplyIntent? intent, required bool exactTargetVisible}) =>
     intent == null || exactTargetVisible;
 
+enum LogicalDraftMetadataClass {
+  modernBoundDraft,
+  legacyUnboundDraft,
+  partiallyBoundInvalidDraft;
+
+  String get diagnosticName => switch (this) {
+    modernBoundDraft => 'MODERN_BOUND_DRAFT',
+    legacyUnboundDraft => 'LEGACY_UNBOUND_DRAFT',
+    partiallyBoundInvalidDraft => 'PARTIALLY_BOUND_INVALID_DRAFT',
+  };
+}
+
+/// Durable evidence of a distinct human confirmation. This is never an
+/// admission receipt and cannot reserve or dispatch an operation.
+class LogicalDraftConfirmation {
+  LogicalDraftConfirmation({
+    required this.revision,
+    required this.invalidated,
+    required Map<String, String> facts,
+    required this.authorityEpoch,
+  }) : facts = Map.unmodifiable(facts) {
+    if (revision <= 0 ||
+        authorityEpoch <= 0 ||
+        facts.keys.toSet().difference(requiredFacts).isNotEmpty ||
+        requiredFacts.any((key) => !RegExp(r'^[0-9a-f]{64}$').hasMatch(facts[key] ?? ''))) {
+      throw const FormatException('INVALID_LOGICAL_DRAFT_CONFIRMATION');
+    }
+  }
+  static const requiredFacts = <String>{
+    'action',
+    'content',
+    'logical',
+    'certificate',
+    'authority',
+    'participants',
+    'account',
+    'providerContract',
+    'providerContext',
+    'generation',
+    'writer',
+    'service',
+  };
+  final int revision;
+  final bool invalidated;
+  final int authorityEpoch;
+  final Map<String, String> facts;
+  LogicalDraftConfirmation invalidate() =>
+      LogicalDraftConfirmation(revision: revision, invalidated: true, facts: facts, authorityEpoch: authorityEpoch);
+  Map<String, dynamic> toJson() => {
+    'schema': 'LOGICAL_DRAFT_CONFIRMATION_V1',
+    'revision': revision,
+    'invalidated': invalidated,
+    'authorityEpoch': authorityEpoch,
+    'facts': facts,
+  };
+  factory LogicalDraftConfirmation.fromJson(Map<String, dynamic> json) {
+    if (json['schema'] != 'LOGICAL_DRAFT_CONFIRMATION_V1' ||
+        json['revision'] is! int ||
+        json['authorityEpoch'] is! int ||
+        json['invalidated'] is! bool ||
+        json['facts'] is! Map) {
+      throw const FormatException('INVALID_LOGICAL_DRAFT_CONFIRMATION');
+    }
+    return LogicalDraftConfirmation(
+      revision: json['revision'] as int,
+      invalidated: json['invalidated'] as bool,
+      authorityEpoch: json['authorityEpoch'] as int,
+      facts: (json['facts'] as Map).cast<String, String>(),
+    );
+  }
+}
+
 /// The human workspace for one certified logical conversation.
 ///
 /// [contentRevision] changes only when user intent changes. Re-arming the
@@ -166,6 +238,7 @@ class LogicalDraft {
     this.compositionCertificateRevision,
     this.compositionAuthorityRevision,
     this.compositionAuthorityEpoch,
+    this.confirmation,
   }) : attachments = List<LogicalAttachmentIntent>.unmodifiable(attachments);
 
   final String logicalId;
@@ -183,6 +256,90 @@ class LogicalDraft {
   final String? compositionCertificateRevision;
   final String? compositionAuthorityRevision;
   final int? compositionAuthorityEpoch;
+  final LogicalDraftConfirmation? confirmation;
+
+  String get logicalFingerprint => sha256.convert(utf8.encode(logicalId)).toString();
+
+  LogicalDraftMetadataClass get metadataClass {
+    bool missing(String? certificate, String? authority, int? epoch) =>
+        certificate == null && authority == null && epoch == null;
+    bool complete(String? certificate, String? authority, int? epoch) =>
+        certificate != null &&
+        certificate.trim().isNotEmpty &&
+        authority != null &&
+        authority.trim().isNotEmpty &&
+        epoch != null &&
+        epoch > 0;
+    final observedMissing = missing(observedCertificateRevision, observedAuthorityRevision, observedAuthorityEpoch);
+    final compositionMissing = missing(
+      compositionCertificateRevision,
+      compositionAuthorityRevision,
+      compositionAuthorityEpoch,
+    );
+    final record = confirmation;
+    if (record != null && record.facts['logical'] != logicalFingerprint) {
+      return LogicalDraftMetadataClass.partiallyBoundInvalidDraft;
+    }
+    if (observedMissing && compositionMissing && (record == null || record.invalidated)) {
+      return LogicalDraftMetadataClass.legacyUnboundDraft;
+    }
+    if (!complete(observedCertificateRevision, observedAuthorityRevision, observedAuthorityEpoch) ||
+        (!compositionMissing &&
+            !complete(compositionCertificateRevision, compositionAuthorityRevision, compositionAuthorityEpoch)) ||
+        (record != null &&
+            (record.invalidated ||
+                record.facts['action'] != actionId ||
+                record.facts['content'] != contentFingerprint ||
+                record.facts['logical'] != logicalFingerprint ||
+                record.facts['certificate'] != observedCertificateRevision ||
+                record.facts['authority'] != observedAuthorityRevision))) {
+      return LogicalDraftMetadataClass.partiallyBoundInvalidDraft;
+    }
+    return LogicalDraftMetadataClass.modernBoundDraft;
+  }
+
+  LogicalDraft invalidateConfirmation() {
+    if (confirmation == null) throw StateError('NO_CONFIRMATION_TO_INVALIDATE');
+    return LogicalDraft(
+      logicalId: logicalId,
+      text: text,
+      subject: subject,
+      attachments: attachments,
+      reply: reply,
+      effectId: effectId,
+      contentRevision: contentRevision,
+      createdAtEpochMilliseconds: createdAtEpochMilliseconds,
+      updatedAtEpochMilliseconds: updatedAtEpochMilliseconds,
+      confirmation: confirmation!.invalidate(),
+    );
+  }
+
+  LogicalDraft confirm(LogicalDraftConfirmation record, {required int nowEpochMilliseconds}) {
+    if (!hasUserIntent ||
+        metadataClass != LogicalDraftMetadataClass.legacyUnboundDraft ||
+        record.invalidated ||
+        record.revision != (confirmation?.revision ?? 0) + 1 ||
+        record.facts['action'] != actionId ||
+        record.facts['content'] != contentFingerprint ||
+        record.facts['logical'] != logicalFingerprint) {
+      throw StateError('LOGICAL_DRAFT_CONFIRMATION_CAS_REJECTED');
+    }
+    return LogicalDraft(
+      logicalId: logicalId,
+      text: text,
+      subject: subject,
+      attachments: attachments,
+      reply: reply,
+      effectId: effectId,
+      contentRevision: contentRevision,
+      createdAtEpochMilliseconds: createdAtEpochMilliseconds,
+      updatedAtEpochMilliseconds: nowEpochMilliseconds,
+      observedCertificateRevision: record.facts['certificate'],
+      observedAuthorityRevision: record.facts['authority'],
+      observedAuthorityEpoch: record.authorityEpoch,
+      confirmation: record,
+    );
+  }
 
   bool get hasUserIntent =>
       text.isNotEmpty || subject.isNotEmpty || attachments.isNotEmpty || reply != null || effectId != null;
@@ -210,6 +367,10 @@ class LogicalDraft {
   bool hasSameUserIntent(LogicalDraft other) => contentFingerprint == other.contentFingerprint;
 
   LogicalDraft rearm(LogicalAuthorityRevision revision, {required int updatedAtEpochMilliseconds}) {
+    final invalidatesConfirmation =
+        confirmation != null &&
+        (revision.certificateRevision != observedCertificateRevision ||
+            revision.authorityRevision != observedAuthorityRevision);
     return LogicalDraft(
       logicalId: logicalId,
       text: text,
@@ -220,12 +381,13 @@ class LogicalDraft {
       contentRevision: contentRevision,
       createdAtEpochMilliseconds: createdAtEpochMilliseconds,
       updatedAtEpochMilliseconds: updatedAtEpochMilliseconds,
-      observedCertificateRevision: revision.certificateRevision,
-      observedAuthorityRevision: revision.authorityRevision,
-      observedAuthorityEpoch: revision.epoch,
-      compositionCertificateRevision: compositionCertificateRevision,
-      compositionAuthorityRevision: compositionAuthorityRevision,
-      compositionAuthorityEpoch: compositionAuthorityEpoch,
+      observedCertificateRevision: invalidatesConfirmation ? null : revision.certificateRevision,
+      observedAuthorityRevision: invalidatesConfirmation ? null : revision.authorityRevision,
+      observedAuthorityEpoch: invalidatesConfirmation ? null : revision.epoch,
+      compositionCertificateRevision: invalidatesConfirmation ? null : compositionCertificateRevision,
+      compositionAuthorityRevision: invalidatesConfirmation ? null : compositionAuthorityRevision,
+      compositionAuthorityEpoch: invalidatesConfirmation ? null : compositionAuthorityEpoch,
+      confirmation: invalidatesConfirmation ? confirmation!.invalidate() : confirmation,
     );
   }
 
@@ -238,6 +400,9 @@ class LogicalDraft {
     required int updatedAtEpochMilliseconds,
     LogicalAuthorityRevision? observedRevision,
   }) {
+    // A confirmed legacy workspace cannot silently acquire new confirmation
+    // through empty-container rebinding. Only the explicit human action can.
+    if (confirmation != null) observedRevision = null;
     final candidate = LogicalDraft(
       logicalId: logicalId,
       text: text,
@@ -254,6 +419,7 @@ class LogicalDraft {
       compositionCertificateRevision: compositionCertificateRevision,
       compositionAuthorityRevision: compositionAuthorityRevision,
       compositionAuthorityEpoch: compositionAuthorityEpoch,
+      confirmation: confirmation,
     );
     if (hasSameUserIntent(candidate)) return candidate;
     return LogicalDraft(
@@ -266,12 +432,13 @@ class LogicalDraft {
       contentRevision: contentRevision + 1,
       createdAtEpochMilliseconds: candidate.createdAtEpochMilliseconds,
       updatedAtEpochMilliseconds: candidate.updatedAtEpochMilliseconds,
-      observedCertificateRevision: candidate.observedCertificateRevision,
-      observedAuthorityRevision: candidate.observedAuthorityRevision,
-      observedAuthorityEpoch: candidate.observedAuthorityEpoch,
-      compositionCertificateRevision: candidate.compositionCertificateRevision,
-      compositionAuthorityRevision: candidate.compositionAuthorityRevision,
-      compositionAuthorityEpoch: candidate.compositionAuthorityEpoch,
+      observedCertificateRevision: confirmation != null ? null : candidate.observedCertificateRevision,
+      observedAuthorityRevision: confirmation != null ? null : candidate.observedAuthorityRevision,
+      observedAuthorityEpoch: confirmation != null ? null : candidate.observedAuthorityEpoch,
+      compositionCertificateRevision: confirmation != null ? null : candidate.compositionCertificateRevision,
+      compositionAuthorityRevision: confirmation != null ? null : candidate.compositionAuthorityRevision,
+      compositionAuthorityEpoch: confirmation != null ? null : candidate.compositionAuthorityEpoch,
+      confirmation: confirmation?.invalidate(),
     );
   }
 
@@ -292,6 +459,7 @@ class LogicalDraft {
     if (compositionCertificateRevision != null) 'compositionCertificateRevision': compositionCertificateRevision,
     if (compositionAuthorityRevision != null) 'compositionAuthorityRevision': compositionAuthorityRevision,
     if (compositionAuthorityEpoch != null) 'compositionAuthorityEpoch': compositionAuthorityEpoch,
+    if (confirmation != null) 'confirmation': confirmation!.toJson(),
   };
 
   factory LogicalDraft.create({
@@ -328,6 +496,15 @@ class LogicalDraft {
     if (rawReply != null && rawReply is! Map) {
       throw const FormatException('Malformed logical reply intent');
     }
+    for (final key in ['observedAuthorityEpoch', 'compositionAuthorityEpoch']) {
+      if (json[key] != null && json[key] is! int) throw const FormatException('INVALID_DRAFT_METADATA_EPOCH');
+    }
+    final hasComposition = [
+      'compositionCertificateRevision',
+      'compositionAuthorityRevision',
+      'compositionAuthorityEpoch',
+    ].any(json.containsKey);
+    final useHistoricalComposition = !hasComposition && !json.containsKey('confirmation');
     return LogicalDraft(
       logicalId: json['logicalId'] as String,
       text: json['text'] as String? ?? '',
@@ -345,11 +522,16 @@ class LogicalDraft {
       observedAuthorityRevision: json['observedAuthorityRevision'] as String?,
       observedAuthorityEpoch: (json['observedAuthorityEpoch'] as num?)?.toInt(),
       compositionCertificateRevision:
-          (json['compositionCertificateRevision'] ?? json['observedCertificateRevision']) as String?,
+          (useHistoricalComposition ? json['observedCertificateRevision'] : json['compositionCertificateRevision'])
+              as String?,
       compositionAuthorityRevision:
-          (json['compositionAuthorityRevision'] ?? json['observedAuthorityRevision']) as String?,
-      compositionAuthorityEpoch: ((json['compositionAuthorityEpoch'] ?? json['observedAuthorityEpoch']) as num?)
-          ?.toInt(),
+          (useHistoricalComposition ? json['observedAuthorityRevision'] : json['compositionAuthorityRevision'])
+              as String?,
+      compositionAuthorityEpoch:
+          (useHistoricalComposition ? json['observedAuthorityEpoch'] : json['compositionAuthorityEpoch']) as int?,
+      confirmation: json['confirmation'] == null
+          ? null
+          : LogicalDraftConfirmation.fromJson((json['confirmation'] as Map).cast<String, dynamic>()),
     );
   }
 }
