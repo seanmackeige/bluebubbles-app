@@ -23,6 +23,7 @@
 - Group notifications (grouped by chat on Android)
 - Toast management via `PendingToastItem`
 - FaceTime incoming call with accept/decline actions
+- `clearAllErrors()` cancels every notification on `ERROR_CHANNEL` (and the desktop failed-send / alias toasts). It does not touch message, reminder, FaceTime, or foreground-service notifications, unread counts, or chat data. Settings → Notifications exposes this as "Clear all errors".
 
 ## Triggering Notifications
 Called from `IncomingMessageHandler` when a new message arrives, and from `ScheduledMessage` reminders.

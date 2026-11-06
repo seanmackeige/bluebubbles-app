@@ -766,6 +766,30 @@ class NotificationsService {
     await flnp.cancel(id: id);
   }
 
+  /// Dismisses every notification posted on the Errors channel (send failures,
+  /// alias warnings, and the same alerts on desktop). Message, reminder,
+  /// FaceTime, and foreground-service notifications are left in place.
+  Future<void> clearAllErrors() async {
+    if (kIsWeb) return;
+    if (kIsDesktop) {
+      final int? failed = failedToast;
+      failedToast = null;
+      if (failed != null) await DesktopNotifications.cancel(failed);
+      final int? aliases = aliasesToast;
+      aliasesToast = null;
+      aliasesToastText = null;
+      if (aliases != null) await DesktopNotifications.cancel(aliases);
+      return;
+    }
+
+    final active = await flnp.getActiveNotifications();
+    for (final notification in active) {
+      final int? id = notification.id;
+      if (id == null || notification.channelId != ERROR_CHANNEL) continue;
+      await flnp.cancel(id: id);
+    }
+  }
+
   Future<void> clearDesktopNotificationsForChat(String chatGuid) async {
     await _lock.synchronized(() async {
       final int? toastId = activeToasts[chatGuid];
