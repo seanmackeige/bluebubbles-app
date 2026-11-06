@@ -276,6 +276,7 @@ List<Widget> buildSettingItemList({
             "Text Detection",
             "Hide Message Text",
             "Notify When Incremental Sync Complete",
+            "Clear all errors",
             "Global options",
             "Chat options",
           ],

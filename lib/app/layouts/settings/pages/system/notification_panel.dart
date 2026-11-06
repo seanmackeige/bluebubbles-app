@@ -51,6 +51,25 @@ class _NotificationPanelState extends State<NotificationPanel> with SingleTicker
                     child: Text("Notifications".psCapitalize, style: iOS ? iosSubtitle : materialSubtitle),
                   )),
             Obx(() => SettingsSection(backgroundColor: tileColor, children: [
+              if (!kIsWeb)
+                SettingsTile(
+                  onTap: () async {
+                    await NotificationsSvc.clearAllErrors();
+                    showSnackbar(
+                      "Errors cleared",
+                      "Error alerts are gone. Your messages and unread chats are unchanged.",
+                    );
+                  },
+                  title: "Clear all errors",
+                  subtitle: "Dismisses error alerts. Message notifications stay.",
+                  backgroundColor: tileColor,
+                  leading: const SettingsLeadingIcon(
+                    iosIcon: CupertinoIcons.clear_circled_solid,
+                    materialIcon: Icons.notifications_off_outlined,
+                    containerColor: Colors.redAccent,
+                  ),
+                ),
+              if (!kIsWeb) const SettingsDivider(padding: EdgeInsets.only(left: 16.0)),
               if (!kIsWeb && !kIsDesktop)
                 SettingsSwitch(
                   onChanged: (bool val) async {
